@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/*
+ * blakSOC design tokens. Dark-first (SOC floors run dark); light theme via [data-theme="light"].
+ * Ochre accent nods to Yuma IT's Blak identity; severity colours are reserved for severity only.
+ */
+@theme {
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-bg: #0d0f12;
+  --color-surface: #14171c;
+  --color-surface-2: #1b1f26;
+  --color-border: #262b34;
+  --color-border-strong: #353c48;
+  --color-fg: #e7e9ee;
+  --color-muted: #9098a6;
+  --color-faint: #636b78;
+
+  --color-accent: #d9773a;
+  --color-accent-fg: #1a0e06;
+  --color-accent-soft: #d9773a22;
+
+  --color-sev-critical: #ff4d5e;
+  --color-sev-high: #ff8a3d;
+  --color-sev-medium: #f2c14e;
+  --color-sev-low: #5cb8ff;
+  --color-sev-info: #8a94a6;
+
+  --color-ok: #3ecf8e;
+  --color-warn: #f2c14e;
+  --color-danger: #ff4d5e;
+  --color-intel: #b58cff;
+}
+
+[data-theme="light"] {
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #f0f2f5;
+  --color-border: #e1e4ea;
+  --color-border-strong: #c9ced8;
+  --color-fg: #161a20;
+  --color-muted: #5a6270;
+  --color-faint: #8a92a0;
+  --color-accent: #b85a1f;
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: #b85a1f1a;
+}
+
+html, body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-feature-settings: "cv11", "ss01", "tnum";
+}
+
+* { border-color: var(--color-border); }
+
+::selection { background: var(--color-accent-soft); }
+
+.num { font-variant-numeric: tabular-nums; }
+
+/* Scrollbars that don't shout on dark backgrounds */
+* { scrollbar-width: thin; scrollbar-color: var(--color-border-strong) transparent; }

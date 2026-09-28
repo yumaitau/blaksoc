@@ -1,0 +1,65 @@
+image:
+  repository: ghcr.io/yuma-it/blaksoc
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+appUrl: https://soc.example.com.au
+
+# All secrets come from an existing Secret (sealed-secrets / external-secrets / Vault).
+# Required keys: DATABASE_URL, DATABASE_ADMIN_URL, BLAKSOC_APP_DB_PASSWORD, REDIS_URL,
+# BETTER_AUTH_SECRET, BLAKSOC_ENCRYPTION_KEY. Optional: ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET.
+existingSecret: blaksoc
+
+config:
+  AI_DATA_RESIDENCY: AU
+  BREAK_GLASS_REQUIRE_MFA: "true"
+
+web:
+  replicas: 2
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 8, targetCPU: 70 }
+
+worker:
+  replicas: 2
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+
+migrations:
+  enabled: true
+  seed: true   # reference data only unless DEMO_MODE=true
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"   # SSE live updates
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  hosts: [soc.example.com.au]
+  tls:
+    - secretName: blaksoc-tls
+      hosts: [soc.example.com.au]
+
+networkPolicy:
+  enabled: true
+  # CIDRs the worker may reach: Wazuh API/indexer, OpenCTI, AI endpoints, public feeds.
+  egressCidrs: ["0.0.0.0/0"]
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: { type: RuntimeDefault }
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

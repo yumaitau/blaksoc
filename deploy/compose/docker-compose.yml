@@ -1,0 +1,219 @@
+# blakSOC full stack for a single-host / dedicated single-tenant deployment.
+#   docker compose --env-file .env up -d                     # blakSOC core
+#   docker compose --env-file .env --profile opencti up -d   # + OpenCTI and public feed connectors
+#   docker compose --env-file .env --profile ai up -d        # + local Ollama (sovereign inference)
+# Wazuh runs from the official wazuh-docker stack; see deploy/wazuh/README.md.
+name: blaksoc
+
+x-app-env: &app-env
+  NODE_ENV: production
+  APP_URL: ${APP_URL:?set APP_URL}
+  DATABASE_URL: postgres://blaksoc_app:${BLAKSOC_APP_DB_PASSWORD:?}@postgres:5432/blaksoc
+  DATABASE_ADMIN_URL: postgres://blaksoc:${POSTGRES_PASSWORD:?}@postgres:5432/blaksoc
+  BLAKSOC_APP_DB_PASSWORD: ${BLAKSOC_APP_DB_PASSWORD:?}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
+  BLAKSOC_ENCRYPTION_KEY: ${BLAKSOC_ENCRYPTION_KEY:?}
+  ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
+  ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
+  ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+  AI_DATA_RESIDENCY: ${AI_DATA_RESIDENCY:-AU}
+  BREAK_GLASS_REQUIRE_MFA: "true"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: blaksoc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: blaksoc
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U blaksoc"], interval: 5s, retries: 20 }
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?}"]
+    volumes: [redisdata:/data]
+
+  migrate:
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
+    build: { context: ../.., target: worker }
+    command: ["sh", "-c", "node dist/db/migrate.mjs && node dist/db/seed.mjs"]
+    environment: *app-env
+    depends_on: { postgres: { condition: service_healthy } }
+    restart: "no"
+
+  web:
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-web:${BLAKSOC_VERSION:-latest}
+    build: { context: ../.., target: web }
+    restart: unless-stopped
+    environment: *app-env
+    ports: ["${BLAKSOC_PORT:-3000}:3000"]
+    depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_started } }
+
+  worker:
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
+    restart: unless-stopped
+    environment: *app-env
+    depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_started } }
+
+  # ---------------------------------------------------------------- OpenCTI
+  opencti-redis:
+    profiles: [opencti]
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes: [octi-redis:/data]
+
+  opencti-search:
+    profiles: [opencti]
+    image: opensearchproject/opensearch:2
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms2g -Xmx2g
+    ulimits: { memlock: { soft: -1, hard: -1 }, nofile: { soft: 65536, hard: 65536 } }
+    volumes: [octi-search:/usr/share/opensearch/data]
+
+  opencti-minio:
+    profiles: [opencti]
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data
+    environment: { MINIO_ROOT_USER: opencti, MINIO_ROOT_PASSWORD: "${OPENCTI_MINIO_PASSWORD:?}" }
+    volumes: [octi-minio:/data]
+
+  opencti-rabbitmq:
+    profiles: [opencti]
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment: { RABBITMQ_DEFAULT_USER: opencti, RABBITMQ_DEFAULT_PASS: "${OPENCTI_RABBITMQ_PASSWORD:?}" }
+    volumes: [octi-amqp:/var/lib/rabbitmq]
+
+  opencti:
+    profiles: [opencti]
+    image: opencti/platform:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment:
+      NODE_OPTIONS: --max-old-space-size=8096
+      APP__PORT: 8080
+      APP__BASE_URL: ${OPENCTI_BASE_URL:-http://opencti:8080}
+      APP__ADMIN__EMAIL: ${OPENCTI_ADMIN_EMAIL:?}
+      APP__ADMIN__PASSWORD: ${OPENCTI_ADMIN_PASSWORD:?}
+      APP__ADMIN__TOKEN: ${OPENCTI_ADMIN_TOKEN:?}
+      APP__HEALTH_ACCESS_KEY: ${OPENCTI_HEALTH_KEY:?}
+      REDIS__HOSTNAME: opencti-redis
+      ELASTICSEARCH__URL: http://opencti-search:9200
+      MINIO__ENDPOINT: opencti-minio
+      MINIO__PORT: 9000
+      MINIO__USE_SSL: "false"
+      MINIO__ACCESS_KEY: opencti
+      MINIO__SECRET_KEY: ${OPENCTI_MINIO_PASSWORD:?}
+      RABBITMQ__HOSTNAME: opencti-rabbitmq
+      RABBITMQ__USERNAME: opencti
+      RABBITMQ__PASSWORD: ${OPENCTI_RABBITMQ_PASSWORD:?}
+      SMTP__HOSTNAME: ${SMTP_HOST:-localhost}
+      PROVIDERS__LOCAL__STRATEGY: LocalStrategy
+    ports: ["${OPENCTI_PORT:-8080}:8080"]
+    depends_on: [opencti-redis, opencti-search, opencti-minio, opencti-rabbitmq]
+
+  opencti-worker:
+    profiles: [opencti]
+    image: opencti/worker:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    deploy: { replicas: 3 }
+    environment: { OPENCTI_URL: http://opencti:8080, OPENCTI_TOKEN: "${OPENCTI_ADMIN_TOKEN:?}", WORKER_LOG_LEVEL: info }
+    depends_on: [opencti]
+
+  # Public/community feeds. Each connector's licence is recorded in blakSOC's feed catalogue;
+  # AlienVault OTX needs an API key and has redistribution limits — review before enabling.
+  connector-mitre:
+    profiles: [opencti]
+    image: opencti/connector-mitre:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment: &octi-conn
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_ADMIN_TOKEN:?}
+      CONNECTOR_ID: ${CONNECTOR_MITRE_ID:?uuid}
+      CONNECTOR_LOG_LEVEL: info
+      CONNECTOR_DURATION_PERIOD: P7D
+    depends_on: [opencti]
+
+  connector-cisa-kev:
+    profiles: [opencti]
+    image: opencti/connector-cisa-known-exploited-vulnerabilities:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment:
+      <<: *octi-conn
+      CONNECTOR_ID: ${CONNECTOR_KEV_ID:?uuid}
+      CISA_CATALOG_URL: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+      CISA_CREATE_INFRASTRUCTURES: "false"
+      CISA_TLP: TLP:CLEAR
+      CONNECTOR_DURATION_PERIOD: P1D
+    depends_on: [opencti]
+
+  connector-cve:
+    profiles: [opencti]
+    image: opencti/connector-cve:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment:
+      <<: *octi-conn
+      CONNECTOR_ID: ${CONNECTOR_CVE_ID:?uuid}
+      CVE_API_KEY: ${NVD_API_KEY:-}
+      CVE_INTERVAL: 6
+      CVE_MAX_DATE_RANGE: 120
+      CVE_MAINTAIN_DATA: "true"
+    depends_on: [opencti]
+
+  connector-urlhaus:
+    profiles: [opencti]
+    image: opencti/connector-urlhaus:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment:
+      <<: *octi-conn
+      CONNECTOR_ID: ${CONNECTOR_URLHAUS_ID:?uuid}
+      URLHAUS_CSV_URL: https://urlhaus.abuse.ch/downloads/csv_recent/
+      URLHAUS_IMPORT_OFFLINE: "false"
+      URLHAUS_THREATS_FROM_LABELS: "true"
+      CONNECTOR_DURATION_PERIOD: PT3H
+    depends_on: [opencti]
+
+  connector-malwarebazaar:
+    profiles: [opencti]
+    image: opencti/connector-malwarebazaar-recent-additions:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment:
+      <<: *octi-conn
+      CONNECTOR_ID: ${CONNECTOR_MB_ID:?uuid}
+      MALWAREBAZAAR_RECENT_ADDITIONS_API_KEY: ${ABUSECH_AUTH_KEY:-}
+      MALWAREBAZAAR_RECENT_ADDITIONS_COOLDOWN_SECONDS: 300
+    depends_on: [opencti]
+
+  connector-epss:
+    profiles: [opencti]
+    image: opencti/connector-first-epss:${OPENCTI_VERSION:-6.8.0}
+    restart: unless-stopped
+    environment:
+      <<: *octi-conn
+      CONNECTOR_ID: ${CONNECTOR_EPSS_ID:?uuid}
+      CONNECTOR_TYPE: INTERNAL_ENRICHMENT
+      CONNECTOR_SCOPE: vulnerability
+    depends_on: [opencti]
+
+  # ---------------------------------------------------------------- Sovereign local AI
+  ollama:
+    profiles: [ai]
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes: [ollama:/root/.ollama]
+
+volumes:
+  pgdata:
+  redisdata:
+  octi-redis:
+  octi-search:
+  octi-minio:
+  octi-amqp:
+  ollama:

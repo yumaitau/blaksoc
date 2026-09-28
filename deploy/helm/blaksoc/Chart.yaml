@@ -1,0 +1,7 @@
+apiVersion: v2
+name: blaksoc
+description: blakSOC — sovereign-capable multi-tenant SOC control plane (Yuma IT)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [soc, siem, wazuh, opencti, mssp]

@@ -1,0 +1,27 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "blaksoc.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "blaksoc.image" (dict "root" . "target" "worker") }}
+          command: ["sh", "-c", "node dist/db/migrate.mjs{{ if .Values.migrations.seed }} && node dist/db/seed.mjs{{ end }}"]
+          env:
+            {{- include "blaksoc.env" . | nindent 12 }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.existingSecret }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+{{- end }}

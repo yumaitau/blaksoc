@@ -1,0 +1,23 @@
+# Local development dependencies. Full stack (app, worker, OpenCTI, Wazuh) lives in deploy/.
+name: blaksoc-dev
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: blaksoc
+      POSTGRES_PASSWORD: blaksoc
+      POSTGRES_DB: blaksoc
+    ports: ["55471:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blaksoc"]
+      interval: 5s
+      retries: 10
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["56471:6379"]
+    volumes: [redisdata:/data]
+volumes:
+  pgdata:
+  redisdata:
