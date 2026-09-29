@@ -4,6 +4,7 @@ import { eq, sql } from "drizzle-orm";
 import { BUILTIN_ROLES } from "@/lib/auth/permissions";
 import { secretAad } from "@/lib/connectors/instances";
 import { encryptSecret, sha256 } from "@/lib/crypto";
+import { CREDENTIAL_EXPOSURE_PLAYBOOK } from "@/lib/credentials/playbook";
 import { BEC_DETECTIONS, SUSPECTED_BEC_PLAYBOOK } from "@/lib/detections/bec";
 import { attackTechniques as sigmaAttack, parseSigma, runTests } from "@/lib/detections/sigma";
 import { env } from "@/lib/env";
@@ -96,6 +97,10 @@ async function main() {
   const [becGlobal] = await db.select().from(s.playbooks).where(eq(s.playbooks.name, SUSPECTED_BEC_PLAYBOOK.name));
   if (!becGlobal) {
     await db.insert(s.playbooks).values({ tenantId: null, ...SUSPECTED_BEC_PLAYBOOK, enabled: false });
+  }
+  const [credGlobal] = await db.select().from(s.playbooks).where(eq(s.playbooks.name, CREDENTIAL_EXPOSURE_PLAYBOOK.name));
+  if (!credGlobal) {
+    await db.insert(s.playbooks).values({ tenantId: null, ...CREDENTIAL_EXPOSURE_PLAYBOOK, enabled: false });
   }
 
   // ---- Yuma IT (MSSP) and break-glass administrator
@@ -239,6 +244,27 @@ async function main() {
   const { alerts: m365Alerts } = await m365Provider.getAlerts({ since: new Date(Date.now() - 7 * 24 * 3600_000) });
   for (const a of m365Alerts) {
     await ingestAlert({ tenantId: wattle!.id, integrationId: m365!.id, source: "entra", alert: a, intel });
+  }
+
+  let [google] = await db.select().from(s.integrations).where(eq(s.integrations.name, "Google Workspace (demo)"));
+  if (!google) {
+    const workspace = connectorDef("google-workspace");
+    [google] = await db.insert(s.integrations).values({
+      tenantId: wattle!.id,
+      category: "identity",
+      provider: "google-workspace",
+      name: "Google Workspace (demo)",
+      config: { customerId: "my_customer", domain: "wattle.example", mode: "fixture" },
+      status: "healthy",
+      permissions: workspace?.remotePermissions ?? [],
+    }).returning();
+  }
+  const googleProvider = eventProvider(google!);
+  const googleAssets = await googleProvider.getAssets();
+  await withScope({ tenantIds: [wattle!.id], platform: false }, (tx) => syncAssets(tx, wattle!.id, google!.id, googleAssets));
+  const { alerts: googleAlerts } = await googleProvider.getAlerts({ since: new Date(Date.now() - 7 * 24 * 3600_000) });
+  for (const a of googleAlerts) {
+    await ingestAlert({ tenantId: wattle!.id, integrationId: google!.id, source: "google-workspace", alert: a, intel });
   }
 
   await db.execute(sql`update assets s set risk_score = coalesce((select max(a.risk_score) from alerts a where a.asset_id = s.id), 0)`);

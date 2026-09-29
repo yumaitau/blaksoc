@@ -59,6 +59,14 @@ an anonymised sector identity (e.g. "blakSOC AU healthcare sector"), never the c
 policy is explicitly `named`. Commercial feed intel is filtered per tenant entitlement before it is shown
 or scored.
 
+## External scanning
+
+The `surface` worker job is the only scanner. It allows one active scan per tenant and six hosts per minute. The worker NetworkPolicy (`deploy/helm/blaksoc/templates/networkpolicy.yaml`) is the egress for DNS, certificate transparency, WHOIS, Have I Been Pwned, and an entitled Shodan or Censys lookup. Web pods do not scan. Active scanning starts only after an `asm.attest` audit row for that domain. The shipped scanner uses fixture observations and does not open sockets to customer hosts.
+
+## Credential exposure
+
+A domain must pass TXT verification before a breach check runs. Each stored row has the email address, breach name, source (`hibp` or the commercial feed name), observation date, and data classes. Permitted classes are `email`, `username`, and `password-hash`. Plaintext passwords are removed before insert and are not a permitted class. The same email, breach, and source are stored once. Commercial infostealer rows use `filterByEntitlement()` and are dropped when the tenant is not licensed for that feed.
+
 ## Hardening checklist
 
 - Set strong `BETTER_AUTH_SECRET`, `BLAKSOC_ENCRYPTION_KEY`, DB/Redis passwords; rotate via your secret manager.

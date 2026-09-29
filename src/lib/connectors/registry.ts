@@ -2,6 +2,7 @@ import { z } from "zod";
 import { FixtureIntelProvider } from "@/lib/intel/fixture";
 import { OpenCtiProvider } from "@/lib/intel/opencti";
 import type { IntelProvider } from "@/lib/intel/types";
+import { googleWorkspaceConnector } from "@/lib/providers/google/connector";
 import { entraConnector } from "@/lib/providers/m365/connector";
 import { DemoProvider } from "@/lib/providers/demo";
 import type { SecurityEventProvider } from "@/lib/providers/types";
@@ -144,6 +145,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
   },
   ...aiConnectors(),
   entraConnector,
+  googleWorkspaceConnector,
   planned("sentinel", "Microsoft Sentinel", "siem", ["events", "assets"], "Log Analytics incidents and KQL hunting."),
   planned("elastic", "Elastic Security", "siem", ["events", "assets"], "Detection alerts and ES|QL hunting."),
   planned("splunk", "Splunk", "siem", ["events"], "Notable events and SPL searches."),
@@ -153,7 +155,6 @@ export const CONNECTORS: ConnectorDefinition[] = [
   planned("crowdstrike", "CrowdStrike Falcon", "endpoint", ["events", "assets", "response"], "Detections and host containment."),
   planned("sentinelone", "SentinelOne", "endpoint", ["events", "assets", "response"], "Threats and network quarantine."),
   planned("active-directory", "Active Directory", "identity", ["assets", "identity_response"], "On-prem identity via LDAPS agent."),
-  planned("google-workspace", "Google Workspace", "identity", ["assets", "identity_response"], "Users, suspend, sign-out."),
   planned("fortinet", "Fortinet FortiGate", "network", ["response"], "Address-group IOC blocking."),
   planned("palo-alto", "Palo Alto Networks", "network", ["response"], "EDL / dynamic address group blocking."),
   planned("cloudflare", "Cloudflare", "network", ["response"], "WAF custom lists and Zero Trust blocks."),

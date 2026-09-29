@@ -20,6 +20,7 @@ import { eventProvider, notifier, secretAad } from "@/lib/connectors/instances";
 import { SUSPECTED_BEC_PLAYBOOK } from "@/lib/detections/bec";
 import { env } from "@/lib/env";
 import { ingestAlert } from "@/lib/pipeline/ingest";
+import { rememberDomains } from "@/lib/services/surface";
 import { toPdf } from "@/lib/reports/export";
 import type { ReportContent } from "@/lib/reports/types";
 import { actor, AccessDenied } from "./common";
@@ -420,6 +421,7 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string): Pro
       });
     }
     const who = actor(ctx);
+    await rememberDomains(tx, who, tenant.id, row.connect!.domains, "onboarding");
     await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.roles", targetType: "tenant", targetId: tenant.id, detail: { keys: [...ROLE_KEYS] } });
     await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.governance", targetType: "tenant", targetId: tenant.id, detail: { choice: "most_protective", enforced: false } });
     await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.summary", targetType: "report", targetId: report!.id, detail: { reportId: report!.id, providerRef: receipt.providerRef } });

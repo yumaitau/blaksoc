@@ -29,6 +29,7 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   "openai-compatible": { baseUrl: "https://api.example.com/v1", model: "<model>", region: "<processing region>", country: "AU" },
   bedrock: { region: "ap-southeast-2", model: "anthropic.claude-sonnet-4-5-20250929-v1:0" },
   entra: { azureTenantId: "00000000-0000-0000-0000-000000000000", mode: "live", subscribedSkus: [] },
+  "google-workspace": { customerId: "my_customer", domain: "example.org", mode: "fixture" },
   sms: { from: "+61400000000", mode: "fixture", events: ["incident.created"] },
   voice: { from: "+61400000000", mode: "fixture", events: ["incident.created"] },
   email: { host: "smtp.example.com", port: 587, from: "soc@example.com", mode: "fixture", events: ["incident.created"] },

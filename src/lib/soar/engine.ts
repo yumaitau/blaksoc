@@ -129,7 +129,7 @@ async function responseStep(tx: Tx, step: PlaybookStep, run: { id: string; tenan
   const badIp = alert?.intel?.matches?.find((m) => m.verdict === "malicious" && m.observable.type.startsWith("ip"))?.observable.value;
   const badIoc = alert?.intel?.matches?.find((m) => m.verdict === "malicious")?.observable.value;
   const hint = (alert as { responseHint?: { ruleId?: string; grantId?: string } } | undefined)?.responseHint;
-  const identityAction = step.action === "disable_identity" || step.action === "revoke_sessions" || step.action === "require_mfa" || step.action === "remove_inbox_rule" || step.action === "revoke_oauth_grant" || step.action === "suspend_user" || step.action === "sign_out" || step.action === "reset_signin_cookies" || step.action === "revoke_oauth_token";
+  const identityAction = step.action === "disable_identity" || step.action === "revoke_sessions" || step.action === "require_mfa" || step.action === "remove_inbox_rule" || step.action === "revoke_oauth_grant" || step.action === "suspend_user" || step.action === "sign_out" || step.action === "reset_signin_cookies" || step.action === "revoke_oauth_token" || step.action === "reset_password";
   const target = {
     assetId: alert?.assetId ?? undefined,
     identity: identityAction ? (alert?.userName ?? undefined) : undefined,
