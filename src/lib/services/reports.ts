@@ -3,6 +3,7 @@ import { reports, tenants } from "@/db/schema";
 import { assertCan, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { buildReport, saveReport, type ReportKind } from "@/lib/reports/generate";
+import { cobrandLabel } from "./partner";
 import { actor, AccessDenied, inTenant, scoped } from "./common";
 
 export async function listReports(ctx: AccessContext, tenantIds?: string[]) {
@@ -29,7 +30,8 @@ export async function generateReport(ctx: AccessContext, tenantId: string, kind:
   assertCan(ctx, "report:generate", tenantId);
   return inTenant(ctx, "report:generate", tenantId, async (tx) => {
     const content = await buildReport(tx, tenantId, kind, opts);
-    const r = await saveReport(tx, tenantId, kind, content, ctx.principal.userId);
+    const cobrand = await cobrandLabel(tenantId);
+    const r = await saveReport(tx, tenantId, kind, cobrand ? { ...content, cobrand } : content, ctx.principal.userId);
     await audit(tx, { ...actor(ctx), tenantId, action: "report.generate", targetType: "report", targetId: r.id, detail: { kind } });
     return r;
   });

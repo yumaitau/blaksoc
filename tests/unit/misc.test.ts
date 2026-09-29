@@ -90,9 +90,19 @@ describe("RBAC", () => {
     expect(permissionsFor(ctx, "C").size).toBe(0);
   });
   it("customer roles never include SOC-only permissions", () => {
-    for (const r of BUILTIN_ROLES.filter((r) => r.scope === "tenant")) {
+    for (const r of BUILTIN_ROLES.filter((r) => r.key.startsWith("customer_"))) {
       for (const p of ["alert:triage", "integration:manage", "detection:deploy", "tenant:manage", "mssp:read"] as const) expect(r.permissions).not.toContain(p);
     }
+  });
+  it("partner roles stay on the partner tenant and do not approve containment", () => {
+    for (const key of ["partner_admin", "partner_analyst"] as const) {
+      const r = BUILTIN_ROLES.find((role) => role.key === key);
+      expect(r?.scope).toBe("tenant");
+      expect(r?.permissions).not.toContain("response:approve");
+      expect(r?.permissions).not.toContain("integration:manage");
+    }
+    expect(BUILTIN_ROLES.find((r) => r.key === "partner_analyst")?.permissions).toContain("alert:triage");
+    expect(BUILTIN_ROLES.find((r) => r.key === "partner_admin")?.permissions).toContain("mssp:read");
   });
   it("only managers/admins approve response actions", () => {
     const approvers = BUILTIN_ROLES.filter((r) => r.permissions.includes("response:approve")).map((r) => r.key).sort();

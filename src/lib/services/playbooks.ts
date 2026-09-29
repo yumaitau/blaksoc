@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { alerts, approvals, assets, playbookRuns, playbookRunSteps, playbooks, responseActions, tenants } from "@/db/schema";
 import { withScope, type DbScope } from "@/db/scope";
-import { can, tenantsWith, type AccessContext } from "@/lib/auth/access";
+import { can, dbScope, tenantsWith, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { queue, QUEUES } from "@/lib/queue";
 import { stepCatalogue } from "@/lib/soar/engine";
@@ -47,7 +47,7 @@ export type PlaybookInput = z.input<typeof playbookInput>;
 function writeScope(ctx: AccessContext, tenantId: string | null): DbScope {
   if (tenantId) {
     if (!can(ctx, "playbook:write", tenantId)) throw new AccessDenied("missing playbook:write");
-    return { tenantIds: [tenantId], platform: false };
+    return dbScope(ctx, [tenantId]);
   }
   if (!ctx.isPlatform || !can(ctx, "playbook:write")) throw new AccessDenied("global playbooks require platform playbook:write");
   return { tenantIds: [], platform: true };

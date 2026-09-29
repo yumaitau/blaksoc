@@ -2,7 +2,7 @@ import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { auditLog, DEFAULT_TENANT_SETTINGS, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
-import { assertCan, can, type AccessContext } from "@/lib/auth/access";
+import { assertCan, can, dbScope, type AccessContext } from "@/lib/auth/access";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { actor, AccessDenied } from "./common";
 
@@ -11,7 +11,7 @@ const platformOnly = (ctx: AccessContext, perm: "tenant:manage" | "user:manage" 
 };
 
 export async function listTenants(ctx: AccessContext) {
-  return withScope({ tenantIds: ctx.tenantIds, platform: ctx.isPlatform }, (tx) => tx.select().from(tenants).where(inArray(tenants.id, ctx.tenantIds.length ? ctx.tenantIds : ["00000000-0000-0000-0000-000000000000"])).orderBy(tenants.kind, tenants.name));
+  return withScope(dbScope(ctx, ctx.tenantIds, ctx.isPlatform), (tx) => tx.select().from(tenants).where(inArray(tenants.id, ctx.tenantIds.length ? ctx.tenantIds : ["00000000-0000-0000-0000-000000000000"])).orderBy(tenants.kind, tenants.name));
 }
 
 export async function createTenant(ctx: AccessContext, input: { name: string; slug: string; sectors: string[]; deploymentMode: "shared" | "dedicated" }) {
@@ -40,7 +40,7 @@ export async function updateTenantSettings(ctx: AccessContext, tenantId: string,
 
 export async function createSite(ctx: AccessContext, tenantId: string, name: string, location?: string, link: "standard" | "low" = "standard") {
   assertCan(ctx, "asset:write", tenantId);
-  return withScope({ tenantIds: [tenantId], platform: false }, (tx) => tx.insert(sites).values({ tenantId, name, location, bandwidthProfile: link }).returning());
+  return withScope(dbScope(ctx, [tenantId]), (tx) => tx.insert(sites).values({ tenantId, name, location, bandwidthProfile: link }).returning());
 }
 
 /** Users visible to the caller: platform staff see all; customer admins see their tenant's users. */

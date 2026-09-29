@@ -32,7 +32,9 @@ export async function POST(req: Request) {
     if (!ONBOARDING_STEPS.includes(step as OnboardingStep)) return go("/onboarding?error=generic");
     const draftId = String(form.get("draftId") ?? "");
     await saveOnboardingStep(access, draftId, step as OnboardingStep, rawFrom(form));
-    if (step === "plan" && form.get("finish") === "yes") await finishOnboarding(access, draftId);
+    if (step === "plan" && form.get("finish") === "yes") {
+      await finishOnboarding(access, draftId, { partnerConsent: form.get("partnerConsent") === "yes" });
+    }
     return go("/onboarding");
   } catch (err) {
     if (err instanceof OnboardingError) return go(`/onboarding?error=${err.code}`);
