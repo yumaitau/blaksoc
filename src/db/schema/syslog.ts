@@ -29,7 +29,7 @@ export const syslogEvents = pgTable(
   (t) => [index("syslog_events_tenant_hot").on(t.tenantId, t.tier, t.ingestedAt)],
 );
 
-/** Cold copy. Region is an Australian AWS region. Object storage upload is a later step. */
+/** Cold index. Region is an Australian AWS region. Search and restore read the object store; body is the copy taken at archive time. */
 export const syslogArchive = pgTable("syslog_archive", {
   id: uuid("id").primaryKey().defaultRandom(),
   tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),

@@ -8,6 +8,7 @@ import type { AccessContext } from "@/lib/auth/access";
 import { systemScope } from "@/lib/auth/access";
 import { connectorDef } from "@/lib/connectors/registry";
 import { parseSyslog } from "@/lib/syslog/parse";
+import { defaultArchiveStore, type ArchiveStore } from "@/lib/hosting/store";
 import { archiveKey, assertAuRegion, SYSLOG_HOT_MS } from "@/lib/syslog/retain";
 import { actor, inTenant } from "./common";
 
@@ -104,8 +105,8 @@ async function regionFor(tenantId: string): Promise<string> {
   return typeof region === "string" ? region : "ap-southeast-2";
 }
 
-/** Copy lines older than 30 days to the cold table and take them out of the hot query. */
-export async function archiveColdForTenant(tenantId: string, now = new Date(), region?: string): Promise<number> {
+/** Copy lines older than 30 days into the AU object store and take them out of the hot query. */
+export async function archiveColdForTenant(tenantId: string, now = new Date(), region?: string, store: ArchiveStore = defaultArchiveStore()): Promise<number> {
   const chosen = region ?? (await regionFor(tenantId));
   assertAuRegion(chosen);
   const cutoff = new Date(now.getTime() - SYSLOG_HOT_MS);
@@ -115,13 +116,35 @@ export async function archiveColdForTenant(tenantId: string, now = new Date(), r
       .from(syslogEvents)
       .where(and(eq(syslogEvents.tenantId, tenantId), eq(syslogEvents.tier, "hot"), lt(syslogEvents.ingestedAt, cutoff)));
     for (const row of due) {
-      await tx
-        .insert(syslogArchive)
-        .values({ tenantId, eventId: row.id, region: chosen, objectKey: archiveKey(tenantId, row.id), body: row.line })
-        .onConflictDoNothing();
+      const objectKey = archiveKey(tenantId, row.id);
+      await store.put(chosen, objectKey, row.line);
+      await tx.insert(syslogArchive).values({ tenantId, eventId: row.id, region: chosen, objectKey, body: row.line }).onConflictDoNothing();
       await tx.update(syslogEvents).set({ tier: "cold" }).where(eq(syslogEvents.id, row.id));
     }
     return due.length;
+  });
+}
+
+/** Match archived lines by reading the object store. The Postgres body column is not the source. */
+export async function searchArchive(tenantId: string, query: string, store: ArchiveStore = defaultArchiveStore()): Promise<{ eventId: string; region: string; line: string }[]> {
+  const rows = await withScope(systemScope(tenantId), (tx) => tx.select().from(syslogArchive).where(eq(syslogArchive.tenantId, tenantId)));
+  const found: { eventId: string; region: string; line: string }[] = [];
+  for (const row of rows) {
+    const line = await store.get(row.region, row.objectKey);
+    if (query.length === 0 || line.includes(query)) found.push({ eventId: row.eventId, region: row.region, line });
+  }
+  return found;
+}
+
+/** Put the archived object back on the hot event. */
+export async function restoreArchive(tenantId: string, eventId: string, store: ArchiveStore = defaultArchiveStore()): Promise<void> {
+  const [row] = await withScope(systemScope(tenantId), (tx) =>
+    tx.select().from(syslogArchive).where(and(eq(syslogArchive.tenantId, tenantId), eq(syslogArchive.eventId, eventId))),
+  );
+  if (!row) throw new Error("archive object missing");
+  const line = await store.get(row.region, row.objectKey);
+  await withScope(systemScope(tenantId), async (tx) => {
+    await tx.update(syslogEvents).set({ tier: "hot", line, byteLen: Buffer.byteLength(line) }).where(and(eq(syslogEvents.id, eventId), eq(syslogEvents.tenantId, tenantId)));
   });
 }
 
