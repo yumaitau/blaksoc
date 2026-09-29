@@ -35,6 +35,10 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   email: { host: "smtp.example.com", port: 587, from: "soc@example.com", mode: "fixture", events: ["incident.created"] },
   syslog: { region: "ap-southeast-2" },
   velociraptor: { mode: "fixture" },
+  defender: { tenantDomain: "example.org", mode: "fixture" },
+  cloudflare: { accountId: "00000000000000000000000000000000", listName: "blaksoc-block", mode: "fixture" },
+  fortinet: { host: "https://firewall.example", addressGroup: "blaksoc-block", mode: "fixture" },
+  sophos: { centralId: "sophos-central-example", region: "au", mode: "fixture" },
 };
 
 export function exampleConfig(provider: string): Record<string, unknown> {

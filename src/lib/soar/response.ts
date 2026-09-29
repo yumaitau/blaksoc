@@ -154,6 +154,24 @@ export async function decideApproval(ctx: AccessContext, approvalId: string, dec
   return res.ap;
 }
 
+/** Tenant-owned connector first, then a platform connector. Exact action wins. block_ioc may fall back to block_ip. */
+async function findNetworkConnector(tenantId: string, action: string) {
+  const candidates = await adminDb().select().from(integrations).where(and(eq(integrations.enabled, true), or(eq(integrations.tenantId, tenantId), isNull(integrations.tenantId))));
+  const ordered = [...candidates.filter((row) => row.tenantId === tenantId), ...candidates.filter((row) => row.tenantId == null)];
+  let fallback: (typeof ordered)[number] | undefined;
+  for (const candidate of ordered) {
+    try {
+      const supported = eventProvider(candidate).supportedActions() as string[];
+      if (supported.includes(action)) return { row: candidate, providerAction: action };
+      if (!fallback && action === "block_ioc" && supported.includes("block_ip")) fallback = candidate;
+    } catch {
+      /* notifier and intel rows are not event providers */
+    }
+  }
+  if (fallback) return { row: fallback, providerAction: "block_ip" };
+  return undefined;
+}
+
 /** Worker: execute an APPROVED action against the integration that owns the target asset. */
 export async function executeResponseAction(tenantId: string, actionId: string) {
   const scope = systemScope(tenantId);
@@ -169,6 +187,7 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
     const target = act.target as RequestInput["target"];
     let externalId = "";
     let platform: string | undefined;
+    let providerAction = act.action;
     let row: typeof integrations.$inferSelect | undefined;
     if (target.assetId) {
       const [src] = await withScope(scope, (tx) => tx.select().from(assetSources).where(eq(assetSources.assetId, target.assetId!)));
@@ -194,14 +213,23 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
         }
       }
       if (!row) throw new Error(`${act.action} requires a connector with identity response capability (not yet configured)`);
+    } else if (act.action === "block_ioc" || act.action === "unblock_ioc" || target.observable || target.ip) {
+      const indicator = target.observable ?? target.ip;
+      if (!indicator) throw new Error(`${act.action} needs an indicator`);
+      const found = await findNetworkConnector(tenantId, act.action);
+      if (!found) throw new Error(`${act.action} requires a connector with identity/network response capability (not yet configured)`);
+      row = found.row;
+      providerAction = found.providerAction;
+      externalId = indicator;
     } else {
       throw new Error(`${act.action} requires a connector with identity/network response capability (not yet configured)`);
     }
     integrationId = row.id;
     const provider = eventProvider(row);
-    const providerAction = act.action === "block_ioc" ? "block_ip" : act.action;
-    if (!provider.supportedActions().includes(providerAction as never)) throw new Error(`${row.name} does not support ${act.action}`);
-    const r = await provider.executeResponseAction({ action: providerAction as never, assetExternalId: externalId, params: { srcip: target.ip ?? target.observable, arguments: target.process ? [target.process] : [], platform, ruleId: target.ruleId, grantId: target.grantId } });
+    const supported = provider.supportedActions() as string[];
+    if (providerAction === act.action && act.action === "block_ioc" && !supported.includes("block_ioc") && supported.includes("block_ip")) providerAction = "block_ip";
+    if (!supported.includes(providerAction)) throw new Error(`${row.name} does not support ${act.action}`);
+    const r = await provider.executeResponseAction({ action: providerAction as never, assetExternalId: externalId, params: { srcip: target.ip ?? target.observable, indicator: target.observable ?? target.ip, arguments: target.process ? [target.process] : [], platform, ruleId: target.ruleId, grantId: target.grantId } });
     ok = r.ok;
     message = r.message;
   } catch (err) {

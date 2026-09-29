@@ -134,7 +134,7 @@ async function responseStep(tx: Tx, step: PlaybookStep, run: { id: string; tenan
     assetId: alert?.assetId ?? undefined,
     identity: identityAction ? (alert?.userName ?? undefined) : undefined,
     ip: step.action === "block_ip" ? badIp : undefined,
-    observable: step.action === "block_ioc" ? badIoc : undefined,
+    observable: step.action === "block_ioc" || step.action === "unblock_ioc" ? (badIoc ?? (typeof step.params?.indicator === "string" ? step.params.indicator : undefined)) : undefined,
     ruleId: hint?.ruleId,
     grantId: hint?.grantId,
   };

@@ -60,7 +60,7 @@ export type AlertQuery = {
 };
 
 export type ResponseActionRequest = {
-  action: "isolate_endpoint" | "release_endpoint" | "block_ip" | "kill_process" | "custom" | "disable_identity" | "revoke_sessions" | "require_mfa" | "remove_inbox_rule" | "revoke_oauth_grant" | "suspend_user" | "sign_out" | "reset_signin_cookies" | "revoke_oauth_token" | "reset_password";
+  action: "isolate_endpoint" | "release_endpoint" | "scan_endpoint" | "block_ip" | "block_ioc" | "unblock_ioc" | "kill_process" | "custom" | "disable_identity" | "revoke_sessions" | "require_mfa" | "remove_inbox_rule" | "revoke_oauth_grant" | "suspend_user" | "sign_out" | "reset_signin_cookies" | "revoke_oauth_token" | "reset_password";
   assetExternalId: string;
   params?: Record<string, unknown>;
 };

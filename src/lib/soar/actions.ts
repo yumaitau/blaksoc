@@ -2,6 +2,7 @@
 export const RESPONSE_ACTIONS = {
   isolate_endpoint: { label: "Isolate endpoint", destructive: true, target: "asset" },
   release_endpoint: { label: "Release endpoint from isolation", destructive: false, target: "asset" },
+  scan_endpoint: { label: "AV scan", destructive: false, target: "asset" },
   block_ip: { label: "Block IP on endpoint firewall", destructive: true, target: "asset+ip" },
   kill_process: { label: "Kill process", destructive: true, target: "asset" },
   disable_identity: { label: "Disable identity", destructive: true, target: "identity" },
@@ -15,6 +16,7 @@ export const RESPONSE_ACTIONS = {
   revoke_oauth_token: { label: "Revoke OAuth token", destructive: true, target: "identity" },
   reset_password: { label: "Force password reset", destructive: true, target: "identity" },
   block_ioc: { label: "Block IOC at perimeter", destructive: true, target: "observable" },
+  unblock_ioc: { label: "Remove IOC block", destructive: false, target: "observable" },
 } as const;
 
 export type ResponseActionKey = keyof typeof RESPONSE_ACTIONS;
