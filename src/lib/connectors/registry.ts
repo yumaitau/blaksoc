@@ -2,6 +2,7 @@ import { z } from "zod";
 import { FixtureIntelProvider } from "@/lib/intel/fixture";
 import { OpenCtiProvider } from "@/lib/intel/opencti";
 import type { IntelProvider } from "@/lib/intel/types";
+import { entraConnector } from "@/lib/providers/m365/connector";
 import { DemoProvider } from "@/lib/providers/demo";
 import type { SecurityEventProvider } from "@/lib/providers/types";
 import { WazuhProvider } from "@/lib/providers/wazuh";
@@ -141,6 +142,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
     create: (_c, s) => ({ kind: "notify", provider: new WebhookNotifier(s.webhookUrl!, null, "slack") }),
   },
   ...aiConnectors(),
+  entraConnector,
   planned("sentinel", "Microsoft Sentinel", "siem", ["events", "assets"], "Log Analytics incidents and KQL hunting."),
   planned("elastic", "Elastic Security", "siem", ["events", "assets"], "Detection alerts and ES|QL hunting."),
   planned("splunk", "Splunk", "siem", ["events"], "Notable events and SPL searches."),
@@ -149,7 +151,6 @@ export const CONNECTORS: ConnectorDefinition[] = [
   planned("defender", "Microsoft Defender XDR", "endpoint", ["events", "assets", "response", "vulnerabilities"], "Device isolation, TVM, incidents."),
   planned("crowdstrike", "CrowdStrike Falcon", "endpoint", ["events", "assets", "response"], "Detections and host containment."),
   planned("sentinelone", "SentinelOne", "endpoint", ["events", "assets", "response"], "Threats and network quarantine."),
-  planned("entra", "Microsoft Entra ID", "identity", ["assets", "identity_response"], "Identity inventory, risky users, disable/revoke sessions."),
   planned("active-directory", "Active Directory", "identity", ["assets", "identity_response"], "On-prem identity via LDAPS agent."),
   planned("google-workspace", "Google Workspace", "identity", ["assets", "identity_response"], "Users, suspend, sign-out."),
   planned("fortinet", "Fortinet FortiGate", "network", ["response"], "Address-group IOC blocking."),

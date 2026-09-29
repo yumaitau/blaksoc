@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Tx } from "@/db/client";
 import { approvals, assetSources, integrations, responseActions, tenants, user } from "@/db/schema";
@@ -16,7 +16,7 @@ import { RESPONSE_ACTIONS, type ResponseActionKey } from "./actions";
 export type RequestInput = {
   tenantId: string;
   action: ResponseActionKey;
-  target: { assetId?: string; ip?: string; identity?: string; observable?: string; process?: string };
+  target: { assetId?: string; ip?: string; identity?: string; observable?: string; process?: string; ruleId?: string; grantId?: string };
   reason: string;
   requestedBy: string | null;
   requestedByKind: "user" | "playbook" | "ai";
@@ -83,7 +83,7 @@ export async function requestResponseAction(tx: Tx, input: RequestInput) {
 }
 
 export function describeTarget(t: RequestInput["target"]) {
-  return [t.assetId && `asset ${t.assetId.slice(0, 8)}`, t.ip && `ip ${t.ip}`, t.identity && `identity ${t.identity}`, t.observable && `ioc ${t.observable}`, t.process && `process ${t.process}`].filter(Boolean).join(", ") || "n/a";
+  return [t.assetId && `asset ${t.assetId.slice(0, 8)}`, t.ip && `ip ${t.ip}`, t.identity && `identity ${t.identity}`, t.observable && `ioc ${t.observable}`, t.process && `process ${t.process}`, t.ruleId && `rule ${t.ruleId}`, t.grantId && `grant ${t.grantId}`].filter(Boolean).join(", ") || "n/a";
 }
 
 /** Analyst-initiated request from the UI. */
@@ -162,17 +162,41 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
   let integrationId: string | null = null;
   try {
     const target = act.target as RequestInput["target"];
-    if (!target.assetId) throw new Error(`${act.action} requires a connector with identity/network response capability (not yet configured)`);
-    const [src] = await withScope(scope, (tx) => tx.select().from(assetSources).where(eq(assetSources.assetId, target.assetId!)));
-    if (!src) throw new Error("asset has no source integration capable of response");
-    // Integration rows may be platform-owned; the worker reads them with the owner connection.
-    const [row] = await adminDb().select().from(integrations).where(eq(integrations.id, src.integrationId));
-    if (!row) throw new Error("integration missing");
+    let externalId = "";
+    let platform: string | undefined;
+    let row: typeof integrations.$inferSelect | undefined;
+    if (target.assetId) {
+      const [src] = await withScope(scope, (tx) => tx.select().from(assetSources).where(eq(assetSources.assetId, target.assetId!)));
+      if (!src) throw new Error("asset has no source integration capable of response");
+      // Integration rows may be platform-owned; the worker reads them with the owner connection.
+      const [found] = await adminDb().select().from(integrations).where(eq(integrations.id, src.integrationId));
+      if (!found) throw new Error("integration missing");
+      row = found;
+      externalId = src.externalId;
+      platform = (src.raw as { os?: { platform?: string } } | null)?.os?.platform;
+    } else if (target.identity) {
+      const candidates = await adminDb().select().from(integrations).where(and(eq(integrations.enabled, true), or(eq(integrations.tenantId, tenantId), isNull(integrations.tenantId))));
+      for (const candidate of candidates) {
+        try {
+          const provider = eventProvider(candidate);
+          if (provider.supportedActions().includes(act.action as never)) {
+            row = candidate;
+            externalId = target.identity;
+            break;
+          }
+        } catch {
+          /* notifier and intel rows are not event providers */
+        }
+      }
+      if (!row) throw new Error(`${act.action} requires a connector with identity response capability (not yet configured)`);
+    } else {
+      throw new Error(`${act.action} requires a connector with identity/network response capability (not yet configured)`);
+    }
     integrationId = row.id;
     const provider = eventProvider(row);
     const providerAction = act.action === "block_ioc" ? "block_ip" : act.action;
     if (!provider.supportedActions().includes(providerAction as never)) throw new Error(`${row.name} does not support ${act.action}`);
-    const r = await provider.executeResponseAction({ action: providerAction as never, assetExternalId: src.externalId, params: { srcip: target.ip ?? target.observable, arguments: target.process ? [target.process] : [], platform: (src.raw as { os?: { platform?: string } } | null)?.os?.platform } });
+    const r = await provider.executeResponseAction({ action: providerAction as never, assetExternalId: externalId, params: { srcip: target.ip ?? target.observable, arguments: target.process ? [target.process] : [], platform, ruleId: target.ruleId, grantId: target.grantId } });
     ok = r.ok;
     message = r.message;
   } catch (err) {

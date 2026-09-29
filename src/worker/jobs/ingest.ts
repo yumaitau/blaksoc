@@ -16,7 +16,7 @@ import { wazuhLevelToSeverity } from "@/lib/providers/wazuh";
 type Log = (m: string) => void;
 
 async function eventIntegrations(): Promise<IntegrationRow[]> {
-  const rows = await adminDb().select().from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, ["siem", "endpoint"])));
+  const rows = await adminDb().select().from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, ["siem", "endpoint", "identity"])));
   return rows.filter((r) => connectorDef(r.provider)?.capabilities.includes("events"));
 }
 
@@ -104,15 +104,17 @@ export async function pollAlerts(log: Log) {
       const fallbackTenant = row.tenantId ?? (links.length === 1 ? links[0]!.tenantId : null);
 
       let alerts;
+      let cursorKey: string | null = null;
+      let nextCursor: string | null = null;
       if (provider instanceof DemoProvider) {
         // Demo: a trickle of synthetic alerts so the live queue moves.
         alerts = Math.random() < 0.5 ? provider.generate(1) : [];
       } else {
-        const cursorKey = `cursor:alerts:${row.id}`;
+        cursorKey = `cursor:alerts:${row.id}`;
         const cursor = await redis().get(cursorKey);
         const res = await provider.getAlerts({ since: new Date(Date.now() - 24 * 3600_000), afterCursor: cursor ?? undefined, limit: 500 });
         alerts = res.alerts;
-        if (res.cursor) await redis().set(cursorKey, res.cursor);
+        nextCursor = res.cursor;
       }
 
       const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
@@ -128,6 +130,7 @@ export async function pollAlerts(log: Log) {
         }
       }
       if (n) log(`alerts ${row.name}: +${n}`);
+      if (cursorKey && nextCursor) await redis().set(cursorKey, nextCursor);
       await markHealth(row, true);
     } catch (e) {
       await markHealth(row, false, (e as Error).message);

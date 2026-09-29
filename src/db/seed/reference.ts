@@ -49,6 +49,8 @@ export const ATTACK: [string, string, string[]][] = [
   ["T1570", "Lateral Tool Transfer", ["lateral-movement"]],
   ["T1560", "Archive Collected Data", ["collection"]],
   ["T1114", "Email Collection", ["collection"]],
+  ["T1114.003", "Email Forwarding Rule", ["collection"]],
+  ["T1528", "Steal Application Access Token", ["credential-access"]],
   ["T1071", "Application Layer Protocol", ["command-and-control"]],
   ["T1071.001", "Web Protocols", ["command-and-control"]],
   ["T1105", "Ingress Tool Transfer", ["command-and-control"]],

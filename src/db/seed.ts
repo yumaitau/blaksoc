@@ -4,11 +4,14 @@ import { eq, sql } from "drizzle-orm";
 import { BUILTIN_ROLES } from "@/lib/auth/permissions";
 import { secretAad } from "@/lib/connectors/instances";
 import { encryptSecret, sha256 } from "@/lib/crypto";
-import { attackTechniques as sigmaAttack, parseSigma } from "@/lib/detections/sigma";
+import { BEC_DETECTIONS, SUSPECTED_BEC_PLAYBOOK } from "@/lib/detections/bec";
+import { attackTechniques as sigmaAttack, parseSigma, runTests } from "@/lib/detections/sigma";
 import { env } from "@/lib/env";
 import { FixtureIntelProvider } from "@/lib/intel/fixture";
 import { ingestAlert } from "@/lib/pipeline/ingest";
 import { syncAssets } from "@/lib/pipeline/assets";
+import { eventProvider } from "@/lib/connectors/instances";
+import { connectorDef } from "@/lib/connectors/registry";
 import { DemoProvider } from "@/lib/providers/demo";
 import { redis } from "@/lib/redis";
 import { createIncidentFromAlerts } from "@/lib/services/incidents";
@@ -50,12 +53,22 @@ async function main() {
   for (const c of CVES) {
     await db.insert(s.cveIntel).values({ cve: c.cve, summary: c.summary, cvss: c.cvss, epss: c.epss, epssPercentile: c.pct, kev: c.kev, kevRansomware: !!c.ransomware, kevDueDate: c.due ?? null }).onConflictDoNothing();
   }
-  for (const yaml of SIGMA_RULES) {
+  for (const yaml of [...SIGMA_RULES, ...BEC_DETECTIONS.map((d) => d.yaml)]) {
     const r = parseSigma(yaml);
     const [exists] = await db.select().from(s.sigmaRules).where(eq(s.sigmaRules.sigmaId, r.id));
     if (exists) continue;
     const [row] = await db.insert(s.sigmaRules).values({ tenantId: null, sigmaId: r.id, title: r.title, description: r.description, status: r.status ?? "experimental", severity: r.level ?? "medium", logsource: r.logsource, attackTechniques: sigmaAttack(r), falsePositives: r.falsepositives ?? [], confidence: r.status === "stable" ? 75 : 50 }).returning();
     await db.insert(s.sigmaRuleVersions).values({ ruleId: row!.id, tenantId: null, version: 1, yaml, sha256: sha256(yaml), changeNote: "Initial import" });
+  }
+  for (const d of BEC_DETECTIONS) {
+    const parsed = parseSigma(d.yaml);
+    const { results, passed } = runTests(parsed, d.cases);
+    if (!passed) throw new Error(`BEC rule "${parsed.title}" failed its fixture cases`);
+    const [rule] = await db.select().from(s.sigmaRules).where(eq(s.sigmaRules.sigmaId, parsed.id));
+    if (!rule) continue;
+    const [already] = await db.select({ id: s.sigmaRuleTests.id }).from(s.sigmaRuleTests).where(eq(s.sigmaRuleTests.ruleId, rule.id)).limit(1);
+    if (already) continue;
+    await db.insert(s.sigmaRuleTests).values({ ruleId: rule.id, tenantId: null, version: rule.currentVersion, cases: d.cases, results, passed, ranBy: null });
   }
 
   const [pb] = await db.select().from(s.playbooks).where(eq(s.playbooks.name, "Critical malicious IP detection"));
@@ -78,6 +91,11 @@ async function main() {
         { id: "record", action: "record.note", name: "Record actions", params: { title: "Containment playbook completed" } },
       ],
     });
+  }
+
+  const [becGlobal] = await db.select().from(s.playbooks).where(eq(s.playbooks.name, SUSPECTED_BEC_PLAYBOOK.name));
+  if (!becGlobal) {
+    await db.insert(s.playbooks).values({ tenantId: null, ...SUSPECTED_BEC_PLAYBOOK, enabled: false });
   }
 
   // ---- Yuma IT (MSSP) and break-glass administrator
@@ -108,6 +126,12 @@ async function main() {
   }
   const [wattle, murray] = tenantRows;
   await db.update(s.tenants).set({ settings: { ...s.DEFAULT_TENANT_SETTINGS, sharing: { createSightings: true, attribution: "anonymised", maxTlp: "TLP:AMBER" } } }).where(eq(s.tenants.id, wattle!.id));
+
+  const becBooks = await db.select().from(s.playbooks).where(eq(s.playbooks.name, SUSPECTED_BEC_PLAYBOOK.name));
+  for (const t of tenantRows) {
+    if (becBooks.some((p) => p.tenantId === t.id)) continue;
+    await db.insert(s.playbooks).values({ ...SUSPECTED_BEC_PLAYBOOK, tenantId: t.id, enabled: false });
+  }
 
   // Personas: each role explorable in DEMO_MODE via password sign-in.
   const pw = "blaksoc-demo-2026";
@@ -193,6 +217,28 @@ async function main() {
       });
     }
   }
+  // Synthetic M365 telemetry for the Wattle demo tenant (recorded Graph fixtures, not a live tenant).
+  let [m365] = await db.select().from(s.integrations).where(eq(s.integrations.name, "Microsoft 365 (demo)"));
+  if (!m365) {
+    const entra = connectorDef("entra");
+    [m365] = await db.insert(s.integrations).values({
+      tenantId: wattle!.id,
+      category: "identity",
+      provider: "entra",
+      name: "Microsoft 365 (demo)",
+      config: { azureTenantId: "00000000-0000-4000-8000-0000000000a1", mode: "fixture", subscribedSkus: ["O365_BUSINESS_ESSENTIALS"] },
+      status: "healthy",
+      permissions: entra?.remotePermissions ?? [],
+    }).returning();
+  }
+  const m365Provider = eventProvider(m365!);
+  const m365Assets = await m365Provider.getAssets();
+  await withScope({ tenantIds: [wattle!.id], platform: false }, (tx) => syncAssets(tx, wattle!.id, m365!.id, m365Assets));
+  const { alerts: m365Alerts } = await m365Provider.getAlerts({ since: new Date(Date.now() - 7 * 24 * 3600_000) });
+  for (const a of m365Alerts) {
+    await ingestAlert({ tenantId: wattle!.id, integrationId: m365!.id, source: "entra", alert: a, intel });
+  }
+
   await db.execute(sql`update assets s set risk_score = coalesce((select max(a.risk_score) from alerts a where a.asset_id = s.id), 0)`);
 
   console.log("seed complete (demo)");

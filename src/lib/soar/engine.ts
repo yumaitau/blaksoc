@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { adminDb, type Tx } from "@/db/client";
 import {
-  alerts, approvals, assets, integrations, playbookRuns, playbookRunSteps, playbooks, tenants, type PlaybookStep, type PlaybookTrigger,
+  alerts, approvals, assets, incidentTasks, integrations, playbookRuns, playbookRunSteps, playbooks, tenants, type PlaybookStep, type PlaybookTrigger,
 } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
@@ -112,6 +112,15 @@ export const STEP_ACTIONS: Record<string, { label: string; handler: StepHandler 
       return { status: "SUCCEEDED" };
     },
   },
+  "task.create": {
+    label: "Create customer tasks",
+    handler: async (tx, s, run, ctx) => {
+      if (!ctx.incidentId) return { status: "SKIPPED", output: "no incident" };
+      const titles = Array.isArray(s.params?.titles) ? (s.params.titles as string[]) : [];
+      for (const title of titles) await tx.insert(incidentTasks).values({ tenantId: run.tenantId, incidentId: ctx.incidentId, title });
+      return { status: "SUCCEEDED", output: { tasks: titles.length } };
+    },
+  },
 };
 
 async function responseStep(tx: Tx, step: PlaybookStep, run: { id: string; tenantId: string }, ctx: RunCtx): Promise<StepResult> {
@@ -119,11 +128,15 @@ async function responseStep(tx: Tx, step: PlaybookStep, run: { id: string; tenan
   const alert = ctx.alert as { id: string; assetId?: string | null; userName?: string | null; intel?: { matches?: { verdict: string; observable: { type: string; value: string } }[] } } | undefined;
   const badIp = alert?.intel?.matches?.find((m) => m.verdict === "malicious" && m.observable.type.startsWith("ip"))?.observable.value;
   const badIoc = alert?.intel?.matches?.find((m) => m.verdict === "malicious")?.observable.value;
+  const hint = (alert as { responseHint?: { ruleId?: string; grantId?: string } } | undefined)?.responseHint;
+  const identityAction = step.action === "disable_identity" || step.action === "revoke_sessions" || step.action === "require_mfa" || step.action === "remove_inbox_rule" || step.action === "revoke_oauth_grant" || step.action === "suspend_user" || step.action === "sign_out" || step.action === "reset_signin_cookies" || step.action === "revoke_oauth_token";
   const target = {
     assetId: alert?.assetId ?? undefined,
-    identity: step.action === "disable_identity" || step.action === "revoke_sessions" ? (alert?.userName ?? undefined) : undefined,
+    identity: identityAction ? (alert?.userName ?? undefined) : undefined,
     ip: step.action === "block_ip" ? badIp : undefined,
     observable: step.action === "block_ioc" ? badIoc : undefined,
+    ruleId: hint?.ruleId,
+    grantId: hint?.grantId,
   };
   const res = await requestResponseAction(tx, {
     tenantId: run.tenantId, action: step.action, target, reason: `Playbook step "${step.name}"`, requestedBy: null, requestedByKind: "playbook",
@@ -149,7 +162,9 @@ export async function evaluateTriggers(tenantId: string, event: PlaybookTrigger[
     const books = await tx.select().from(playbooks).where(and(eq(playbooks.enabled, true), or(eq(playbooks.tenantId, tenantId), isNull(playbooks.tenantId))));
     const [alert] = payload.alertId ? await tx.select().from(alerts).where(eq(alerts.id, payload.alertId)) : [];
     const [asset] = alert?.assetId ? await tx.select().from(assets).where(eq(assets.id, alert.assetId)) : [];
-    const ctx: RunCtx = { tenantId, alertId: payload.alertId, incidentId: payload.incidentId ?? alert?.incidentId ?? undefined, alert: alert ? { ...alert, raw: undefined } : undefined, asset };
+    const rawHint = alert?.raw && typeof alert.raw === "object" ? (alert.raw as { ruleId?: string; grantId?: string }) : undefined;
+    const responseHint = rawHint && (rawHint.ruleId || rawHint.grantId) ? { ruleId: rawHint.ruleId, grantId: rawHint.grantId } : undefined;
+    const ctx: RunCtx = { tenantId, alertId: payload.alertId, incidentId: payload.incidentId ?? alert?.incidentId ?? undefined, alert: alert ? { ...alert, raw: undefined, responseHint } : undefined, asset };
     for (const pb of books) {
       if (pb.trigger.event !== event || !allHold(pb.trigger.conditions, ctx)) continue;
       const [run] = await tx
