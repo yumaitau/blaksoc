@@ -24,12 +24,21 @@ export type OfficeMacroSnapshot = {
   win32Blocked?: boolean;
 };
 
+export type TelemetryBackup = {
+  stale: boolean;
+  restoreTestedAt: Date | null;
+  immutable: boolean;
+  offlineCopy: boolean;
+};
+
 export type TelemetrySnapshot = {
   assets: { kind: string; exposure: string }[];
   vulns: TelemetryVuln[];
   identities: TelemetryIdentity[];
   connectors: string[];
   officeMacros: OfficeMacroSnapshot | null;
+  /** Missing or empty means backup telemetry is not connected. */
+  backups?: TelemetryBackup[];
 };
 
 export type EvidenceBundle = {
@@ -69,8 +78,9 @@ function present(snapshot: TelemetrySnapshot, match: Match) {
 }
 
 /**
- * Turns stored telemetry into per-requirement evidence. Backup rows are ignored:
- * backup measurement is not shipped. A measured line does not pass a "no" answer.
+ * Turns stored telemetry into per-requirement evidence.
+ * Veeam rows measure freshness, restore tests, and an offline or immutable copy.
+ * A measured line does not pass a "no" answer.
  */
 export function evidenceFromTelemetry(snapshot: TelemetrySnapshot, now: Date): EvidenceBundle {
   const lines = new Map<string, { status: EvidenceStatus; detail: string }>();
@@ -152,8 +162,24 @@ export function evidenceFromTelemetry(snapshot: TelemetrySnapshot, now: Date): E
     }
   }
 
-  for (const row of REQUIREMENTS.filter((item) => item.strategy === "regular_backups")) {
-    lines.set(row.id, { status: "absent", detail: BACKUP });
+  const backups = snapshot.backups ?? [];
+  let backupSummary = BACKUP;
+  if (backups.length) {
+    const stale = backups.filter((row) => row.stale).length;
+    const tested = backups.filter((row) => row.restoreTestedAt).length;
+    const resilient = backups.filter((row) => row.immutable || row.offlineCopy).length;
+    const mark = (id: string, ok: boolean, good: string, bad: string) => {
+      lines.set(id, { status: ok ? "measured" : "contradicts", detail: ok ? good : bad });
+    };
+    backupSummary = `${backups.length} protected ${backups.length === 1 ? "system" : "systems"} reported by Veeam.`;
+    mark("bk-criticality", stale === 0, `All ${backups.length} protected systems have a success inside the stale threshold.`, `${stale} of ${backups.length} protected systems are past the stale threshold.`);
+    mark("bk-restore-tested", tested === backups.length, `Restore test recorded for ${tested} of ${backups.length} protected systems.`, `Restore test missing for ${backups.length - tested} of ${backups.length} protected systems.`);
+    mark("bk-resilient", resilient === backups.length, `Offline or immutable copy present for ${resilient} of ${backups.length} protected systems.`, `Offline or immutable copy missing for ${backups.length - resilient} of ${backups.length} protected systems.`);
+    lines.set("bk-sync", { status: "absent", detail: "Veeam does not report a common restore point." });
+    for (const row of REQUIREMENTS.filter((item) => item.strategy === "regular_backups")) {
+      if (row.id === "bk-criticality" || row.id === "bk-sync" || row.id === "bk-resilient" || row.id === "bk-restore-tested") continue;
+      lines.set(row.id, { status: "absent", detail: "Veeam does not report who can open or delete backups." });
+    }
   }
 
   const telemetry: Record<StrategyId, string> = {
@@ -164,7 +190,7 @@ export function evidenceFromTelemetry(snapshot: TelemetrySnapshot, now: Date): E
     application_control: APP_ABSENT,
     office_macros: macroSummary,
     user_app_hardening: HARDEN_ABSENT,
-    regular_backups: BACKUP,
+    regular_backups: backupSummary,
   };
 
   return {

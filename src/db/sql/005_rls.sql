@@ -117,7 +117,8 @@ DECLARE
     'enrolment_tokens','coverage_tasks','health_baselines','board_briefs',
     'syslog_sources','syslog_events','syslog_archive',
     'dfir_collections','dfir_hunts',
-    'partner_escalations'
+    'partner_escalations',
+    'backup_status'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];

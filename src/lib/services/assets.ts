@@ -1,5 +1,5 @@
 import { and, desc, eq, ilike, inArray, ne, or, sql, type SQL } from "drizzle-orm";
-import { alerts, assets, assetSources, incidentLinks, incidents, integrations, intelMatches, tenants, vulnerabilities } from "@/db/schema";
+import { alerts, assets, assetSources, backupStatus, incidentLinks, incidents, integrations, intelMatches, tenants, vulnerabilities } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import type { AccessContext } from "@/lib/auth/access";
 import { actor, AccessDenied, scoped } from "./common";
@@ -35,15 +35,16 @@ export async function getAsset(ctx: AccessContext, id: string) {
   return scoped(ctx, "asset:read", async (tx, tenantIds) => {
     const [row] = await tx.select({ asset: assets, tenantName: tenants.name }).from(assets).innerJoin(tenants, eq(tenants.id, assets.tenantId)).where(and(eq(assets.id, id), inArray(assets.tenantId, tenantIds)));
     if (!row) return null;
-    const [sources, alertRows, vulns, incs, sightings, identities] = await Promise.all([
+    const [sources, alertRows, vulns, incs, sightings, identities, backupRows] = await Promise.all([
       tx.select({ integration: integrations.name, provider: integrations.provider, externalId: assetSources.externalId, lastSyncedAt: assetSources.lastSyncedAt }).from(assetSources).leftJoin(integrations, eq(integrations.id, assetSources.integrationId)).where(eq(assetSources.assetId, id)),
       tx.select({ id: alerts.id, title: alerts.title, severity: alerts.severity, riskScore: alerts.riskScore, status: alerts.status, occurredAt: alerts.occurredAt, userName: alerts.userName }).from(alerts).where(eq(alerts.assetId, id)).orderBy(desc(alerts.occurredAt)).limit(50),
       tx.select().from(vulnerabilities).where(eq(vulnerabilities.assetId, id)).orderBy(desc(vulnerabilities.priorityScore)).limit(100),
       tx.selectDistinct({ id: incidents.id, ref: incidents.ref, title: incidents.title, status: incidents.status, severity: incidents.severity }).from(incidentLinks).innerJoin(incidents, eq(incidents.id, incidentLinks.incidentId)).where(and(eq(incidentLinks.kind, "asset"), eq(incidentLinks.refId, id))),
       tx.select({ id: intelMatches.id, verdict: intelMatches.verdict, summary: intelMatches.summary, matchedAt: intelMatches.matchedAt }).from(intelMatches).innerJoin(alerts, eq(alerts.id, intelMatches.alertId)).where(eq(alerts.assetId, id)).orderBy(desc(intelMatches.matchedAt)).limit(25),
       tx.selectDistinct({ userName: alerts.userName }).from(alerts).where(and(eq(alerts.assetId, id), ne(alerts.userName, ""))).limit(25),
+      tx.select().from(backupStatus).where(eq(backupStatus.assetId, id)).limit(1),
     ]);
-    return { ...row, sources, alerts: alertRows, vulnerabilities: vulns, incidents: incs, sightings, identities: identities.map((i) => i.userName).filter(Boolean) as string[] };
+    return { ...row, sources, alerts: alertRows, vulnerabilities: vulns, incidents: incs, sightings, identities: identities.map((i) => i.userName).filter(Boolean) as string[], backup: backupRows[0] ?? null };
   });
 }
 

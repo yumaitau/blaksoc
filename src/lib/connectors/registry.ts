@@ -6,9 +6,11 @@ import { googleWorkspaceConnector } from "@/lib/providers/google/connector";
 import { entraConnector } from "@/lib/providers/m365/connector";
 import { CloudflareProvider, DefenderProvider, FortinetProvider, SophosProvider } from "@/lib/providers/containment";
 import { DemoProvider } from "@/lib/providers/demo";
-import type { SecurityEventProvider } from "@/lib/providers/types";
+import type { ProviderHealth, SecurityEventProvider } from "@/lib/providers/types";
 import { SyslogProvider } from "@/lib/providers/syslog";
+import { VeeamProvider } from "@/lib/providers/veeam";
 import { WazuhProvider } from "@/lib/providers/wazuh";
+import { veeamConfig } from "@/lib/backup/status";
 import { BedrockProvider, OpenAICompatibleProvider } from "@/lib/ai/providers";
 import type { AIProvider } from "@/lib/ai/types";
 import { EmailNotifier, SmsNotifier, VoiceNotifier } from "./au-notify";
@@ -20,14 +22,15 @@ import { WebhookNotifier, type Notifier } from "./notify";
  * implements. Adding a vendor = adding one definition here.
  */
 
-export type ConnectorCategory = "ai" | "siem" | "endpoint" | "identity" | "network" | "cloud" | "collaboration" | "ticketing" | "threat_intel";
+export type ConnectorCategory = "ai" | "siem" | "endpoint" | "identity" | "network" | "cloud" | "collaboration" | "ticketing" | "threat_intel" | "backup";
 export type Capability = "inference" | "events" | "assets" | "vulnerabilities" | "response" | "intel" | "notify" | "ticket" | "identity_response";
 
 export type ConnectorInstance =
   | { kind: "events"; provider: SecurityEventProvider }
   | { kind: "intel"; provider: IntelProvider }
   | { kind: "notify"; provider: Notifier }
-  | { kind: "ai"; provider: AIProvider };
+  | { kind: "ai"; provider: AIProvider }
+  | { kind: "backup"; provider: { health(): Promise<ProviderHealth> } };
 
 export type ConnectorDefinition = {
   provider: string;
@@ -174,6 +177,18 @@ export const CONNECTORS: ConnectorDefinition[] = [
   ...aiConnectors(),
   entraConnector,
   googleWorkspaceConnector,
+  {
+    provider: "veeam",
+    name: "Veeam",
+    category: "backup",
+    description: "Veeam backup jobs for protected systems. Fixture results only. This build does not call Veeam.",
+    status: "available",
+    capabilities: ["assets"],
+    remotePermissions: ["Veeam Backup Enterprise Manager read access"],
+    config: veeamConfig,
+    secrets: z.object({}),
+    create: (c) => ({ kind: "backup", provider: new VeeamProvider(veeamConfig.parse(c)) }),
+  },
   planned("sentinel", "Microsoft Sentinel", "siem", ["events", "assets"], "Log Analytics incidents and KQL hunting."),
   planned("elastic", "Elastic Security", "siem", ["events", "assets"], "Detection alerts and ES|QL hunting."),
   planned("splunk", "Splunk", "siem", ["events"], "Notable events and SPL searches."),

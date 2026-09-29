@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import { assets, cveIntel, e8Assessments, e8Tasks, integrations, tenants, vulnerabilities } from "@/db/schema";
+import { assets, backupStatus, cveIntel, e8Assessments, e8Tasks, integrations, tenants, vulnerabilities } from "@/db/schema";
 import type { Tx } from "@/db/client";
 import { audit } from "@/lib/audit";
 import type { AccessContext } from "@/lib/auth/access";
@@ -70,6 +70,15 @@ async function loadSnapshot(tx: Tx, tenantId: string): Promise<TelemetrySnapshot
     .select({ provider: integrations.provider, config: integrations.config })
     .from(integrations)
     .where(eq(integrations.tenantId, tenantId));
+  const backupRows = await tx
+    .select({
+      stale: backupStatus.stale,
+      restoreTestedAt: backupStatus.restoreTestedAt,
+      immutable: backupStatus.immutable,
+      offlineCopy: backupStatus.offlineCopy,
+    })
+    .from(backupStatus)
+    .where(eq(backupStatus.tenantId, tenantId));
 
   let officeMacros: OfficeMacroSnapshot | null = null;
   for (const row of connectorRows) {
@@ -95,6 +104,7 @@ async function loadSnapshot(tx: Tx, tenantId: string): Promise<TelemetrySnapshot
     })),
     connectors: connectorRows.map((row) => row.provider),
     officeMacros,
+    backups: backupRows,
   };
 }
 

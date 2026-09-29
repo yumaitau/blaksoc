@@ -68,6 +68,19 @@ export default async function AssetPage({ params }: { params: Promise<{ id: stri
         <Card><CardContent className="py-3"><div className="text-[11px] uppercase tracking-wider text-faint">Incidents</div><div className="num mt-1 text-2xl font-semibold">{d.incidents.length}</div></CardContent></Card>
       </section>
 
+      <Section title="Backup">
+        {d.backup ? (
+          <dl className="grid gap-x-8 px-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Last success">{d.backup.lastSuccessAt ? fmtDateTime(d.backup.lastSuccessAt) : "none"}</Field>
+            <Field label="Failed jobs">{d.backup.failedJobs}</Field>
+            <Field label="Restore test">{d.backup.restoreTestedAt ? fmtDateTime(d.backup.restoreTestedAt) : "not recorded"}</Field>
+            <Field label="Immutable copy">{d.backup.immutable ? "yes" : "no"}</Field>
+            <Field label="Offline copy">{d.backup.offlineCopy ? "yes" : "no"}</Field>
+            {d.backup.stale ? <Field label="Status"><Badge variant="danger">stale</Badge></Field> : null}
+          </dl>
+        ) : <None>No backup status for this asset.</None>}
+      </Section>
+
       <div className="grid gap-5 xl:grid-cols-3">
         {/* Context */}
         <div className="space-y-5">
