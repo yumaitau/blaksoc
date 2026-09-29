@@ -1,6 +1,7 @@
 import { and, desc, eq, gte, inArray, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { alerts, approvals, assets, cveIntel, detectionDeployments, incidentNotes, incidents, intelMatches, reports, responseActions, sigmaRules, tenants, vulnerabilities } from "@/db/schema";
+import { boardSpanDays, buildBoardContent, type BoardSpan } from "./board";
 import type { ReportContent, ReportSection } from "./types";
 
 export const REPORT_KINDS = {
@@ -13,6 +14,7 @@ export const REPORT_KINDS = {
   essential_eight: { label: "Essential Eight evidence", days: 30 },
   detection_coverage: { label: "Detection coverage report", days: 30 },
   sla: { label: "SLA report", days: 30 },
+  board_summary: { label: "Board summary", days: 30 },
 } as const;
 export type ReportKind = keyof typeof REPORT_KINDS;
 
@@ -23,10 +25,13 @@ const fmt = (d: Date | null | undefined) => (d ? d.toISOString().replace("T", " 
  * telemetry and case records) or `interpretation` (analyst notes, AI drafts), so exports can
  * never blur the two.
  */
-export async function buildReport(tx: Tx, tenantId: string, kind: ReportKind, opts: { incidentId?: string; end?: Date } = {}): Promise<ReportContent> {
+export async function buildReport(tx: Tx, tenantId: string, kind: ReportKind, opts: { incidentId?: string; end?: Date; span?: BoardSpan } = {}): Promise<ReportContent> {
   const end = opts.end ?? new Date();
-  const start = new Date(end.getTime() - REPORT_KINDS[kind].days * 86400_000);
+  const span: BoardSpan = opts.span === "quarter" ? "quarter" : "month";
+  const days = kind === "board_summary" ? boardSpanDays(span) : REPORT_KINDS[kind].days;
+  const start = new Date(end.getTime() - days * 86400_000);
   const [tenant] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
+  if (kind === "board_summary") return buildBoardContent(tx, { id: tenantId, name: tenant?.name ?? "Tenant" }, { start, end, span });
   const sections: ReportSection[] = [];
   const inPeriod = (col: typeof alerts.occurredAt | typeof incidents.createdAt) => and(gte(col, start), lte(col, end));
 
@@ -137,7 +142,7 @@ export async function buildReport(tx: Tx, tenantId: string, kind: ReportKind, op
 export async function saveReport(tx: Tx, tenantId: string, kind: ReportKind, content: ReportContent, generatedBy: string | null) {
   const [r] = await tx
     .insert(reports)
-    .values({ tenantId, kind, title: `${REPORT_KINDS[kind].label} — ${content.tenantName}`, periodStart: new Date(content.period.start), periodEnd: new Date(content.period.end), content, generatedBy })
+    .values({ tenantId, kind, title: kind === "board_summary" ? `${REPORT_KINDS[kind].label}: ${content.tenantName}` : `${REPORT_KINDS[kind].label} — ${content.tenantName}`, periodStart: new Date(content.period.start), periodEnd: new Date(content.period.end), content, generatedBy })
     .returning();
   return r!;
 }

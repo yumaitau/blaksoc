@@ -7,6 +7,7 @@ import { advanceRun, resumeRun } from "@/lib/soar/engine";
 import { executeResponseAction } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
+import { runDueBoardSummaries } from "@/lib/services/board";
 import { runDueHealth } from "@/lib/services/health";
 import { runDueSurface } from "@/lib/services/surface";
 
@@ -50,7 +51,9 @@ const handlers: Record<QueueName, Handler> = {
     }
   },
   [QUEUES.detection]: async () => runDetections(log("detection")),
-  [QUEUES.report]: async () => undefined,
+  [QUEUES.report]: async (job) => {
+    if (job.name === "board") return runDueBoardSummaries();
+  },
   [QUEUES.notify]: async () => {
     const escalations = await runDueEscalations();
     const obligations = await runDueObligationReminders();
@@ -70,6 +73,7 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.intel, name: "advisories", every: 60 * 60_000 },
   { queue: QUEUES.notify, name: "escalate", every: 60_000 },
   { queue: QUEUES.surface, name: "scan", every: 15 * 60_000 },
+  { queue: QUEUES.report, name: "board", every: 60 * 60_000 },
 ];
 
 async function main() {
