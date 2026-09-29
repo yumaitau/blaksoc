@@ -63,3 +63,12 @@ Each file carries the tenant agent group, a revocable enrolment token, and eithe
 standard or low-bandwidth profile selected for that site. Links expire after 15 minutes.
 See `docs/agents.md`. The official Wazuh MSI, pkg, deb, or rpm is still the agent package.
 These scripts only pin the manager, group, and profile.
+
+## 5. SME endpoint profile
+
+`sme-sysmon.xml` is a low-noise Sysmon filter: process creation, LSASS process access,
+network connections from remote-access tools, and ransomware file extensions. Image-load
+logging is left out.
+
+`sme-agent.conf` is the matching Wazuh agent config. It tails the Sysmon channel and watches
+the common startup folder. It is not an agent installer. Use the official Wazuh package.

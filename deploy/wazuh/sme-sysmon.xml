@@ -1,0 +1,36 @@
+<!-- SME Sysmon profile. Process creation, LSASS access, remote-access network
+     connections, and ransomware extensions. Image-load logging is omitted. -->
+<Sysmon schemaversion="4.90">
+  <HashAlgorithms>sha256</HashAlgorithms>
+  <EventFiltering>
+    <RuleGroup name="" groupRelation="or">
+      <ProcessCreate onmatch="exclude">
+        <Image condition="is">C:\Windows\System32\dllhost.exe</Image>
+        <Image condition="is">C:\Windows\System32\SearchProtocolHost.exe</Image>
+      </ProcessCreate>
+    </RuleGroup>
+    <RuleGroup name="" groupRelation="or">
+      <ProcessAccess onmatch="include">
+        <TargetImage condition="is">C:\Windows\System32\lsass.exe</TargetImage>
+      </ProcessAccess>
+    </RuleGroup>
+    <RuleGroup name="" groupRelation="or">
+      <NetworkConnect onmatch="include">
+        <Image condition="end with">AnyDesk.exe</Image>
+        <Image condition="end with">ScreenConnect.Client.exe</Image>
+        <Image condition="end with">TeamViewer.exe</Image>
+        <Image condition="end with">rustdesk.exe</Image>
+      </NetworkConnect>
+    </RuleGroup>
+    <RuleGroup name="" groupRelation="or">
+      <FileCreate onmatch="include">
+        <TargetFilename condition="end with">.lockbit</TargetFilename>
+        <TargetFilename condition="end with">.akira</TargetFilename>
+        <TargetFilename condition="end with">.rhysida</TargetFilename>
+        <TargetFilename condition="end with">.blackcat</TargetFilename>
+        <TargetFilename condition="end with">.encrypted</TargetFilename>
+        <TargetFilename condition="end with">.locked</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+  </EventFiltering>
+</Sysmon>
