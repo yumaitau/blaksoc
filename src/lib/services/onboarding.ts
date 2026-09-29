@@ -10,8 +10,8 @@ import { audit } from "@/lib/audit";
 import { lookupAbn } from "@/lib/onboarding/abn";
 import { COPY } from "@/lib/onboarding/copy";
 import {
-  CONTACT_CHANNELS, ONBOARDING_STEPS, ORG_TYPES, REMOTE_FLAGS,
-  type ConnectDraft, type ContactChannel, type ContactPerson, type ContactsDraft, type GovernanceDraft,
+  BANDWIDTH_PROFILES, CONTACT_CHANNELS, ONBOARDING_STEPS, ORG_TYPES, REMOTE_FLAGS,
+  type BandwidthProfile, type ConnectDraft, type ContactChannel, type ContactPerson, type ContactsDraft, type GovernanceDraft,
   type OnboardingStep, type OrgDraft, type OrgLocation, type OrgType, type PlanDraft, type RemoteFlag, type StackDraft,
 } from "@/lib/onboarding/types";
 import { encryptSecret } from "@/lib/crypto";
@@ -67,6 +67,12 @@ function asStrings(value: unknown): string[] {
   return [];
 }
 
+function parseLink(raw: string): BandwidthProfile {
+  const link = raw || "standard";
+  if (!BANDWIDTH_PROFILES.includes(link as BandwidthProfile)) throw new OnboardingError("missing");
+  return link as BandwidthProfile;
+}
+
 function parseLocations(raw: Record<string, unknown>): OrgLocation[] {
   if (Array.isArray(raw.locations)) {
     return raw.locations.flatMap((item) => {
@@ -75,7 +81,7 @@ function parseLocations(raw: Record<string, unknown>): OrgLocation[] {
       const name = text(rec, "name", 80);
       const remote = text(rec, "remote", 20);
       if (!name || !REMOTE_FLAGS.includes(remote as RemoteFlag)) return [];
-      return [{ name, remote: remote as RemoteFlag }];
+      return [{ name, remote: remote as RemoteFlag, link: parseLink(text(rec, "link", 20)) }];
     });
   }
   const out: OrgLocation[] = [];
@@ -84,7 +90,7 @@ function parseLocations(raw: Record<string, unknown>): OrgLocation[] {
     if (!name) continue;
     const remote = text(raw, `remote_${i}`, 20) || "no";
     if (!REMOTE_FLAGS.includes(remote as RemoteFlag)) throw new OnboardingError("missing");
-    out.push({ name, remote: remote as RemoteFlag });
+    out.push({ name, remote: remote as RemoteFlag, link: parseLink(text(raw, `link_${i}`, 20)) });
   }
   return out;
 }
@@ -259,7 +265,7 @@ async function ensureSites(ctx: AccessContext, tenantId: string, locations: OrgL
   if (existing.length) return;
   for (const loc of locations) {
     const location = loc.remote === "no" ? loc.name : `${loc.name}, ${loc.remote}`;
-    await createSite(ctx, tenantId, loc.name, location);
+    await createSite(ctx, tenantId, loc.name, location, loc.link ?? "standard");
   }
 }
 

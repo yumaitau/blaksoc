@@ -35,7 +35,7 @@ const org = {
   orgType: "accho",
   sectors: ["HEALTHCARE"],
   headcount: "12",
-  locations: [{ name: "Townsville", remote: "remote" }],
+  locations: [{ name: "Townsville", remote: "remote", link: "low" }],
 };
 
 const contacts = {
@@ -99,6 +99,7 @@ describe("onboarding wizard", () => {
 
     const [site] = await adminDb().select().from(sites).where(eq(sites.tenantId, done.tenantId));
     expect(site?.location).toContain("remote");
+    expect(site?.bandwidthProfile).toBe("low");
 
     const [tenant] = await adminDb().select().from(tenants).where(eq(tenants.id, done.tenantId));
     expect(tenant?.sectors).toContain("INDIGENOUS_BUSINESS");

@@ -20,6 +20,7 @@ export default async function PortalLayout({ children }: { children: React.React
           <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/usage">Usage</a>
           {can(ctx, "report:generate") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/essential-eight">Essential Eight</a> : null}
           {can(ctx, "vuln:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/domains">Domains</a> : null}
+          {can(ctx, "asset:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/agents">Agents</a> : null}
           {ctx.isPlatform && can(ctx, "tenant:manage") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/onboarding">{COPY.nav}</a> : null}
           {ctx.isPlatform ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/soc">SOC</a> : null}
           <form action="/portal/leave" method="post">

@@ -10,7 +10,10 @@ export type ContactChannel = (typeof CONTACT_CHANNELS)[number];
 export const REMOTE_FLAGS = ["no", "remote", "very remote"] as const;
 export type RemoteFlag = (typeof REMOTE_FLAGS)[number];
 
-export type OrgLocation = { name: string; remote: RemoteFlag };
+export const BANDWIDTH_PROFILES = ["standard", "low"] as const;
+export type BandwidthProfile = (typeof BANDWIDTH_PROFILES)[number];
+
+export type OrgLocation = { name: string; remote: RemoteFlag; link: BandwidthProfile };
 
 export type OrgDraft = {
   name: string;

@@ -26,7 +26,8 @@ DECLARE
     'playbook_runs','playbook_run_steps','approvals','response_actions','ai_conversations',
     'ai_messages','ai_invocations','reports','tenant_feed_entitlements','tenant_plans','usage_daily',
     'escalation_policies','notification_deliveries','e8_assessments','e8_tasks','obligation_cases','obligation_drafts',
-    'monitored_domains','email_posture_checks','dmarc_reports','credential_exposures'
+    'monitored_domains','email_posture_checks','dmarc_reports','credential_exposures',
+    'enrolment_tokens','coverage_tasks'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];
