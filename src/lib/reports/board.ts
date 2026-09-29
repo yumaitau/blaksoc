@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
-import { alerts, boardBriefs, cveIntel, e8Assessments, incidents, responseActions, vulnerabilities } from "@/db/schema";
+import { alerts, boardBriefs, cveIntel, e8Assessments, incidents, irExercises, responseActions, vulnerabilities } from "@/db/schema";
 import type { BoardLight, ReportContent, ReportImage, ReportLink, ReportSection } from "./types";
 
 export type BoardSpan = "month" | "quarter";
@@ -56,6 +56,7 @@ export type BoardFacts = {
   openExploited: number;
   newProblems: number;
   actionPhrases: string[];
+  exercises: number;
   assessment: BoardAssessment | null;
   preamble: string | null;
   links: {
@@ -194,6 +195,15 @@ export function boardSections(facts: BoardFacts): ReportSection[] {
     links: facts.links.problems.length ? facts.links.problems : undefined,
   });
   sections.push({ heading: "What we did", basis: "observed", body: did });
+  sections.push({
+    heading: "Practice",
+    basis: "observed",
+    body: facts.exercises === 0
+      ? "No tabletop exercise was finished in this time."
+      : facts.exercises === 1
+        ? "One tabletop exercise was finished in this time."
+        : `${facts.exercises} tabletop exercises were finished in this time.`,
+  });
   sections.push({ heading: "Decisions for the board", basis: "interpretation", author: "system", body: decisions.join(" ") });
   sections.push({
     heading: "Essential Eight progress",
@@ -257,6 +267,10 @@ export async function buildBoardContent(
     .where(and(eq(responseActions.tenantId, tenantId), eq(responseActions.status, "SUCCEEDED"), gte(responseActions.createdAt, opts.start), lte(responseActions.createdAt, opts.end)));
   const [assessment] = await tx.select().from(e8Assessments).where(eq(e8Assessments.tenantId, tenantId)).orderBy(desc(e8Assessments.assessedAt)).limit(1);
   const [brief] = await tx.select().from(boardBriefs).where(eq(boardBriefs.tenantId, tenantId));
+  const [practice] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(irExercises)
+    .where(and(eq(irExercises.tenantId, tenantId), gte(irExercises.completedAt, opts.start), lte(irExercises.completedAt, opts.end)));
 
   const openCritical = num(open?.critical);
   const openHigh = num(open?.high);
@@ -285,6 +299,7 @@ export async function buildBoardContent(
     openExploited,
     newProblems: num(fresh?.n),
     actionPhrases: acts.map((row) => boardActionPhrase(row.action)),
+    exercises: num(practice?.n),
     assessment: stored,
     preamble: brief?.preamble ?? null,
     links: {

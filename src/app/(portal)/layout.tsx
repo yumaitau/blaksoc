@@ -27,6 +27,7 @@ export default async function PortalLayout({ children }: { children: React.React
           {can(ctx, "alert:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/trends">Trends</a> : null}
           {partnerHome(ctx) ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/partner">Customers</a> : null}
           {can(ctx, "report:generate") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/essential-eight">Essential Eight</a> : null}
+          {can(ctx, "report:generate") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/ir">Response plan</a> : null}
           {can(ctx, "vuln:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/domains">Domains</a> : null}
           {can(ctx, "asset:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/agents">Agents</a> : null}
           {canRunOnboarding(ctx) ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/onboarding">{COPY.nav}</a> : null}
