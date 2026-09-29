@@ -7,6 +7,7 @@ import { advanceRun, resumeRun } from "@/lib/soar/engine";
 import { executeResponseAction } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
+import { runDueSurface } from "@/lib/services/surface";
 
 const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOString()}] [${scope}] ${m}`);
 
@@ -51,6 +52,7 @@ const handlers: Record<QueueName, Handler> = {
     const obligations = await runDueObligationReminders();
     return { escalations, obligations };
   },
+  [QUEUES.surface]: async () => runDueSurface(),
 };
 
 /** Repeatable schedules. Upserted on boot so config changes apply on redeploy. */
@@ -63,13 +65,14 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.intel, name: "cve", every: 6 * 60 * 60_000 },
   { queue: QUEUES.intel, name: "advisories", every: 60 * 60_000 },
   { queue: QUEUES.notify, name: "escalate", every: 60_000 },
+  { queue: QUEUES.surface, name: "scan", every: 15 * 60_000 },
 ];
 
 async function main() {
   for (const s of SCHEDULES) {
     await queue(s.queue).upsertJobScheduler(`${s.queue}:${s.name}`, { every: s.every }, { name: s.name });
   }
-  const concurrency: Partial<Record<QueueName, number>> = { [QUEUES.ingest]: 1, [QUEUES.playbook]: 4, [QUEUES.response]: 2, [QUEUES.intel]: 1, [QUEUES.sync]: 1 };
+  const concurrency: Partial<Record<QueueName, number>> = { [QUEUES.ingest]: 1, [QUEUES.playbook]: 4, [QUEUES.response]: 2, [QUEUES.intel]: 1, [QUEUES.sync]: 1, [QUEUES.surface]: 1 };
   const workers = (Object.values(QUEUES) as QueueName[]).map(
     (name) =>
       new Worker(name, handlers[name], { connection: redisConnectionOptions(), concurrency: concurrency[name] ?? 1 }).on("failed", (job, err) =>

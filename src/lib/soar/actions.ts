@@ -13,6 +13,7 @@ export const RESPONSE_ACTIONS = {
   sign_out: { label: "Sign out user", destructive: true, target: "identity" },
   reset_signin_cookies: { label: "Reset sign-in cookies", destructive: true, target: "identity" },
   revoke_oauth_token: { label: "Revoke OAuth token", destructive: true, target: "identity" },
+  reset_password: { label: "Force password reset", destructive: true, target: "identity" },
   block_ioc: { label: "Block IOC at perimeter", destructive: true, target: "observable" },
 } as const;
 

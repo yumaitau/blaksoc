@@ -10,6 +10,7 @@ export const QUEUES = {
   detection: "detection", // scheduled Sigma deployments
   report: "report",
   notify: "notify",
+  surface: "surface", // attested external scans
 } as const;
 
 export type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

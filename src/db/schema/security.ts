@@ -338,6 +338,7 @@ export const vulnerabilities = pgTable(
     status: text("status").notNull().default("open"),
     priorityScore: integer("priority_score").notNull().default(0),
     priorityFactors: jsonb("priority_factors").$type<RiskFactor[]>().notNull().default([]),
+    evidence: jsonb("evidence").$type<{ request: string; response: string } | null>(),
     firstSeen: timestamp("first_seen", { withTimezone: true }).notNull().defaultNow(),
     lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
   },

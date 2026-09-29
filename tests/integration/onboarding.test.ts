@@ -5,7 +5,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
-import { alerts, auditLog, integrations, notificationDeliveries, onboardingDrafts, playbooks, reports, sites, tenantPlans, tenants } from "@/db/schema";
+import { alerts, auditLog, integrations, monitoredDomains, notificationDeliveries, onboardingDrafts, playbooks, reports, sites, tenantPlans, tenants } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { AccessDenied, type AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
@@ -106,6 +106,8 @@ describe("onboarding wizard", () => {
 
     const [entra] = await adminDb().select().from(integrations).where(and(eq(integrations.tenantId, done.tenantId), eq(integrations.provider, "entra")));
     expect(entra?.config).toMatchObject({ mode: "fixture" });
+    const [watched] = await adminDb().select().from(monitoredDomains).where(eq(monitoredDomains.tenantId, done.tenantId));
+    expect(watched).toMatchObject({ name: "river.example", source: "onboarding" });
 
     const audits = (await adminDb().select().from(auditLog).where(eq(auditLog.actorId, USER))).filter((a) => a.tenantId === done.tenantId || a.targetId === done.tenantId || a.targetId === draft.id);
     const actions = new Set(audits.map((a) => a.action));
