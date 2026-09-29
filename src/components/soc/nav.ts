@@ -10,6 +10,7 @@ export const NAV: NavGroup[] = [
       { href: "/soc", label: "SOC dashboard", icon: "LayoutDashboard", perm: "dashboard:read", platformOnly: true },
       { href: "/soc/mssp", label: "Customers", icon: "Building2", perm: "mssp:read", platformOnly: true },
       { href: "/soc/trends", label: "Trends", icon: "ChartColumn", perm: "mssp:read", platformOnly: true },
+      { href: "/soc/training", label: "Training", icon: "GraduationCap", perm: "alert:assign", platformOnly: true },
       { href: "/soc/alerts", label: "Alert queue", icon: "Siren", perm: "alert:triage" },
       { href: "/soc/incidents", label: "Incidents", icon: "FolderKanban", perm: "incident:read" },
       { href: "/soc/approvals", label: "Approvals", icon: "ShieldCheck", perm: "response:approve" },

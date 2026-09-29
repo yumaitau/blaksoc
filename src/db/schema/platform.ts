@@ -50,6 +50,8 @@ export type TenantSettings = {
   autoContainment: boolean;
   slaMinutes: { critical: number; high: number; medium: number; low: number };
   health?: HealthPolicy;
+  /** Synthetic training tenant. Real integrations cannot be attached. */
+  training?: boolean;
 };
 
 export const DEFAULT_TENANT_SETTINGS: TenantSettings = {

@@ -137,7 +137,7 @@ export async function msspOverview(ctx: AccessContext) {
         healthAlerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.source = 'health' and a.status not in ('RESOLVED','FALSE_POSITIVE'))::int`,
       })
       .from(tenants)
-      .where(and(inArray(tenants.id, ids), eq(tenants.kind, "customer")))
+      .where(and(inArray(tenants.id, ids), eq(tenants.kind, "customer"), sql`coalesce((${tenants.settings}->>'training')::boolean, false) = false`))
       .orderBy(desc(sql`6`)),
   );
 }

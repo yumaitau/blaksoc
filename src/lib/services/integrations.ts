@@ -5,6 +5,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { instantiate, secretAad } from "@/lib/connectors/instances";
 import { connectorDef, CONNECTORS } from "@/lib/connectors/registry";
+import { assertDemoOnly, isTrainingTenant, TrainingIsolationError } from "@/lib/training/isolation";
 import { syncVeeamBackups } from "@/lib/services/backup";
 import { stampSyslogTenant } from "@/lib/services/syslog";
 import { encryptSecret } from "@/lib/crypto";
@@ -51,7 +52,8 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
   const config = stampSyslogTenant(def.provider, def.config.parse(input.config) as Record<string, unknown>, input.tenantId);
   const secrets = def.secrets.parse(input.secrets ?? {});
   const id = await withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: !input.tenantId }, async (tx) => {
-    const [row] = await tx.insert(integrations).values({ tenantId: input.tenantId, category: def.category, provider: def.provider, name: input.name, config, permissions: def.remotePermissions }).returning({ id: integrations.id });
+    const training = input.tenantId ? await assertDemoOnly(tx, input.tenantId, def.provider) : false;
+    const [row] = await tx.insert(integrations).values({ tenantId: input.tenantId, category: def.category, provider: def.provider, name: input.name, config, permissions: def.remotePermissions, enabled: training ? false : true }).returning({ id: integrations.id });
     if (Object.keys(secrets).length) {
       await tx.update(integrations).set({ secretCiphertext: encryptSecret(JSON.stringify(secrets), secretAad(row!.id)) }).where(eq(integrations.id, row!.id));
     }
@@ -68,6 +70,7 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
     const [cur] = await tx.select().from(integrations).where(eq(integrations.id, id));
     if (!cur) throw new AccessDenied("integration not found");
     assertManage(ctx, cur.tenantId);
+    if (input.enabled === true && (await isTrainingTenant(tx, cur.tenantId))) throw new TrainingIsolationError("enable");
     const def = connectorDef(cur.provider)!;
     const patch: Partial<typeof integrations.$inferInsert> = {};
     if (input.name) patch.name = input.name;
@@ -88,6 +91,9 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
 export async function linkTenant(ctx: AccessContext, integrationId: string, tenantId: string, selector: { agentGroups?: string[] }) {
   if (!ctx.isPlatform || !can(ctx, "integration:manage", tenantId)) throw new AccessDenied();
   await withScope({ tenantIds: [tenantId], platform: true }, async (tx) => {
+    const [integration] = await tx.select({ provider: integrations.provider }).from(integrations).where(eq(integrations.id, integrationId));
+    if (!integration) throw new AccessDenied("integration not found");
+    await assertDemoOnly(tx, tenantId, integration.provider);
     await tx.insert(integrationTenantLinks).values({ integrationId, tenantId, selector }).onConflictDoUpdate({ target: [integrationTenantLinks.integrationId, integrationTenantLinks.tenantId], set: { selector } });
     await audit(tx, { ...actor(ctx), tenantId, action: "integration.link_tenant", targetType: "integration", targetId: integrationId, detail: { selector } });
   });

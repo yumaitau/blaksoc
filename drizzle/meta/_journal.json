@@ -120,6 +120,13 @@
       "when": 1790609000000,
       "tag": "0016_trend_index",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790610000000,
+      "tag": "0017_training",
+      "breakpoints": true
     }
   ]
 }
