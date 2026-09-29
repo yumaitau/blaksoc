@@ -74,7 +74,7 @@ export const approvals = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    kind: text("kind").notNull(), // playbook_step | response_action
+    kind: text("kind").notNull(), // playbook_step | response_action | dfir_collection
     refId: uuid("ref_id").notNull(),
     summary: text("summary").notNull(),
     destructive: boolean("destructive").notNull(),

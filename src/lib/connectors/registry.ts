@@ -100,6 +100,17 @@ export const CONNECTORS: ConnectorDefinition[] = [
     create: (c) => ({ kind: "events", provider: new SyslogProvider(typeof c.tenantId === "string" ? c.tenantId : "") }),
   },
   {
+    provider: "velociraptor",
+    name: "Velociraptor",
+    category: "endpoint",
+    description: "Per-customer collections and hunts. This build returns fixture results and does not call the gRPC API. Every artifact set waits for approval.",
+    status: "available",
+    capabilities: ["assets"],
+    remotePermissions: ["Velociraptor API client for one org"],
+    config: z.object({ mode: z.enum(["fixture", "live"]).default("fixture"), org: z.string().optional() }),
+    secrets: z.object({}),
+  },
+  {
     provider: "opencti",
     name: "OpenCTI",
     category: "threat_intel",

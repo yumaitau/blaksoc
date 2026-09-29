@@ -3,6 +3,8 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { withAccess } from "@/lib/actions";
 import { SEVERITIES } from "@/lib/services/alerts";
+import { ARTIFACT_SETS } from "@/lib/dfir/sets";
+import { custodyExport, requestCollection, startHunt } from "@/lib/services/dfir";
 import { addAnalystTimelineEvent, addEvidence, addNote, addTask, INCIDENT_STATUSES, toggleTask, updateIncident } from "@/lib/services/incidents";
 
 const id = z.guid();
@@ -87,4 +89,30 @@ export async function addIncidentEvidence(incidentId: string, input: z.input<typ
     });
     refresh(incidentId);
   });
+}
+
+const collectionInput = z.object({
+  assetIds: z.array(z.guid()).min(1).max(50),
+  artifactSets: z.array(z.enum(ARTIFACT_SETS)).min(1),
+  lowBandwidth: z.boolean(),
+});
+
+export async function requestIncidentCollection(incidentId: string, input: z.input<typeof collectionInput>) {
+  return withAccess(async (ctx) => {
+    await requestCollection(ctx, id.parse(incidentId), collectionInput.parse(input));
+    refresh(incidentId);
+    revalidatePath("/soc/approvals");
+  });
+}
+
+export async function startIncidentHunt(incidentId: string, ioc: string) {
+  return withAccess(async (ctx) => {
+    const hunt = await startHunt(ctx, id.parse(incidentId), z.string().trim().min(1).max(200).parse(ioc));
+    refresh(incidentId);
+    return { matches: hunt.matchedAssetIds.length };
+  });
+}
+
+export async function exportIncidentCustody(incidentId: string) {
+  return withAccess(async (ctx) => ({ text: await custodyExport(ctx, id.parse(incidentId)) }));
 }

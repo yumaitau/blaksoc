@@ -10,10 +10,13 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { SEVERITIES } from "@/lib/services/alerts";
+import { COLLECTION_STATUS_LABEL } from "@/lib/dfir/sets";
+import { listCollectionTargets, listCollections } from "@/lib/services/dfir";
 import { getIncident, INCIDENT_STATUSES, listIncidentOwners } from "@/lib/services/incidents";
 import { isResponseAction, RESPONSE_ACTIONS } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { cn, fmtDateTime, fmtTime, timeAgo } from "@/lib/utils";
+import { CollectionPanel } from "./collection-panel";
 import { CaseForm, EvidenceForm, NoteForm, TaskList, TimelineEventForm } from "./incident-forms";
 
 export const metadata = { title: "Incident" };
@@ -42,6 +45,8 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
   const tenantId = inc.tenantId;
   const editable = can(ctx, "incident:write", tenantId);
   const owners = editable ? await listIncidentOwners(ctx, tenantId) : [];
+  const collectionRows = await listCollections(ctx, inc.id);
+  const targets = editable ? await listCollectionTargets(ctx, tenantId) : [];
   const active = !["CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"].includes(inc.status);
   const breached = active && inc.slaDueAt && inc.slaDueAt.getTime() < new Date().getTime();
 
@@ -197,6 +202,23 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
                   ))}
                 </ul>
               )}
+            </CardContent>
+          </Card>
+
+          <Card id="collections">
+            <CardHeader><CardTitle>Collections</CardTitle></CardHeader>
+            <CardContent>
+              <CollectionPanel
+                incidentId={inc.id}
+                editable={editable}
+                targets={targets.map((t) => ({ id: t.id, label: t.hostname ? `${t.name} (${t.hostname})` : t.name }))}
+                collections={collectionRows.map((c) => ({
+                  id: c.id,
+                  label: COLLECTION_STATUS_LABEL[c.status] ?? c.status,
+                  detail: `${c.artifactSets.length} sets · ${c.assetIds.length} machines${c.lowBandwidth ? " · low bandwidth" : ""}`,
+                  when: fmtDateTime(c.notBefore),
+                }))}
+              />
             </CardContent>
           </Card>
 
