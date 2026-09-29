@@ -49,10 +49,16 @@ ingress:
     - secretName: blaksoc-tls
       hosts: [soc.example.com.au]
 
+# Processing and storage regions for the heavy data plane. Load and price were not measured.
+dataPlane:
+  opensearch: ap-southeast-2
+  wazuhIndexer: ap-southeast-2
+  opencti: ap-southeast-2
+
 networkPolicy:
   enabled: true
-  # CIDRs the worker may reach: Wazuh API/indexer, OpenCTI, AI endpoints, public feeds.
-  egressCidrs: ["0.0.0.0/0"]
+  # Cluster-internal egress only. 0.0.0.0/0 and ::/0 fail the hosting profile check.
+  egressCidrs: []
 
 podSecurityContext:
   runAsNonRoot: true

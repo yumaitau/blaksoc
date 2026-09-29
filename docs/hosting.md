@@ -40,8 +40,10 @@ RPO for the cold object is one `syslog-retain` interval: 1 hour after the line i
 
 RTO for one line is the time `restoreArchive` takes to read the object and mark the event hot. `tests/integration/hosting.test.ts` is the restore drill. A cluster failover time was not measured.
 
-Worker network policy egress is still `0.0.0.0/0`. That is not an Australia-only filter.
+Worker network policy egress is cluster-internal. The shipped chart sets `networkPolicy.egressCidrs` to an empty list, so the worker does not allow `0.0.0.0/0` or `::/0`.
 
 ## Regions
 
 `AI_DATA_RESIDENCY` is `AU` in the base values and in the k3s overlay. Archive buckets are `ap-southeast-2` and `ap-southeast-4`. `assertAuRegion` rejects any other region.
+
+`hostingComponents` also checks OpenSearch, the Wazuh indexer, and OpenCTI. The base values pin each of those to `ap-southeast-2`. Wazuh and OpenCTI connector config accepts only `ap-southeast-2` and `ap-southeast-4`. A world-open egress CIDR fails `egressOpensTheWorld`. Load numbers and prices for OpenSearch, the Wazuh indexer, and OpenCTI were not measured.

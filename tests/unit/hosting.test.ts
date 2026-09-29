@@ -2,8 +2,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import { connectorDef } from "@/lib/connectors/registry";
 import { FileArchiveStore } from "@/lib/hosting/store";
-import { componentsOutsideAustralia, helmBlockScalar, helmScalar, hostingComponents } from "@/lib/hosting/profile";
+import { componentsOutsideAustralia, egressOpensTheWorld, helmBlockScalar, helmScalar, HOSTING_COMPONENT_NAMES, hostingComponents, type DataPlaneRegions } from "@/lib/hosting/profile";
 
 const roots: string[] = [];
 
@@ -42,10 +44,30 @@ describe("hosting profile", () => {
     expect(helmBlockScalar(k3s, "web", "replicas")).toBe("1");
     expect(helmBlockScalar(k3s, "worker", "replicas")).toBe("1");
     expect(k3s).toContain("enabled: false");
+    const chart = parse(base) as { networkPolicy: { egressCidrs: string[] }; dataPlane: DataPlaneRegions };
+    const k3sChart = parse(k3s) as { networkPolicy?: { egressCidrs?: string[] } };
+    expect(chart.networkPolicy.egressCidrs).toEqual([]);
+    expect(egressOpensTheWorld(chart.networkPolicy.egressCidrs)).toBe(false);
+    expect(egressOpensTheWorld(k3sChart.networkPolicy?.egressCidrs ?? [])).toBe(false);
+    expect(egressOpensTheWorld(["0.0.0.0/0"])).toBe(true);
+    expect(egressOpensTheWorld(["::/0"])).toBe(true);
     const ai = helmScalar(k3s, "AI_DATA_RESIDENCY")!;
-    expect(componentsOutsideAustralia(hostingComponents(ai, "ap-southeast-2"))).toEqual([]);
-    expect(componentsOutsideAustralia(hostingComponents(ai, "ap-southeast-4"))).toEqual([]);
-    expect(componentsOutsideAustralia(hostingComponents("US", "eu-west-1"))).toEqual(["US", "eu-west-1"]);
+    const pinned = hostingComponents(ai, "ap-southeast-2", chart.dataPlane);
+    expect(pinned.map((row) => row.name)).toEqual([...HOSTING_COMPONENT_NAMES]);
+    expect(componentsOutsideAustralia(pinned)).toEqual([]);
+    expect(componentsOutsideAustralia(hostingComponents(ai, "ap-southeast-4", chart.dataPlane))).toEqual([]);
+    expect(componentsOutsideAustralia(hostingComponents("US", "eu-west-1", {
+      opensearch: "us-east-1",
+      wazuhIndexer: "eu-west-1",
+      opencti: "us-west-2",
+    }))).toEqual(["US", "eu-west-1", "us-east-1", "eu-west-1", "us-west-2"]);
+    const wazuh = connectorDef("wazuh")!;
+    const opencti = connectorDef("opencti")!;
+    expect(wazuh.config.parse({ apiUrl: "https://wazuh.internal", indexerUrl: "https://indexer.internal", region: "ap-southeast-4" })).toMatchObject({ region: "ap-southeast-4" });
+    expect(() => wazuh.config.parse({ apiUrl: "https://wazuh.internal", indexerUrl: "https://indexer.internal", region: "us-east-1" })).toThrow();
+    expect(opencti.config.parse({ url: "https://opencti.internal", region: "ap-southeast-2" })).toMatchObject({ region: "ap-southeast-2" });
+    expect(() => opencti.config.parse({ url: "https://opencti.internal", region: "eu-central-1" })).toThrow();
+    expect(() => wazuh.config.parse({ apiUrl: "https://wazuh.internal", indexerUrl: "https://indexer.internal" })).toThrow();
   });
 
   it("quotes the k6 report for 10, 50, and 200 tenants", async () => {

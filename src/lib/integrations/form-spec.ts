@@ -17,9 +17,9 @@ export const CATEGORY_ORDER = Object.keys(CATEGORY_LABELS) as ConnectorCategory[
 
 /** Starting configuration for the "Add integration" form. Non-secret values only. */
 const EXAMPLES: Record<string, Record<string, unknown>> = {
-  wazuh: { apiUrl: "https://wazuh-manager.internal:55000", indexerUrl: "https://wazuh-indexer.internal:9200", tlsVerify: true },
+  wazuh: { apiUrl: "https://wazuh-manager.internal:55000", indexerUrl: "https://wazuh-indexer.internal:9200", region: "ap-southeast-2", tlsVerify: true },
   demo: { agents: [{ id: "001", name: "demo-ws-01", group: "demo", os: "Windows 11", ip: "10.20.0.11" }] },
-  opencti: { url: "https://opencti.internal", tlsVerify: true },
+  opencti: { url: "https://opencti.internal", region: "ap-southeast-2", tlsVerify: true },
   "opencti-fixture": {},
   webhook: { url: "https://hooks.example.com/blaksoc", events: ["incident.created", "approval.requested"] },
   teams: { events: ["incident.created", "approval.requested"] },

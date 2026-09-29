@@ -9,11 +9,34 @@ export function regionStoresOutsideAustralia(region: string): boolean {
   return !allowedDataRegions().includes(region);
 }
 
-export function hostingComponents(aiResidency: string, archiveRegion: string): { name: string; region: string }[] {
+export type DataPlaneRegions = {
+  opensearch: string;
+  wazuhIndexer: string;
+  opencti: string;
+};
+
+/** Names the hosting profile must account for. Order is the check order. */
+export const HOSTING_COMPONENT_NAMES = ["ai-policy", "syslog-archive", "opensearch", "wazuh-indexer", "opencti"] as const;
+
+export function hostingComponents(
+  aiResidency: string,
+  archiveRegion: string,
+  plane: DataPlaneRegions,
+): { name: string; region: string }[] {
   return [
     { name: "ai-policy", region: aiResidency },
     { name: "syslog-archive", region: archiveRegion },
+    { name: "opensearch", region: plane.opensearch },
+    { name: "wazuh-indexer", region: plane.wazuhIndexer },
+    { name: "opencti", region: plane.opencti },
   ];
+}
+
+const WORLD_EGRESS = new Set(["0.0.0.0/0", "::/0"]);
+
+/** True when a worker egress CIDR can reach a network that is not pinned to one region. */
+export function egressOpensTheWorld(cidrs: readonly string[]): boolean {
+  return cidrs.some((cidr) => WORLD_EGRESS.has(cidr.trim()));
 }
 
 export function componentsOutsideAustralia(rows: { region: string }[]): string[] {
