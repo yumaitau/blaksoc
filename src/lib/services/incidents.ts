@@ -161,7 +161,7 @@ export async function addAlertsToIncident(ctx: AccessContext, incidentId: string
 
 export async function addTimeline(
   tx: Tx,
-  e: { tenantId: string; incidentId: string; occurredAt?: Date; origin: "machine" | "analyst" | "ai"; category: string; title: string; detail?: string | null; actorId?: string | null; refType?: string; refId?: string },
+  e: { tenantId: string; incidentId: string; occurredAt?: Date; origin: "machine" | "analyst" | "ai" | "customer"; category: string; title: string; detail?: string | null; actorId?: string | null; refType?: string; refId?: string },
 ) {
   await tx.insert(incidentTimeline).values({ ...e, occurredAt: e.occurredAt ?? new Date(), detail: e.detail ?? null, actorId: e.actorId ?? null });
 }
@@ -214,6 +214,31 @@ export async function addAnalystTimelineEvent(ctx: AccessContext, incidentId: st
   return inTenant(ctx, "incident:write", inc.tenantId, async (tx) => {
     await addTimeline(tx, { tenantId: inc.tenantId, incidentId, occurredAt: e.occurredAt, origin: "analyst", category: "analyst", title: e.title, detail: e.detail ?? null, actorId: ctx.principal.userId });
     await audit(tx, { ...actor(ctx), tenantId: inc.tenantId, action: "incident.timeline_add", targetType: "incident", targetId: incidentId, detail: e });
+  });
+}
+
+/** Customer confirmation that they have read the incident. Stops further escalation. */
+export async function acknowledgeIncident(ctx: AccessContext, incidentId: string) {
+  const inc = await getIncidentHead(ctx, incidentId);
+  if (!can(ctx, "portal:read", inc.tenantId)) throw new AccessDenied("missing portal:read");
+  return inTenant(ctx, "incident:read", inc.tenantId, async (tx) => {
+    const [existing] = await tx
+      .select({ occurredAt: incidentTimeline.occurredAt })
+      .from(incidentTimeline)
+      .where(and(eq(incidentTimeline.incidentId, incidentId), eq(incidentTimeline.category, "acknowledgement")))
+      .limit(1);
+    if (existing) return { already: true as const, at: existing.occurredAt };
+    await addTimeline(tx, {
+      tenantId: inc.tenantId,
+      incidentId,
+      origin: "customer",
+      category: "acknowledgement",
+      title: "I've read this",
+      detail: "The customer confirmed they have read this incident.",
+      actorId: ctx.principal.userId,
+    });
+    await audit(tx, { ...actor(ctx), tenantId: inc.tenantId, action: "incident.acknowledge", targetType: "incident", targetId: incidentId });
+    return { already: false as const };
   });
 }
 

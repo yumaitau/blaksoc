@@ -3,8 +3,8 @@ import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 // Self-hosted at build time: no runtime requests to third-party font CDNs (sovereign deployments).
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
-const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", preload: false });
+const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains", preload: false });
 
 export const metadata: Metadata = {
   title: { default: "blakSOC", template: "%s · blakSOC" },
@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en-AU" data-theme="dark" className={`${inter.variable} ${mono.variable}`}>
-      <body className="min-h-screen font-sans antialiased">{children}</body>
+      <body className="min-h-screen antialiased">{children}</body>
     </html>
   );
 }

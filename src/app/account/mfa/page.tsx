@@ -9,7 +9,7 @@ export default async function MfaPage() {
   const s = await getSessionState();
   if (s.state === "anonymous") redirect("/login");
   return (
-    <main className="grid min-h-screen place-items-center px-4">
+    <main className="grid min-h-screen place-items-center px-4 font-sans">
       <div className="w-full max-w-md space-y-4 rounded-lg border border-border bg-surface p-6">
         <Wordmark />
         <h1 className="text-lg font-semibold">Enrol multi-factor authentication</h1>

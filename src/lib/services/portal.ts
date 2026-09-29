@@ -1,12 +1,20 @@
 import { and, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
-import { advisories, alerts, approvals, assets, cveIntel, incidents, reports, responseActions, tenants, vulnerabilities } from "@/db/schema";
+import { advisories, alerts, approvals, assets, cveIntel, incidents, incidentTimeline, reports, responseActions, tenants, vulnerabilities } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { can, type AccessContext } from "@/lib/auth/access";
+import { actionPhrase, incidentSentences } from "@/lib/portal/summary";
 import { AccessDenied } from "./common";
 
 /** Customers read their own portal; SOC staff may view any customer's portal they can reach. */
 export function canViewPortal(ctx: AccessContext, tenantId: string) {
   return can(ctx, "portal:read", tenantId) || (ctx.isPlatform && can(ctx, "dashboard:read", tenantId));
+}
+
+export function customerForPortal(ctx: AccessContext, workspace: { id: string; kind: string } | null | undefined) {
+  if (workspace && workspace.kind === "customer" && canViewPortal(ctx, workspace.id)) {
+    return ctx.tenants.find((t) => t.id === workspace.id) ?? null;
+  }
+  return ctx.tenants.find((t) => t.kind === "customer" && canViewPortal(ctx, t.id)) ?? null;
 }
 
 /**
@@ -150,6 +158,34 @@ export function portalRecommendations(d: {
   if (d.endpoints.offline) out.push({ priority: "high", text: `Reconnect ${d.endpoints.offline} offline security agent${d.endpoints.offline === 1 ? "" : "s"}. The SOC cannot see or protect those systems.`, href: "/assets?kind=endpoint" });
   if (d.endpoints.unmanaged) out.push({ priority: "routine", text: `Install the security agent on ${d.endpoints.unmanaged} unmanaged system${d.endpoints.unmanaged === 1 ? "" : "s"}.`, href: "/assets" });
   const open = d.activeIncidents.filter((i) => i.status === "OPEN" || i.status === "INVESTIGATING");
-  if (open.length) out.push({ priority: "high", text: `Review ${open.length} open incident${open.length === 1 ? "" : "s"} with the SOC and confirm any business impact.`, href: `/soc/incidents/${open[0]!.id}` });
+  if (open.length) out.push({ priority: "high", text: `Review ${open.length} open incident${open.length === 1 ? "" : "s"} with the SOC and confirm any business impact.`, href: `/portal/incidents/${open[0]!.id}` });
   return out;
+}
+
+/** One incident in plain language, plus whether the customer has already acknowledged it. */
+export async function portalIncident(ctx: AccessContext, incidentId: string) {
+  const tenantIds = ctx.tenantIds.filter((id) => canViewPortal(ctx, id));
+  if (!tenantIds.length || !/^[0-9a-f-]{36}$/i.test(incidentId)) return null;
+  return withScope({ tenantIds, platform: false }, async (tx) => {
+    const [inc] = await tx.select().from(incidents).where(and(eq(incidents.id, incidentId), inArray(incidents.tenantId, tenantIds)));
+    if (!inc) return null;
+    const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, inc.tenantId));
+    const acts = await tx
+      .select({ action: responseActions.action, status: responseActions.status })
+      .from(responseActions)
+      .where(and(eq(responseActions.incidentId, inc.id), eq(responseActions.tenantId, inc.tenantId)));
+    const phrases = acts.filter((a) => a.status === "SUCCEEDED").map((a) => actionPhrase(a.action));
+    const [ack] = await tx
+      .select({ occurredAt: incidentTimeline.occurredAt })
+      .from(incidentTimeline)
+      .where(and(eq(incidentTimeline.incidentId, inc.id), eq(incidentTimeline.category, "acknowledgement")))
+      .limit(1);
+    return {
+      tenantId: inc.tenantId,
+      tenantName: tenant?.name ?? "Your organisation",
+      incident: { id: inc.id, ref: inc.ref, title: inc.title, severity: inc.severity, status: inc.status, updatedAt: inc.updatedAt },
+      sentences: incidentSentences({ title: inc.title, severity: inc.severity, status: inc.status, actions: phrases }),
+      acknowledgedAt: ack?.occurredAt ?? null,
+    };
+  });
 }

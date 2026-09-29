@@ -12,7 +12,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { next, error } = await searchParams;
   const e = env();
   return (
-    <main className="grid min-h-screen place-items-center px-4">
+    <main className="grid min-h-screen place-items-center px-4 font-sans">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <Wordmark />

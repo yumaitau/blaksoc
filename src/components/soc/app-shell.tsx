@@ -17,7 +17,7 @@ export function AppShell({ ctx, workspace, children }: { ctx: AccessContext; wor
   const roleNames = [...new Set(ctx.grants.map((g) => g.roleKey.replaceAll("_", " ")))].join(", ");
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen font-sans">
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-border bg-surface md:flex">
         <div className="flex h-14 items-center border-b border-border px-4">
           <Wordmark />
