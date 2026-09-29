@@ -194,6 +194,7 @@ export const alerts = pgTable(
     uniqueIndex("alerts_source_ext").on(t.tenantId, t.source, t.externalId),
     index("alerts_queue").on(t.tenantId, t.status, t.riskScore),
     index("alerts_occurred").on(t.occurredAt),
+    index("alerts_tenant_occurred").on(t.tenantId, t.occurredAt),
   ],
 );
 

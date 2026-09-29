@@ -1,0 +1,16 @@
+# Dedicated deployments only. Create the login with provision_dashboard_reader.
+# That role is LOGIN NOSUPERUSER NOBYPASSRLS. Do not put a password in this file.
+apiVersion: 1
+datasources:
+  - name: Tenant operations
+    type: postgres
+    access: proxy
+    url: ${GRAFANA_POSTGRES_HOST}
+    user: ${DASHBOARD_READER}
+    isDefault: false
+    editable: false
+    jsonData:
+      sslmode: require
+      postgresVersion: 1700
+    secureJsonData:
+      password: ${DASHBOARD_READER_PASSWORD}
