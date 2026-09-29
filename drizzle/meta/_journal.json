@@ -127,6 +127,13 @@
       "when": 1790610000000,
       "tag": "0017_training",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790611000000,
+      "tag": "0018_ir_plan",
+      "breakpoints": true
     }
   ]
 }

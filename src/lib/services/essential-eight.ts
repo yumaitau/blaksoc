@@ -9,6 +9,7 @@ import { answerIds, CADENCE_DAYS, type CadenceDays } from "@/lib/essential-eight
 import { levelTrend, levelsOf, scoreEssentialEight, type AssessmentResult } from "@/lib/essential-eight/score";
 import { toPdf } from "@/lib/reports/export";
 import { actor, inTenant } from "./common";
+import { exerciseTitles } from "./ir";
 
 export class EssentialEightError extends Error {
   constructor(readonly code: "incomplete" | "owner" | "cadence" | "missing") {
@@ -186,6 +187,15 @@ export async function assessmentPdf(ctx: AccessContext, tenantId: string, assess
     const [row] = await tx.select().from(e8Assessments).where(and(eq(e8Assessments.id, assessmentId), eq(e8Assessments.tenantId, tenantId)));
     if (!row) throw new EssentialEightError("missing");
     const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
-    return toPdf("Essential Eight self-assessment", buildAssessmentReport(tenant?.name ?? "Tenant", row.result));
+    const content = buildAssessmentReport(tenant?.name ?? "Tenant", row.result);
+    const titles = await exerciseTitles(tx, tenantId);
+    if (titles.length) {
+      content.sections.push({
+        heading: "Tabletop exercises",
+        basis: "observed",
+        body: titles.map((title) => `Finished: ${title}.`).join(" "),
+      });
+    }
+    return toPdf("Essential Eight self-assessment", content);
   });
 }
