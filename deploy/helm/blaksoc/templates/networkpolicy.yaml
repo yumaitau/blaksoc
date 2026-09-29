@@ -3,8 +3,9 @@
 # External scans run only on the worker (queue `surface`, job `scan`).
 # Per tenant: 1 scan at a time, 6 hosts per minute (src/lib/asm/scan.ts SCAN_LIMITS).
 # A scan starts only after an asm.attest audit row. Fixture mode opens no sockets.
-# Worker egress below is the only path for DNS, certificate transparency, WHOIS,
-# Have I Been Pwned, and an entitled Shodan or Censys lookup. Do not add that egress to web.
+# Worker egress is cluster-internal. The shipped profile has no egress CIDR.
+# Do not set networkPolicy.egressCidrs to 0.0.0.0/0 or ::/0.
+# Do not add that egress to web.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -29,8 +30,10 @@ spec:
   ingress: []
   egress:
     - to: [{ namespaceSelector: {} }]
+    {{- if .Values.networkPolicy.egressCidrs }}
     - to:
       {{- range .Values.networkPolicy.egressCidrs }}
-        - ipBlock: { cidr: {{ . }} }
+        - ipBlock: { cidr: {{ . | quote }} }
       {{- end }}
+    {{- end }}
 {{- end }}

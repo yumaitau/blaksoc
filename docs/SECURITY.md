@@ -72,4 +72,4 @@ A domain must pass TXT verification before a breach check runs. Each stored row 
 - Set strong `BETTER_AUTH_SECRET`, `BLAKSOC_ENCRYPTION_KEY`, DB/Redis passwords; rotate via your secret manager.
 - TLS everywhere; Wazuh/OpenCTI CAs can be pinned per integration (`caPem`) instead of disabling verification.
 - Keep `DEMO_MODE=false`. Store break-glass credentials + TOTP backup codes sealed and test them quarterly.
-- Restrict worker egress to Wazuh, OpenCTI, AI endpoints and the public feed hosts (Helm `networkPolicy.egressCidrs`).
+- The shipped worker NetworkPolicy allows cluster-internal egress only. Do not set `networkPolicy.egressCidrs` to `0.0.0.0/0` or `::/0`. Add a CIDR only for a host already pinned to an Australian region.
