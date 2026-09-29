@@ -3,8 +3,10 @@ import { adminDb } from "@/db/client";
 import { assetSources, assets, detectionDeployments, integrations, integrationTenantLinks, sigmaRules, vulnerabilities } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
+import { collectingTenantIds, collectionAllowed, type Tier } from "@/lib/billing/catalogue";
 import { eventProvider, intelProviderFor, type IntegrationRow } from "@/lib/connectors/instances";
 import { connectorDef } from "@/lib/connectors/registry";
+import { plansByTenant } from "@/lib/services/billing";
 import { DemoProvider } from "@/lib/providers/demo";
 import { ingestAlert } from "@/lib/pipeline/ingest";
 import { syncAssets } from "@/lib/pipeline/assets";
@@ -26,6 +28,16 @@ async function tenantLinks(row: IntegrationRow) {
   return adminDb().select({ tenantId: integrationTenantLinks.tenantId, selector: integrationTenantLinks.selector }).from(integrationTenantLinks).where(eq(integrationTenantLinks.integrationId, row.id));
 }
 
+async function tierOfTenant(): Promise<(id: string) => Tier> {
+  const plans = await plansByTenant();
+  return (id) => plans.get(id) ?? "essentials";
+}
+
+function allowedLinks<T extends { tenantId: string }>(links: T[], tierOf: (id: string) => Tier, provider: string): T[] {
+  const live = new Set(collectingTenantIds(provider, links, tierOf));
+  return links.filter((l) => live.has(l.tenantId));
+}
+
 async function markHealth(row: IntegrationRow, ok: boolean, error?: string) {
   const now = new Date();
   await adminDb()
@@ -36,10 +48,13 @@ async function markHealth(row: IntegrationRow, ok: boolean, error?: string) {
 
 /** Inventory sync: provider agents → unified assets, routed to tenants by agent group. */
 export async function syncAllAssets(log: Log) {
+  const tierOf = await tierOfTenant();
   for (const row of await eventIntegrations()) {
+    const links = allowedLinks(await tenantLinks(row), tierOf, row.provider);
+    if (!links.length) continue;
     try {
       const provider = eventProvider(row);
-      for (const link of await tenantLinks(row)) {
+      for (const link of links) {
         const keys = (link.selector.agentGroups ?? []).map((g) => `group:${g}`);
         const list = await provider.getAssets(keys.length ? keys : undefined);
         const mine = keys.length ? list.filter((a) => a.routingKeys.some((k) => keys.includes(k))) : list;
@@ -56,6 +71,7 @@ export async function syncAllAssets(log: Log) {
 
 /** Vulnerability states from providers that support them. */
 export async function syncAllVulnerabilities(log: Log) {
+  const tierOf = await tierOfTenant();
   for (const row of await eventIntegrations()) {
     const provider = eventProvider(row);
     if (!provider.getVulnerabilities) continue;
@@ -70,6 +86,7 @@ export async function syncAllVulnerabilities(log: Log) {
         byTenant.set(s.tenantId, [...(byTenant.get(s.tenantId) ?? []), v]);
       }
       for (const [tenantId, list] of byTenant) {
+        if (!collectionAllowed(tierOf(tenantId), row.provider)) continue;
         await withScope(systemScope(tenantId), async (tx) => {
           for (const v of list) {
             const assetId = byExt.get(v.assetExternalId)!.assetId;
@@ -93,11 +110,14 @@ export async function syncAllVulnerabilities(log: Log) {
  * agent, and run it through enrichment → risk → queue → playbook triggers.
  */
 export async function pollAlerts(log: Log) {
+  const tierOf = await tierOfTenant();
   for (const row of await eventIntegrations()) {
     try {
       const provider = eventProvider(row);
       const links = await tenantLinks(row);
-      if (!links.length) continue;
+      const live = new Set(collectingTenantIds(row.provider, links, tierOf));
+      // Leave the cursor where it is when nobody on this integration may collect.
+      if (!live.size) continue;
       // Route by the provider's asset id; built from asset inventory (system-level map).
       const sources = await adminDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
       const agentTenant = new Map(sources.map((s) => [s.externalId, s.tenantId]));
@@ -121,7 +141,7 @@ export async function pollAlerts(log: Log) {
       let n = 0;
       for (const a of alerts) {
         const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
-        if (!tenantId) continue; // unroutable: agent not mapped to any tenant yet
+        if (!tenantId || !live.has(tenantId)) continue;
         if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(adminDb(), tenantId));
         const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
         if (res.created) {
@@ -141,6 +161,7 @@ export async function pollAlerts(log: Log) {
 
 /** Scheduled Sigma deployments: run each active query against its tenant's SIEM. */
 export async function runDetections(log: Log) {
+  const tierOf = await tierOfTenant();
   const deps = await adminDb()
     .select({ d: detectionDeployments, rule: sigmaRules })
     .from(detectionDeployments)
@@ -150,6 +171,7 @@ export async function runDetections(log: Log) {
     if (!d.integrationId) continue;
     const [row] = await adminDb().select().from(integrations).where(eq(integrations.id, d.integrationId));
     if (!row || row.provider === "demo") continue;
+    if (!collectionAllowed(tierOf(d.tenantId), row.provider)) continue;
     try {
       const provider = eventProvider(row);
       const agents = await adminDb().select({ externalId: assetSources.externalId }).from(assetSources).where(and(eq(assetSources.integrationId, row.id), eq(assetSources.tenantId, d.tenantId)));

@@ -12,8 +12,15 @@
     {
       "idx": 1,
       "version": "7",
-      "when": 1790594555822,
       "tag": "0001_auth_2fa_lockout",
+      "when": 1790594555822,
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790595000000,
+      "tag": "0002_tenant_plans",
       "breakpoints": true
     }
   ]

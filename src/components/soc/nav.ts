@@ -13,6 +13,7 @@ export const NAV: NavGroup[] = [
       { href: "/soc/incidents", label: "Incidents", icon: "FolderKanban", perm: "incident:read" },
       { href: "/soc/approvals", label: "Approvals", icon: "ShieldCheck", perm: "response:approve" },
       { href: "/portal", label: "Security overview", icon: "LayoutDashboard", perm: "portal:read" },
+      { href: "/portal/usage", label: "Usage", icon: "FileText", perm: "portal:read" },
     ],
   },
   {
@@ -36,6 +37,7 @@ export const NAV: NavGroup[] = [
     label: "Govern",
     items: [
       { href: "/reports", label: "Reports", icon: "FileText", perm: "report:read" },
+      { href: "/soc/usage", label: "Usage", icon: "FileText", perm: "mssp:read", platformOnly: true },
       { href: "/integrations", label: "Integrations", icon: "Plug", perm: "integration:read", platformOnly: true },
       { href: "/admin", label: "Administration", icon: "Settings", perm: "user:manage" },
       { href: "/admin/audit", label: "Audit trail", icon: "ScrollText", perm: "audit:read" },

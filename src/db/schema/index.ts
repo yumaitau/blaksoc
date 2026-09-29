@@ -6,3 +6,4 @@ export * from "./detections";
 export * from "./soar";
 export * from "./ai";
 export * from "./audit";
+export * from "./billing";
