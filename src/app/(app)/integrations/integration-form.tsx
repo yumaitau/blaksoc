@@ -58,7 +58,7 @@ export function IntegrationForm(props: Props) {
             <Select id={`${uid}-owner`} value={owner} onChange={(e) => setOwner(e.target.value)}>
               {props.owners.map((o) => <option key={o.id ?? "platform"} value={o.id ?? ""}>{o.name}</option>)}
             </Select>
-            <p className="mt-1 text-[11px] text-faint">Platform integrations are shared and linked to customers separately.</p>
+            <p className="mt-1 text-[11px] text-faint">{props.provider === "syslog" ? "Lines from this firewall stay with the selected owner." : "Platform integrations are shared and linked to customers separately."}</p>
           </div>
         ) : (
           <div>

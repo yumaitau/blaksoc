@@ -8,6 +8,7 @@ import { executeResponseAction } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
 import { runDueBoardSummaries } from "@/lib/services/board";
+import { archiveDueSyslog } from "@/lib/services/syslog";
 import { runDueHealth } from "@/lib/services/health";
 import { runDueSurface } from "@/lib/services/surface";
 
@@ -16,7 +17,10 @@ const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOSt
 type Handler = (job: Job) => Promise<unknown>;
 
 const handlers: Record<QueueName, Handler> = {
-  [QUEUES.ingest]: async () => pollAlerts(log("ingest")),
+  [QUEUES.ingest]: async (job) => {
+    if (job.name === "syslog-retain") return archiveDueSyslog();
+    return pollAlerts(log("ingest"));
+  },
   [QUEUES.sync]: async (job) => {
     if (job.name === "assets") return syncAllAssets(log("sync"));
     if (job.name === "vulns") return syncAllVulnerabilities(log("sync"));
@@ -65,6 +69,7 @@ const handlers: Record<QueueName, Handler> = {
 /** Repeatable schedules. Upserted on boot so config changes apply on redeploy. */
 const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.ingest, name: "poll", every: 30_000 },
+  { queue: QUEUES.ingest, name: "syslog-retain", every: 60 * 60_000 },
   { queue: QUEUES.sync, name: "assets", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
   { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },

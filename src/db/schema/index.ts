@@ -14,3 +14,4 @@ export * from "./obligations";
 export * from "./surface";
 export * from "./agents";
 export * from "./board";
+export * from "./syslog";

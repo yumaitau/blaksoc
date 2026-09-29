@@ -1,0 +1,18 @@
+# Edge forwarder template. Set SYSLOG_TOKEN in the Vector environment.
+# One event per POST. TLS is required by the ingest route.
+
+[sources.office_syslog]
+type = "syslog"
+mode = "tcp"
+address = "0.0.0.0:6514"
+
+[sinks.blaksoc]
+type = "http"
+inputs = ["office_syslog"]
+uri = "https://soc.example/api/ingest/syslog"
+method = "post"
+encoding.codec = "text"
+compression = "none"
+
+[sinks.blaksoc.request.headers]
+Authorization = "Bearer ${SYSLOG_TOKEN}"
