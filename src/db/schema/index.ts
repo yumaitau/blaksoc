@@ -10,3 +10,4 @@ export * from "./billing";
 export * from "./notify";
 export * from "./onboarding";
 export * from "./essential-eight";
+export * from "./obligations";
