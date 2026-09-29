@@ -1,7 +1,38 @@
 # Merge onto the official wazuh-docker single-node file:
 #   docker compose -f docker-compose.yml -f indexer-region.yml up -d
-# The indexer is OpenSearch. assertSearchNodeInAustralia rejects any other region.
+# The Wazuh indexer image does not copy dotted environment variables into
+# opensearch.yml. This entrypoint writes node.attr.region, then runs the
+# official entrypoint. assertSearchNodeInAustralia rejects any other region.
+# Compose interpolates `$`, so every shell dollar in the entrypoint is `$$`.
 services:
   wazuh.indexer:
     environment:
       node.attr.region: ap-southeast-2
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -eu
+        region=$$(printenv 'node.attr.region')
+        conf=$${BLAKSOC_INDEXER_CONFIG:-/usr/share/wazuh-indexer/config/opensearch.yml}
+        case "$$region" in
+          ap-southeast-2|ap-southeast-4) ;;
+          *) echo "indexer region must be in Australia, got $${region}" >&2; exit 2 ;;
+        esac
+        if grep -q '^node.attr.region:' "$$conf"; then
+          tmp=$$(mktemp)
+          while IFS= read -r line || [ -n "$$line" ]; do
+            case "$$line" in
+              node.attr.region:*) printf 'node.attr.region: %s\n' "$$region" ;;
+              *) printf '%s\n' "$$line" ;;
+            esac
+          done < "$$conf" > "$$tmp"
+          cat "$$tmp" > "$$conf"
+          rm -f "$$tmp"
+        else
+          printf '\nnode.attr.region: %s\n' "$$region" >> "$$conf"
+        fi
+        if [ -n "$${BLAKSOC_INDEXER_CONFIG:-}" ]; then
+          exit 0
+        fi
+        exec /entrypoint.sh opensearchwrapper

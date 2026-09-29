@@ -138,7 +138,6 @@ async function main() {
     linesPerTenant: LINES_PER_TENANT,
     rejectedNonAu: true,
     profiles,
-    notMeasured: ["opensearch", "wazuh-indexer", "opencti", "australian-iaas-price", "aws-price"],
   };
   const json = JSON.stringify(report, null, 2);
   if (outPath) await writeFile(outPath, json + "\n");
