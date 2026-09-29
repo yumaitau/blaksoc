@@ -216,7 +216,43 @@ describe("essential eight telemetry", () => {
     expect(bundle.items.find((item) => item.requirementId === "om-antivirus")!.status).toBe("absent");
     expect(bundle.telemetry.regular_backups).toContain("not connected");
   });
+
+  it("keeps an empty backup list unmeasured and scores a no answer as unmet when Veeam measured the line", () => {
+    const empty = evidenceFromTelemetry({ ...emptySnap(), backups: [] }, AT);
+    expect(empty.items.find((item) => item.requirementId === "bk-restore-tested")!.detail).toContain("not connected");
+    const bundle = evidenceFromTelemetry({
+      ...emptySnap(),
+      backups: [{ stale: false, restoreTestedAt: AT, immutable: true, offlineCopy: false }],
+    }, AT);
+    expect(bundle.items.find((item) => item.requirementId === "bk-criticality")!.status).toBe("measured");
+    expect(bundle.items.find((item) => item.requirementId === "bk-restore-tested")!.status).toBe("measured");
+    expect(bundle.items.find((item) => item.requirementId === "bk-resilient")!.status).toBe("measured");
+    expect(bundle.items.find((item) => item.requirementId === "bk-sync")!.detail).toContain("does not report a common restore point");
+    expect(bundle.items.find((item) => item.requirementId === "bk-unpriv-others")!.detail).toContain("does not report who can open or delete");
+    expect(bundle.telemetry.regular_backups).toContain("1 protected system");
+    const answers = yesAll();
+    answers["bk-restore-tested"] = "no";
+    const result = scoreEssentialEight({ answers, evidence: bundle.items, telemetry: bundle.telemetry, assessedAt: AT, owner: "Ava Chen", cadenceDays: 90 });
+    const stored = level(result, "regular_backups").lines.find((row) => row.id === "bk-restore-tested")!;
+    expect(stored.evidence.status).toBe("measured");
+    expect(stored.met).toBe(false);
+  });
+
+  it("contradicts freshness, restore tests, and resilient copies when any protected system misses them", () => {
+    const bundle = evidenceFromTelemetry({
+      ...emptySnap(),
+      backups: [
+        { stale: true, restoreTestedAt: null, immutable: false, offlineCopy: false },
+        { stale: false, restoreTestedAt: AT, immutable: false, offlineCopy: true },
+      ],
+    }, AT);
+    expect(bundle.items.find((item) => item.requirementId === "bk-criticality")!.status).toBe("contradicts");
+    expect(bundle.items.find((item) => item.requirementId === "bk-restore-tested")!.detail).toContain("1 of 2");
+    expect(bundle.items.find((item) => item.requirementId === "bk-resilient")!.status).toBe("contradicts");
+    expect(bundle.telemetry.regular_backups).toContain("2 protected systems");
+  });
 });
+
 
 describe("essential eight report", () => {
   it("puts the disclaimer, the answer, the evidence, the owner and the due date into the PDF", async () => {

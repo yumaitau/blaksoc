@@ -5,6 +5,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { instantiate, secretAad } from "@/lib/connectors/instances";
 import { connectorDef, CONNECTORS } from "@/lib/connectors/registry";
+import { syncVeeamBackups } from "@/lib/services/backup";
 import { stampSyslogTenant } from "@/lib/services/syslog";
 import { encryptSecret } from "@/lib/crypto";
 import { actor, AccessDenied, scoped } from "./common";
@@ -49,7 +50,7 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
   if (!def || def.status !== "available") throw new Error(`connector ${input.provider} is not available`);
   const config = stampSyslogTenant(def.provider, def.config.parse(input.config) as Record<string, unknown>, input.tenantId);
   const secrets = def.secrets.parse(input.secrets ?? {});
-  return withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: !input.tenantId }, async (tx) => {
+  const id = await withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: !input.tenantId }, async (tx) => {
     const [row] = await tx.insert(integrations).values({ tenantId: input.tenantId, category: def.category, provider: def.provider, name: input.name, config, permissions: def.remotePermissions }).returning({ id: integrations.id });
     if (Object.keys(secrets).length) {
       await tx.update(integrations).set({ secretCiphertext: encryptSecret(JSON.stringify(secrets), secretAad(row!.id)) }).where(eq(integrations.id, row!.id));
@@ -57,11 +58,13 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
     await audit(tx, { ...actor(ctx), tenantId: input.tenantId, action: "integration.create", targetType: "integration", targetId: row!.id, detail: { provider: def.provider, name: input.name, secretKeys: Object.keys(secrets) } });
     return row!.id;
   });
+  if (def.provider === "veeam" && input.tenantId) await syncVeeamBackups(input.tenantId);
+  return id;
 }
 
 /** Secrets are write-only: omitted keys keep their stored values. */
 export async function updateIntegration(ctx: AccessContext, id: string, input: { name?: string; config?: unknown; secrets?: Record<string, string>; enabled?: boolean }) {
-  return scoped(ctx, "integration:manage", async (tx) => {
+  const followUp = await scoped(ctx, "integration:manage", async (tx) => {
     const [cur] = await tx.select().from(integrations).where(eq(integrations.id, id));
     if (!cur) throw new AccessDenied("integration not found");
     assertManage(ctx, cur.tenantId);
@@ -77,7 +80,9 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
     }
     await tx.update(integrations).set(patch).where(eq(integrations.id, id));
     await audit(tx, { ...actor(ctx), tenantId: cur.tenantId, action: "integration.update", targetType: "integration", targetId: id, detail: { fields: Object.keys(patch).map((k) => (k === "secretCiphertext" ? "secrets" : k)) } });
+    return cur.provider === "veeam" ? cur.tenantId : null;
   });
+  if (followUp) await syncVeeamBackups(followUp);
 }
 
 export async function linkTenant(ctx: AccessContext, integrationId: string, tenantId: string, selector: { agentGroups?: string[] }) {

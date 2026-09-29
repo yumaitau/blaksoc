@@ -11,6 +11,7 @@ export const CATEGORY_LABELS: Record<ConnectorCategory, string> = {
   ticketing: "Ticketing",
   threat_intel: "Threat intelligence",
   ai: "AI",
+  backup: "Backup",
 };
 export const CATEGORY_ORDER = Object.keys(CATEGORY_LABELS) as ConnectorCategory[];
 
@@ -39,6 +40,7 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   cloudflare: { accountId: "00000000000000000000000000000000", listName: "blaksoc-block", mode: "fixture" },
   fortinet: { host: "https://firewall.example", addressGroup: "blaksoc-block", mode: "fixture" },
   sophos: { centralId: "sophos-central-example", region: "au", mode: "fixture" },
+  veeam: { mode: "fixture", staleHours: 24, systems: [] },
 };
 
 export function exampleConfig(provider: string): Record<string, unknown> {

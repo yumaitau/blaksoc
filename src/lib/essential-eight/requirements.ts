@@ -15,7 +15,7 @@ export const STRATEGIES = [
   { id: "application_control", label: "Application control", lead: "Whether only approved programs can run. A folder permission list is not application control." },
   { id: "office_macros", label: "Restrict Microsoft Office macros", lead: "Whether Office macros stay off unless someone has a real need." },
   { id: "user_app_hardening", label: "User application hardening", lead: "Whether browsers and Office are locked so staff cannot loosen them." },
-  { id: "regular_backups", label: "Regular backups", lead: "Whether you can restore data, programs and settings. Backup tools are not connected yet, so your answers carry this strategy." },
+  { id: "regular_backups", label: "Regular backups", lead: "Whether you can restore data, programs and settings. A Veeam connector can report last success, failed jobs, restore tests, and an offline or immutable copy. Other backup controls stay on your answer." },
 ] as const;
 
 export type StrategyId = (typeof STRATEGIES)[number]["id"];
