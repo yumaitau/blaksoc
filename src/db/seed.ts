@@ -124,6 +124,8 @@ async function main() {
     const [t] = await db.insert(s.tenants).values({ slug: c.slug, name: c.name, sectors: c.sectors, kind: "customer" }).onConflictDoUpdate({ target: s.tenants.slug, set: { name: c.name } }).returning();
     tenantRows.push({ ...t!, group: c.group });
   }
+  // Demo customers already use the shared Wazuh cluster. Standard keeps that collection on.
+  await db.insert(s.tenantPlans).values(tenantRows.map((t) => ({ tenantId: t.id, tier: "standard" }))).onConflictDoNothing();
   const [wattle, murray] = tenantRows;
   await db.update(s.tenants).set({ settings: { ...s.DEFAULT_TENANT_SETTINGS, sharing: { createSightings: true, attribution: "anonymised", maxTlp: "TLP:AMBER" } } }).where(eq(s.tenants.id, wattle!.id));
 

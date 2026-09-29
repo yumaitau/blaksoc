@@ -67,6 +67,8 @@ export const integrations = pgTable("integrations", {
   /** AES-256-GCM ciphertext. Never selected into client payloads. */
   secretCiphertext: text("secret_ciphertext"),
   enabled: boolean("enabled").notNull().default(true),
+  /** Set when a downgrade disabled the row. Upgrade resumes these and leaves admin-disabled rows alone. */
+  pausedByPlan: boolean("paused_by_plan").notNull().default(false),
   status: text("status").notNull().default("unknown"),
   permissions: text("permissions").array().notNull().default([]),
   lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
