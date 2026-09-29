@@ -57,7 +57,7 @@ export default async function Approvals({ searchParams }: { searchParams: Promis
                   <div className="flex flex-wrap items-center gap-2">
                     <Requester kind={r.approval.requestedByKind} name={r.requesterName} />
                     {r.approval.destructive ? <Badge variant="danger">Destructive</Badge> : null}
-                    <Badge variant="outline">{r.approval.kind === "playbook_step" ? "Playbook step" : "Response action"}</Badge>
+                    <Badge variant="outline">{r.approval.kind === "playbook_step" ? "Playbook step" : r.approval.kind === "dfir_collection" ? "Collection" : "Response action"}</Badge>
                     {history || expired ? <StatusBadge status={expired ? "EXPIRED" : r.approval.status} /> : null}
                   </div>
                   <p className="text-sm font-medium">{r.approval.summary}</p>

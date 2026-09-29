@@ -15,3 +15,4 @@ export * from "./surface";
 export * from "./agents";
 export * from "./board";
 export * from "./syslog";
+export * from "./dfir";

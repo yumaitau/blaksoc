@@ -9,6 +9,7 @@ import { eventProvider } from "@/lib/connectors/instances";
 import { adminDb } from "@/db/client";
 import { publish } from "@/lib/events";
 import { queue, QUEUES } from "@/lib/queue";
+import { settleDfirApproval } from "@/lib/services/dfir";
 import { addTimeline } from "@/lib/services/incidents";
 import { AccessDenied } from "@/lib/services/common";
 import { RESPONSE_ACTIONS, type ResponseActionKey } from "./actions";
@@ -136,6 +137,10 @@ export async function decideApproval(ctx: AccessContext, approvalId: string, dec
         await addTimeline(tx, { tenantId: ap.tenantId, incidentId: act.incidentId, origin: "analyst", category: "response", title: `${RESPONSE_ACTIONS[act.action as ResponseActionKey]?.label ?? act.action} ${decision.toLowerCase()} by ${ctx.principal.name}`, detail: note || null, actorId: ctx.principal.userId, refType: "response_action", refId: act.id });
       }
       return { ap, act };
+    }
+    if (ap.kind === "dfir_collection") {
+      await settleDfirApproval(tx, ap.refId, decision, { userId: ctx.principal.userId, name: ctx.principal.name }, new Date());
+      return { ap, act: null };
     }
     return { ap, act: null };
   });

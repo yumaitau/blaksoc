@@ -8,6 +8,7 @@ import { executeResponseAction } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
 import { runDueBoardSummaries } from "@/lib/services/board";
+import { releaseDueCollections } from "@/lib/services/dfir";
 import { archiveDueSyslog } from "@/lib/services/syslog";
 import { runDueHealth } from "@/lib/services/health";
 import { runDueSurface } from "@/lib/services/surface";
@@ -28,6 +29,7 @@ const handlers: Record<QueueName, Handler> = {
       await probeHealth(log("health"));
       return runDueHealth();
     }
+    if (job.name === "dfir-release") return releaseDueCollections();
   },
   [QUEUES.playbook]: async (job) => {
     const { tenantId, runId } = job.data as { tenantId: string; runId: string };
@@ -73,6 +75,7 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.sync, name: "assets", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
   { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },
+  { queue: QUEUES.sync, name: "dfir-release", every: 15 * 60_000 },
   { queue: QUEUES.detection, name: "run", every: 5 * 60_000 },
   { queue: QUEUES.intel, name: "cve", every: 6 * 60 * 60_000 },
   { queue: QUEUES.intel, name: "advisories", every: 60 * 60_000 },
