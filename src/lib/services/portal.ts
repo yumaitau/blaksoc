@@ -1,7 +1,7 @@
 import { and, desc, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import { advisories, alerts, approvals, assets, cveIntel, incidents, incidentTimeline, reports, responseActions, tenants, vulnerabilities } from "@/db/schema";
 import { withScope } from "@/db/scope";
-import { can, type AccessContext } from "@/lib/auth/access";
+import { can, dbScope, type AccessContext } from "@/lib/auth/access";
 import { actionPhrase, incidentSentences } from "@/lib/portal/summary";
 import { AccessDenied } from "./common";
 
@@ -24,7 +24,7 @@ export function customerForPortal(ctx: AccessContext, workspace: { id: string; k
 export async function portalOverview(ctx: AccessContext, tenantId: string) {
   if (!canViewPortal(ctx, tenantId)) throw new AccessDenied("missing portal:read");
   const since30 = new Date(Date.now() - 30 * 86400_000);
-  return withScope({ tenantIds: [tenantId], platform: false }, async (tx) => {
+  return withScope(dbScope(ctx, [tenantId]), async (tx) => {
     const [tenant] = await tx.select({ id: tenants.id, name: tenants.name, sectors: tenants.sectors }).from(tenants).where(eq(tenants.id, tenantId));
     if (!tenant) return null;
 
@@ -166,7 +166,7 @@ export function portalRecommendations(d: {
 export async function portalIncident(ctx: AccessContext, incidentId: string) {
   const tenantIds = ctx.tenantIds.filter((id) => canViewPortal(ctx, id));
   if (!tenantIds.length || !/^[0-9a-f-]{36}$/i.test(incidentId)) return null;
-  return withScope({ tenantIds, platform: false }, async (tx) => {
+  return withScope(dbScope(ctx, tenantIds), async (tx) => {
     const [inc] = await tx.select().from(incidents).where(and(eq(incidents.id, incidentId), inArray(incidents.tenantId, tenantIds)));
     if (!inc) return null;
     const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, inc.tenantId));

@@ -11,7 +11,7 @@ import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const ICONS = { Bug, Building2, FileText, FolderKanban, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow } as const;
 
-export function AppShell({ ctx, workspace, children }: { ctx: AccessContext; workspace: string; children: React.ReactNode }) {
+export function AppShell({ ctx, workspace, brand, children }: { ctx: AccessContext; workspace: string; brand?: string | null; children: React.ReactNode }) {
   const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(ctx, i.perm) && (!i.platformOnly || ctx.isPlatform) && !(i.href === "/portal" && ctx.isPlatform)) })).filter((g) => g.items.length);
   const customers = ctx.tenants.filter((t) => t.kind === "customer");
   const roleNames = [...new Set(ctx.grants.map((g) => g.roleKey.replaceAll("_", " ")))].join(", ");
@@ -56,6 +56,7 @@ export function AppShell({ ctx, workspace, children }: { ctx: AccessContext; wor
               <Wordmark />
             </div>
             {customers.length > 1 || ctx.isPlatform ? <WorkspaceSwitcher tenants={customers} current={workspace} /> : <div className="truncate text-sm font-medium">{customers[0]?.name}</div>}
+            {brand ? <p className="truncate text-xs text-muted">{brand}</p> : null}
           </div>
           <LiveUpdates />
         </header>

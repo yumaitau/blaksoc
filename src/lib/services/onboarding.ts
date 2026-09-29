@@ -23,9 +23,11 @@ import { ingestAlert } from "@/lib/pipeline/ingest";
 import { rememberDomains } from "@/lib/services/surface";
 import { toPdf } from "@/lib/reports/export";
 import type { ReportContent } from "@/lib/reports/types";
+import { cobrandLine } from "@/lib/tenancy/brand";
 import { actor, AccessDenied } from "./common";
 import { createSite, createTenant } from "./admin";
 import { setTenantPlan } from "./billing";
+import { grantPartnerCustomer, partnerHome } from "./partner";
 import { savePlaybook } from "./playbooks";
 
 const ROLE_KEYS = ["customer_admin", "customer_security", "customer_readonly"] as const;
@@ -42,9 +44,9 @@ export class OnboardingError extends Error {
 
 export type FinishResult = { tenantId: string; reportId: string; draftId: string };
 
-/** Analyst runs setup with the customer. Self-serve sign-up stays closed. */
+/** Analyst runs setup with the customer. A partner admin can start a customer of their own. Self-serve sign-up stays closed. */
 export function canRunOnboarding(ctx: AccessContext): boolean {
-  return ctx.isPlatform && can(ctx, "tenant:manage");
+  return (ctx.isPlatform && can(ctx, "tenant:manage")) || partnerHome(ctx) !== null;
 }
 
 function assertAnalyst(ctx: AccessContext) {
@@ -184,12 +186,12 @@ function slugFor(name: string): string {
   return `${base || "org"}-${suffix}`.slice(0, 40);
 }
 
-function withTenant(ctx: AccessContext, tenant: { id: string; slug: string; name: string; kind: "mssp" | "customer" }): AccessContext {
+function withTenant(ctx: AccessContext, tenant: { id: string; slug: string; name: string; kind: "mssp" | "partner" | "customer"; parentId?: string | null; brandName?: string | null }): AccessContext {
   if (ctx.tenantIds.includes(tenant.id)) return ctx;
   return {
     ...ctx,
     tenantIds: [...ctx.tenantIds, tenant.id],
-    tenants: [...ctx.tenants, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind }],
+    tenants: [...ctx.tenants, { id: tenant.id, slug: tenant.slug, name: tenant.name, kind: tenant.kind, parentId: tenant.parentId ?? null, brandName: tenant.brandName ?? null, cobrand: null }],
   };
 }
 
@@ -244,6 +246,20 @@ export async function saveOnboardingStep(ctx: AccessContext, draftId: string, st
     }
     return saved!;
   });
+}
+
+async function openPartnerTenant(ctx: AccessContext, partnerId: string, name: string, sectors: string[]) {
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await grantPartnerCustomer(ctx, partnerId, { name, slug: slugFor(name), sectors, deploymentMode: "shared" });
+    } catch (err) {
+      if (err instanceof AccessDenied) throw err;
+      if (err instanceof Error && err.message.includes("slug must be")) throw new OnboardingError("slug");
+      last = err;
+    }
+  }
+  throw last;
 }
 
 async function openTenant(ctx: AccessContext, name: string, sectors: string[]) {
@@ -315,11 +331,12 @@ function domainLine(domains: string[]): string {
   return domains.length ? `${COPY.domainsLater} ${domains.join(", ")}.` : COPY.domainsNone;
 }
 
-function welcomeContent(tenantName: string, stack: StackDraft, connect: ConnectDraft, now: Date): ReportContent {
+function welcomeContent(tenantName: string, stack: StackDraft, connect: ConnectDraft, now: Date, cobrand: string | null): ReportContent {
   return {
     tenantName,
     generatedAt: now.toISOString(),
     period: { start: now.toISOString(), end: now.toISOString() },
+    ...(cobrand ? { cobrand } : {}),
     sections: [
       { heading: COPY.reportConnected, basis: "observed", author: "system", body: connectedLine(stack.identity) },
       { heading: COPY.reportWhy, basis: "observed", author: "system", body: COPY.reportWhyBody },
@@ -362,7 +379,7 @@ async function sendSummary(tenant: { id: string; name: string }, to: string, sum
   return receipt;
 }
 
-export async function finishOnboarding(ctx: AccessContext, draftId: string): Promise<FinishResult> {
+export async function finishOnboarding(ctx: AccessContext, draftId: string, opts?: { partnerConsent?: boolean }): Promise<FinishResult> {
   assertAnalyst(ctx);
   const row = await getDraft(ctx, draftId);
   if (row.status === "complete" && row.tenantId) {
@@ -371,9 +388,15 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string): Pro
   }
   if (!row.org || !row.contacts || !row.stack || !row.connect || !row.governance || !row.plan) throw new OnboardingError("missing");
 
+  const partnerId = partnerHome(ctx);
   let tenant = row.tenantId ? (await adminDb().select().from(tenants).where(eq(tenants.id, row.tenantId)))[0] : undefined;
   if (!tenant) {
-    tenant = await openTenant(ctx, row.org.name, row.org.sectors);
+    if (partnerId) {
+      if (!opts?.partnerConsent) throw new OnboardingError("missing");
+      tenant = await openPartnerTenant(ctx, partnerId, row.org.name, row.org.sectors);
+    } else {
+      tenant = await openTenant(ctx, row.org.name, row.org.sectors);
+    }
     await adminDb().update(onboardingDrafts).set({ tenantId: tenant.id, updatedAt: new Date() }).where(eq(onboardingDrafts.id, row.id));
   }
   const wide = withTenant(ctx, tenant);
@@ -386,7 +409,8 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string): Pro
   if (roleRows.length !== ROLE_KEYS.length) throw new Error("default roles missing");
 
   const now = new Date();
-  const content = welcomeContent(tenant.name, row.stack, row.connect, now);
+  const partner = partnerId ? ctx.tenants.find((t) => t.id === partnerId) : undefined;
+  const content = welcomeContent(tenant.name, row.stack, row.connect, now, partner ? cobrandLine(partner.name, partner.brandName) : null);
   await toPdf(COPY.emailTitle, content);
   let [report] = await adminDb().select().from(reports).where(and(eq(reports.tenantId, tenant.id), eq(reports.kind, "welcome")));
   if (!report) {

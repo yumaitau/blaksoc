@@ -1,7 +1,7 @@
-import { boolean, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid, index } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 
-export const tenantKind = pgEnum("tenant_kind", ["mssp", "customer"]);
+export const tenantKind = pgEnum("tenant_kind", ["mssp", "partner", "customer"]);
 export const deploymentMode = pgEnum("deployment_mode", ["shared", "dedicated"]);
 
 /** Intel sector tags usable against tenants and intelligence. */
@@ -64,6 +64,10 @@ export const tenants = pgTable("tenants", {
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   kind: tenantKind("kind").notNull().default("customer"),
+  /** Partner that delivers this customer. Null for platform tenants and for customers Yuma IT holds directly. */
+  parentId: uuid("parent_id").references((): AnyPgColumn => tenants.id, { onDelete: "restrict" }),
+  /** Name shown beside blakSOC. Co-brand only; it does not replace the SOC name. */
+  brandName: text("brand_name"),
   deploymentMode: deploymentMode("deployment_mode").notNull().default("shared"),
   sectors: text("sectors").array().notNull().default([]),
   status: text("status").notNull().default("active"),
@@ -104,7 +108,8 @@ export const roles = pgTable("roles", {
 
 /**
  * Grants a user a role. Platform-scope roles (tenantId null) are Yuma IT staff and
- * reach every customer tenant; tenant-scope roles are confined to one tenant.
+ * reach every customer tenant. Tenant-scope roles bind to one tenant. A partner role
+ * on a partner tenant also reaches that partner's consented customers.
  */
 export const roleAssignments = pgTable(
   "role_assignments",
@@ -132,3 +137,33 @@ export const savedViews = pgTable("saved_views", {
   builtin: boolean("builtin").notNull().default(false),
   position: text("position").notNull().default("m"),
 });
+
+/** Customer agreement that a partner may open and work in the tenancy. Access ends when revokedAt is set. */
+export const partnerConsents = pgTable(
+  "partner_consents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerTenantId: uuid("customer_tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    partnerTenantId: uuid("partner_tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    consentedBy: text("consented_by").notNull(),
+    consentedAt: timestamp("consented_at", { withTimezone: true }).notNull().defaultNow(),
+    statement: text("statement").notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("partner_consents_pair").on(t.customerTenantId, t.partnerTenantId)],
+);
+
+/** Note for the Yuma IT SOC. Recording it does not open an external ticket. */
+export const partnerEscalations = pgTable(
+  "partner_escalations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    partnerTenantId: uuid("partner_tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    incidentId: uuid("incident_id"),
+    note: text("note").notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("partner_escalations_tenant").on(t.tenantId, t.createdAt)],
+);

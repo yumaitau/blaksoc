@@ -84,7 +84,7 @@ async function documentPdf(title: string, content: ReportContent): Promise<Uint8
     }
   };
 
-  text("blakSOC", { size: board ? 12 : 9, f: bold, color: [0.55, 0.25, 0.1] });
+  text(content.cobrand ?? "blakSOC", { size: board ? 12 : 9, f: bold, color: [0.55, 0.25, 0.1] });
   text(title, { size: titleSize, f: bold });
   text(`${content.tenantName} · ${content.period.start.slice(0, 10)} to ${content.period.end.slice(0, 10)} · generated ${content.generatedAt.slice(0, 16).replace("T", " ")} UTC`, { size: board ? 12 : 9, color: [0.4, 0.4, 0.4] });
   draw.y -= 6;
@@ -132,7 +132,7 @@ async function slidesPdf(title: string, content: ReportContent): Promise<Uint8Ar
       draw.y -= size * 1.4;
     }
   };
-  text("blakSOC", { size: 14, f: bold, color: [0.55, 0.25, 0.1] });
+  text(content.cobrand ?? "blakSOC", { size: 14, f: bold, color: [0.55, 0.25, 0.1] });
   text(title, { size: 32, f: bold });
   text(`${content.tenantName}. ${content.period.start.slice(0, 10)} to ${content.period.end.slice(0, 10)}.`, { size: 16, color: [0.25, 0.25, 0.25] });
   draw.y -= 8;

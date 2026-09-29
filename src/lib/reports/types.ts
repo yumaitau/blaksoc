@@ -27,4 +27,6 @@ export type ReportContent = {
   light?: BoardLight;
   /** Set only when the organisation stored an image. Never a default picture. */
   image?: ReportImage | null;
+  /** Partner name beside blakSOC. Absent when Yuma IT holds the customer directly. */
+  cobrand?: string | null;
 };

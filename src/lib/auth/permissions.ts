@@ -108,4 +108,26 @@ export const BUILTIN_ROLES: readonly BuiltinRole[] = [
     description: "Executive / stakeholder view.",
     permissions: ["portal:read", "incident:read", "vuln:read", "report:read"],
   },
+  {
+    key: "partner_admin",
+    name: "Partner Administrator",
+    scope: "tenant",
+    description: "Runs an IT provider tenancy: its consented customers, onboarding, co-brand, and commercial report.",
+    permissions: [
+      "dashboard:read", "portal:read", "mssp:read", "tenant:manage", "user:manage", "settings:manage",
+      "alert:read", "incident:read", "incident:write", "asset:read", "asset:write", "vuln:read",
+      "report:read", "report:generate", "audit:read", "playbook:read", "playbook:write",
+    ],
+  },
+  {
+    key: "partner_analyst",
+    name: "Partner Analyst",
+    scope: "tenant",
+    description: "Triages the provider's own customers and escalates to the Yuma IT SOC.",
+    permissions: [
+      "dashboard:read", "portal:read", "alert:read", "alert:triage", "alert:assign",
+      "incident:read", "incident:write", "asset:read", "vuln:read", "intel:read",
+      "detection:read", "playbook:read", "report:read",
+    ],
+  },
 ];

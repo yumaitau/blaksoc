@@ -45,6 +45,7 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
   return (
     <div className="space-y-5">
       <Link href="/reports" className="inline-flex items-center gap-1 text-xs text-muted hover:text-fg"><ArrowLeft className="size-3.5" />All reports</Link>
+      {c.cobrand ? <p className="text-sm font-medium">{c.cobrand}</p> : null}
       <PageHeader
         eyebrow={c.tenantName}
         title={report.title}

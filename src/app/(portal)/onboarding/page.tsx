@@ -5,6 +5,7 @@ import {
 } from "@/lib/onboarding/types";
 import { requireAccess } from "@/lib/auth/session";
 import { SECTOR_TAGS } from "@/db/schema/platform";
+import { PARTNER_CONSENT_STATEMENT, partnerHome } from "@/lib/services/partner";
 import { canRunOnboarding, ownDraft } from "@/lib/services/onboarding";
 
 export const metadata = { title: "Set up" };
@@ -84,11 +85,13 @@ export default async function OnboardingPage({ searchParams }: { searchParams: P
     );
   }
   const draft = await ownDraft(ctx);
+  const home = partnerHome(ctx);
+  const partnerName = home ? ctx.tenants.find((tenant) => tenant.id === home)?.name ?? null : null;
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">{COPY.title}</h1>
       {error ? <p className="text-sm text-muted">{error}</p> : null}
-      {!draft ? <StartForm /> : draft.status === "complete" ? <Done /> : <Wizard draftId={draft.id} step={shownStep(draft.step, sp.step)} savedStep={draft.step} org={draft.org} contacts={draft.contacts} stack={draft.stack} connect={draft.connect} plan={draft.plan} />}
+      {!draft ? <StartForm /> : draft.status === "complete" ? <Done /> : <Wizard draftId={draft.id} step={shownStep(draft.step, sp.step)} savedStep={draft.step} org={draft.org} contacts={draft.contacts} stack={draft.stack} connect={draft.connect} plan={draft.plan} partnerName={partnerName} />}
     </div>
   );
 }
@@ -121,6 +124,7 @@ function Wizard(props: {
   stack: StackDraft | null;
   connect: ConnectDraft | null;
   plan: PlanDraft | null;
+  partnerName: string | null;
 }) {
   const reached = ONBOARDING_STEPS.indexOf(props.savedStep as OnboardingStep);
   return (
@@ -141,7 +145,7 @@ function Wizard(props: {
         {props.step === "stack" ? <StackFields stack={props.stack} /> : null}
         {props.step === "connect" ? <ConnectFields connect={props.connect} identity={props.stack?.identity} /> : null}
         {props.step === "governance" ? <GovFields /> : null}
-        {props.step === "plan" ? <PlanFields plan={props.plan} /> : null}
+        {props.step === "plan" ? <PlanFields plan={props.plan} partnerName={props.partnerName} /> : null}
         <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg" type="submit">
           {props.step === "plan" ? COPY.finish : COPY.save}
         </button>
@@ -297,7 +301,7 @@ function GovFields() {
   );
 }
 
-function PlanFields({ plan }: { plan: PlanDraft | null }) {
+function PlanFields({ plan, partnerName }: { plan: PlanDraft | null; partnerName: string | null }) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted">{COPY.planLead}</p>
@@ -311,6 +315,12 @@ function PlanFields({ plan }: { plan: PlanDraft | null }) {
         <input type="checkbox" name="nonprofit" value="yes" defaultChecked={plan?.nonprofit ?? false} />
         {COPY.nonprofit}
       </label>
+      {partnerName ? (
+        <label className="flex min-h-11 items-start gap-2 text-sm">
+          <input className="mt-1" type="checkbox" name="partnerConsent" value="yes" required />
+          <span>{partnerName} is the IT provider on this setup. {PARTNER_CONSENT_STATEMENT}</span>
+        </label>
+      ) : null}
       <input type="hidden" name="finish" value="yes" />
     </div>
   );

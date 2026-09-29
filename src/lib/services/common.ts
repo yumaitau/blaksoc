@@ -1,4 +1,4 @@
-import { AccessDenied, assertCan, scopeFor, type AccessContext } from "@/lib/auth/access";
+import { AccessDenied, assertCan, dbScope, scopeFor, type AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
 import { withScope } from "@/db/scope";
 import type { Tx } from "@/db/client";
@@ -23,7 +23,7 @@ export async function scoped<T>(
 /** Scope to exactly one tenant after verifying the permission there. */
 export async function inTenant<T>(ctx: AccessContext, permission: Permission, tenantId: string, fn: (tx: Tx) => Promise<T>): Promise<T> {
   assertCan(ctx, permission, tenantId);
-  return withScope({ tenantIds: [tenantId], platform: false }, fn);
+  return withScope(dbScope(ctx, [tenantId]), fn);
 }
 
 export const actor = (ctx: AccessContext) => ({ actorId: ctx.principal.userId, actorKind: "user" as const });
