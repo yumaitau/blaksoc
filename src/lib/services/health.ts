@@ -1,4 +1,4 @@
-import { and, eq, inArray, notInArray } from "drizzle-orm";
+import { and, arrayContains, eq, inArray, notInArray, or } from "drizzle-orm";
 import { adminDb } from "@/db/client";
 import type { Tx } from "@/db/client";
 import { alerts, assets, detectionDeployments, dmarcReports, healthBaselines, integrations, monitoredDomains, sigmaRules, sites, tenants, type HealthPolicy } from "@/db/schema";
@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import { coverageDropped, healthOf, isSilent, olderThan, silentHours } from "@/lib/health/rules";
 import { withScope } from "@/db/scope";
 import { AccessDenied, actor, inTenant } from "./common";
+import { NETWORK_SENSOR_TAG } from "./sensor";
 
 const POLL_PROVIDERS = ["m365", "entra", "google-workspace"] as const;
 const HOUR_MS = 3_600_000;
@@ -115,16 +116,34 @@ async function evaluate(tx: Tx, tenantId: string, now: Date) {
 
   const siteRows = await tx.select().from(sites).where(eq(sites.tenantId, tenantId));
   const siteById = new Map(siteRows.map((site) => [site.id, site]));
+  // Enrolled network sensors share the agent silence limit. Other network devices stay out.
   const sensors = await tx
-    .select({ id: assets.id, name: assets.name, hostname: assets.hostname, siteId: assets.siteId, agentStatus: assets.agentStatus, lastSeen: assets.lastSeen })
+    .select({
+      id: assets.id,
+      name: assets.name,
+      hostname: assets.hostname,
+      siteId: assets.siteId,
+      agentStatus: assets.agentStatus,
+      lastSeen: assets.lastSeen,
+      kind: assets.kind,
+    })
     .from(assets)
-    .where(and(eq(assets.tenantId, tenantId), inArray(assets.kind, ["endpoint", "server"])));
+    .where(
+      and(
+        eq(assets.tenantId, tenantId),
+        or(
+          inArray(assets.kind, ["endpoint", "server"]),
+          and(eq(assets.kind, "network_device"), arrayContains(assets.tags, [NETWORK_SENSOR_TAG])),
+        ),
+      ),
+    );
   for (const asset of sensors) {
     const externalId = `health:silent:${asset.id}`;
     const site = asset.siteId ? siteById.get(asset.siteId) : undefined;
     const limit = silentHours({ profile: site?.bandwidthProfile ?? "standard", siteHours: site?.silentHours ?? null, tenantHours: policy.silentHours });
     if (asset.agentStatus != null && isSilent(stamp(asset.lastSeen) ?? now, limit, now)) {
-      wanted.set(externalId, { title: `Agent silent: ${asset.hostname || asset.name}`, assetId: asset.id });
+      const label = asset.kind === "network_device" ? "Sensor silent" : "Agent silent";
+      wanted.set(externalId, { title: `${label}: ${asset.hostname || asset.name}`, assetId: asset.id });
     }
   }
 
