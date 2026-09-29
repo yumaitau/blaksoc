@@ -63,12 +63,16 @@ async function advanceInTx(
     steps,
     severity: inc.severity,
     acknowledged: Boolean(ack),
-    attempts: prior.map((row) => ({
-      at: row.createdAt.getTime(),
-      channel: row.channel as Channel,
-      contact: row.destination,
-      status: row.status === "failed" ? "failed" : "sent",
-    })),
+    attempts: prior.flatMap((row) => {
+      const kind = row.detail && typeof row.detail === "object" ? (row.detail as { kind?: string }).kind : undefined;
+      if (kind === "obligation") return [];
+      return [{
+        at: row.createdAt.getTime(),
+        channel: row.channel as Channel,
+        contact: row.destination,
+        status: row.status === "failed" ? "failed" as const : "sent" as const,
+      }];
+    }),
     now,
   });
   if (decision.action !== "send") return { incidentId, decision };

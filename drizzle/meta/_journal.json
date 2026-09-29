@@ -43,6 +43,13 @@
       "when": 1790598000000,
       "tag": "0005_essential_eight",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790599000000,
+      "tag": "0006_obligations",
+      "breakpoints": true
     }
   ]
 }

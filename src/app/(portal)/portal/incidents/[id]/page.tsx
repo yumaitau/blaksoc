@@ -2,19 +2,24 @@ import { notFound } from "next/navigation";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { severityLabel, statusLabel } from "@/lib/portal/summary";
+import { getObligation } from "@/lib/services/obligations";
 import { portalIncident } from "@/lib/services/portal";
 import { fmtDateTime } from "@/lib/utils";
+import { ObligationsPanel } from "./obligations-panel";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return { title: `Incident ${id.slice(0, 8)}` };
 }
 
-export default async function PortalIncidentPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function PortalIncidentPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ error?: string }> }) {
   const { id } = await params;
+  const sp = await searchParams;
   const ctx = await requireAccess();
   const data = await portalIncident(ctx, id);
   if (!data) notFound();
+  const obligation = await getObligation(ctx, id);
+  const canWrite = can(ctx, "incident:write", data.tenantId) || can(ctx, "response:approve", data.tenantId);
   const canAck = can(ctx, "portal:read", data.tenantId);
   const [happened, did, need] = data.sentences;
 
@@ -35,6 +40,7 @@ export default async function PortalIncidentPage({ params }: { params: Promise<{
         <h2 id="need" className="text-base font-semibold">What you need to do</h2>
         <p className="mt-1 text-sm">{need}</p>
       </section>
+      <ObligationsPanel incidentId={data.incident.id} view={obligation} canWrite={canWrite} error={sp.error} />
       {data.acknowledgedAt ? (
         <p className="text-sm" role="status">You told us you have read this on {fmtDateTime(data.acknowledgedAt)}.</p>
       ) : canAck ? (
