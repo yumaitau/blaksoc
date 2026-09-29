@@ -1,0 +1,7 @@
+# Merge onto the official wazuh-docker single-node file:
+#   docker compose -f docker-compose.yml -f indexer-region.yml up -d
+# The indexer is OpenSearch. assertSearchNodeInAustralia rejects any other region.
+services:
+  wazuh.indexer:
+    environment:
+      node.attr.region: ap-southeast-2

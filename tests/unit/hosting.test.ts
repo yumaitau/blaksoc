@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { connectorDef } from "@/lib/connectors/registry";
 import { FileArchiveStore } from "@/lib/hosting/store";
-import { componentsOutsideAustralia, egressOpensTheWorld, helmBlockScalar, helmScalar, HOSTING_COMPONENT_NAMES, hostingComponents, type DataPlaneRegions } from "@/lib/hosting/profile";
+import { assertDataPlaneStoresInAustralia, assertHostingEnv, assertSearchNodeInAustralia, componentsOutsideAustralia, egressOpensTheWorld, firstSearchNodeAttributes, helmBlockScalar, helmScalar, HOSTING_COMPONENT_NAMES, hostingComponents, type DataPlaneRegions } from "@/lib/hosting/profile";
 
 const roots: string[] = [];
 
@@ -68,6 +68,59 @@ describe("hosting profile", () => {
     expect(opencti.config.parse({ url: "https://opencti.internal", region: "ap-southeast-2" })).toMatchObject({ region: "ap-southeast-2" });
     expect(() => opencti.config.parse({ url: "https://opencti.internal", region: "eu-central-1" })).toThrow();
     expect(() => wazuh.config.parse({ apiUrl: "https://wazuh.internal", indexerUrl: "https://indexer.internal" })).toThrow();
+    assertDataPlaneStoresInAustralia(chart.dataPlane);
+    const config = (parse(base) as { config: Record<string, string> }).config;
+    const k3sConfig = (parse(k3s) as { config: Record<string, string> }).config;
+    expect(config.OPENSEARCH_REGION).toBe(chart.dataPlane.opensearch);
+    expect(config.WAZUH_INDEXER_REGION).toBe(chart.dataPlane.wazuhIndexer);
+    expect(config.OPENCTI_REGION).toBe(chart.dataPlane.opencti);
+    expect(k3sConfig.OPENSEARCH_REGION).toBe("ap-southeast-2");
+    expect(k3sConfig.WAZUH_INDEXER_REGION).toBe("ap-southeast-2");
+    expect(k3sConfig.OPENCTI_REGION).toBe("ap-southeast-2");
+  });
+
+  it("rejects a foreign data plane and a search node with no Australian region", async () => {
+    expect(() => assertHostingEnv({})).not.toThrow();
+    expect(() => assertHostingEnv({ OPENSEARCH_REGION: "ap-southeast-2" })).toThrow(/incomplete/);
+    expect(() =>
+      assertHostingEnv({
+        OPENSEARCH_REGION: "ap-southeast-2",
+        WAZUH_INDEXER_REGION: "ap-southeast-4",
+        OPENCTI_REGION: "ap-southeast-2",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertHostingEnv({
+        OPENSEARCH_REGION: "us-east-1",
+        WAZUH_INDEXER_REGION: "ap-southeast-2",
+        OPENCTI_REGION: "ap-southeast-2",
+      }),
+    ).toThrow(/Australia/);
+
+    const root = path.resolve(import.meta.dirname, "../..");
+    const compose = parse(await readFile(path.join(root, "deploy/compose/docker-compose.yml"), "utf8")) as {
+      services: {
+        "opencti-search": { environment: Record<string, string> };
+        "opencti-minio": { image: string };
+        opencti: { environment: Record<string, string> };
+      };
+    };
+    const wazuh = parse(await readFile(path.join(root, "deploy/wazuh/indexer-region.yml"), "utf8")) as {
+      services: { "wazuh.indexer": { environment: Record<string, string> } };
+    };
+    expect(compose.services["opencti-search"].environment["node.attr.region"]).toBe("${OPENSEARCH_REGION:-ap-southeast-2}");
+    expect(compose.services["opencti-minio"].image).toBe("chainguard/minio:latest");
+    expect(compose.services.opencti.environment.BLAKSOC_REGION).toBe("${OPENCTI_REGION:-ap-southeast-2}");
+    expect(wazuh.services["wazuh.indexer"].environment["node.attr.region"]).toBe("ap-southeast-2");
+    assertDataPlaneStoresInAustralia({ opensearch: "ap-southeast-2", wazuhIndexer: "ap-southeast-2", opencti: "ap-southeast-2" });
+
+    const observed = {
+      nodes: { abc: { attributes: { shard_indexing_pressure_enabled: "true", region: "ap-southeast-4" } } },
+    };
+    expect(assertSearchNodeInAustralia(firstSearchNodeAttributes(observed))).toBe("ap-southeast-4");
+    expect(() => assertSearchNodeInAustralia(firstSearchNodeAttributes({ nodes: { abc: { attributes: { shard_indexing_pressure_enabled: "true" } } } }))).toThrow(/no region/);
+    expect(() => assertSearchNodeInAustralia({ region: "us-east-1" })).toThrow(/Australia/);
+    expect(firstSearchNodeAttributes({ nodes: {} })).toBeUndefined();
   });
 
   it("quotes the k6 report for 10, 50, and 200 tenants", async () => {

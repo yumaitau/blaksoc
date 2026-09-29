@@ -5,6 +5,12 @@ blakSOC uses Wazuh as its first SIEM/XDR provider. Run Wazuh from the official
 the Wazuh Helm/Kubernetes deployment), then register the cluster in blakSOC under
 **Integrations → Wazuh**.
 
+`indexer-region.yml` sets `node.attr.region` to `ap-southeast-2` on the official
+single-node service `wazuh.indexer`. Merge that file when you start the stack.
+The worker refuses to boot unless `WAZUH_INDEXER_REGION` is `ap-southeast-2` or
+`ap-southeast-4`. A node that omits the attribute, or names another region, fails
+`assertSearchNodeInAustralia`.
+
 ## 1. Accounts blakSOC needs
 
 | Where | Account | Minimum rights |

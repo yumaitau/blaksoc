@@ -1,4 +1,4 @@
-import { AU_ARCHIVE_REGIONS } from "@/lib/syslog/retain";
+import { assertAuRegion, AU_ARCHIVE_REGIONS } from "@/lib/syslog/retain";
 
 /** `AU` is the policy flag. Bucket regions are the archive list. */
 export function allowedDataRegions(): readonly string[] {
@@ -17,6 +17,46 @@ export type DataPlaneRegions = {
 
 /** Names the hosting profile must account for. Order is the check order. */
 export const HOSTING_COMPONENT_NAMES = ["ai-policy", "syslog-archive", "opensearch", "wazuh-indexer", "opencti"] as const;
+
+/** Storage components must name an archive region. The AI flag `AU` is not a bucket region. */
+export function assertDataPlaneStoresInAustralia(plane: DataPlaneRegions): void {
+  assertAuRegion(plane.opensearch);
+  assertAuRegion(plane.wazuhIndexer);
+  assertAuRegion(plane.opencti);
+}
+
+/**
+ * Boot check for the worker. All three unset means local dev. One or two set is a broken profile.
+ * A value outside `ap-southeast-2` and `ap-southeast-4` throws.
+ */
+export function assertHostingEnv(env: Record<string, string | undefined>): void {
+  const opensearch = env.OPENSEARCH_REGION ?? "";
+  const wazuhIndexer = env.WAZUH_INDEXER_REGION ?? "";
+  const opencti = env.OPENCTI_REGION ?? "";
+  const present = [opensearch, wazuhIndexer, opencti].filter((value) => value !== "");
+  if (present.length === 0) return;
+  if (present.length !== 3) throw new Error("data plane region is incomplete");
+  assertDataPlaneStoresInAustralia({ opensearch, wazuhIndexer, opencti });
+}
+
+/** Region advertised by a running OpenSearch or Wazuh indexer node. */
+export function assertSearchNodeInAustralia(attributes: Record<string, string> | undefined): string {
+  const region = attributes?.region;
+  if (!region) throw new Error("search node has no region attribute");
+  assertAuRegion(region);
+  return region;
+}
+
+type SearchNodePayload = { nodes?: Record<string, { attributes?: Record<string, string> }> };
+
+/** First node in an OpenSearch `_nodes` document. */
+export function firstSearchNodeAttributes(payload: unknown): Record<string, string> | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const nodes = (payload as SearchNodePayload).nodes;
+  if (!nodes) return undefined;
+  for (const node of Object.values(nodes)) return node?.attributes;
+  return undefined;
+}
 
 export function hostingComponents(
   aiResidency: string,

@@ -46,4 +46,10 @@ Worker network policy egress is cluster-internal. The shipped chart sets `networ
 
 `AI_DATA_RESIDENCY` is `AU` in the base values and in the k3s overlay. Archive buckets are `ap-southeast-2` and `ap-southeast-4`. `assertAuRegion` rejects any other region.
 
-`hostingComponents` also checks OpenSearch, the Wazuh indexer, and OpenCTI. The base values pin each of those to `ap-southeast-2`. Wazuh and OpenCTI connector config accepts only `ap-southeast-2` and `ap-southeast-4`. A world-open egress CIDR fails `egressOpensTheWorld`. Load numbers and prices for OpenSearch, the Wazuh indexer, and OpenCTI were not measured.
+`hostingComponents` names OpenSearch, the Wazuh indexer, and OpenCTI. The base values and the k3s overlay set `OPENSEARCH_REGION`, `WAZUH_INDEXER_REGION`, and `OPENCTI_REGION` to `ap-southeast-2`. The worker calls `assertHostingEnv` before it schedules jobs. A partial set throws. A region outside `ap-southeast-2` and `ap-southeast-4` throws. Leaving all three unset is local dev.
+
+The OpenCTI compose profile sets OpenSearch `node.attr.region` from `OPENSEARCH_REGION`. `assertSearchNodeInAustralia` reads that attribute back from the node API and rejects a missing or non-Australian value. The same check covers a Wazuh indexer. `deploy/wazuh/indexer-region.yml` is the drop-in for the official indexer service. Wazuh and OpenCTI connector config accepts only those two regions.
+
+`minio/minio` is not publicly pullable. The compose file uses `chainguard/minio:latest`, which still runs `minio server`. MinIO does not advertise a storage region. The OpenCTI service carries `BLAKSOC_REGION` from `OPENCTI_REGION`.
+
+A world-open egress CIDR fails `egressOpensTheWorld`. Load numbers and prices for OpenSearch, the Wazuh indexer, and OpenCTI were not measured.

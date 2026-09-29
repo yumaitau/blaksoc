@@ -12,6 +12,7 @@ import { releaseDueCollections } from "@/lib/services/dfir";
 import { archiveDueSyslog } from "@/lib/services/syslog";
 import { runDueHealth } from "@/lib/services/health";
 import { runDueSurface } from "@/lib/services/surface";
+import { assertHostingEnv } from "@/lib/hosting/profile";
 
 const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOString()}] [${scope}] ${m}`);
 
@@ -85,6 +86,7 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
 ];
 
 async function main() {
+  assertHostingEnv(process.env);
   for (const s of SCHEDULES) {
     await queue(s.queue).upsertJobScheduler(`${s.queue}:${s.name}`, { every: s.every }, { name: s.name });
   }
