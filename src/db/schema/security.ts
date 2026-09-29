@@ -274,7 +274,7 @@ export const incidentTimeline = pgTable(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     incidentId: uuid("incident_id").notNull().references(() => incidents.id, { onDelete: "cascade" }),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    origin: text("origin").notNull(), // machine | analyst | ai
+    origin: text("origin").notNull(), // machine | analyst | ai | customer
     category: text("category").notNull(), // detection | intel | response | analyst | status
     title: text("title").notNull(),
     detail: text("detail"),

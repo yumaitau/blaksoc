@@ -5,7 +5,7 @@ export const metadata = { title: "Access pending" };
 
 export default function AccessPending() {
   return (
-    <main className="grid min-h-screen place-items-center px-4">
+    <main className="grid min-h-screen place-items-center px-4 font-sans">
       <div className="max-w-md space-y-3 rounded-lg border border-border bg-surface p-6">
         <Wordmark />
         <h1 className="text-lg font-semibold">You&apos;re signed in, but have no access yet</h1>

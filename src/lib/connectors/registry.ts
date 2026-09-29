@@ -8,6 +8,7 @@ import type { SecurityEventProvider } from "@/lib/providers/types";
 import { WazuhProvider } from "@/lib/providers/wazuh";
 import { BedrockProvider, OpenAICompatibleProvider } from "@/lib/ai/providers";
 import type { AIProvider } from "@/lib/ai/types";
+import { EmailNotifier, SmsNotifier, VoiceNotifier } from "./au-notify";
 import { WebhookNotifier, type Notifier } from "./notify";
 
 /**
@@ -160,7 +161,74 @@ export const CONNECTORS: ConnectorDefinition[] = [
   planned("aws", "AWS", "cloud", ["events", "assets"], "GuardDuty, Security Hub, inventory."),
   planned("azure", "Azure", "cloud", ["events", "assets"], "Defender for Cloud, Resource Graph inventory."),
   planned("gcp", "Google Cloud", "cloud", ["events", "assets"], "Security Command Center."),
-  planned("email", "Email (SMTP)", "collaboration", ["notify"], "Notification email via SMTP relay."),
+  {
+    provider: "sms",
+    name: "SMS (MessageMedia)",
+    category: "collaboration",
+    description: "Texts an Australian mobile via MessageMedia. Fixture mode records delivery and does not call MessageMedia.",
+    status: "available",
+    capabilities: ["notify"],
+    remotePermissions: ["MessageMedia API key and secret on an Australian account"],
+    config: z.object({
+      from: z.string().regex(/^\+61\d{8,10}$/),
+      mode: z.enum(["fixture", "live"]).default("fixture"),
+      events: z.array(z.string()).default(["incident.created"]),
+    }),
+    secrets: z.object({ apiKey: z.string().min(1), apiSecret: z.string().min(1) }),
+    create: (c, s) => ({
+      kind: "notify",
+      provider: new SmsNotifier(
+        { from: String(c.from), mode: c.mode === "live" ? "live" : "fixture" },
+        { apiKey: String(s.apiKey), apiSecret: String(s.apiSecret) },
+      ),
+    }),
+  },
+  {
+    provider: "voice",
+    name: "Voice call (Twilio AU)",
+    category: "collaboration",
+    description: "Rings an Australian number and speaks the update via Twilio. Fixture mode records delivery and does not call Twilio.",
+    status: "available",
+    capabilities: ["notify"],
+    remotePermissions: ["Twilio Account SID, auth token, and an Australian +61 voice number"],
+    config: z.object({
+      from: z.string().regex(/^\+61\d{8,10}$/),
+      mode: z.enum(["fixture", "live"]).default("fixture"),
+      events: z.array(z.string()).default(["incident.created"]),
+    }),
+    secrets: z.object({ accountSid: z.string().min(1), authToken: z.string().min(1) }),
+    create: (c, s) => ({
+      kind: "notify",
+      provider: new VoiceNotifier(
+        { from: String(c.from), mode: c.mode === "live" ? "live" : "fixture" },
+        { accountSid: String(s.accountSid), authToken: String(s.authToken) },
+      ),
+    }),
+  },
+  {
+    provider: "email",
+    name: "Email (SMTP)",
+    category: "collaboration",
+    description: "Sends the incident update through an SMTP relay. Fixture mode records delivery without opening a socket.",
+    status: "available",
+    capabilities: ["notify"],
+    remotePermissions: ["SMTP username and password for the relay"],
+    config: z.object({
+      host: z.string().min(1),
+      port: z.number().int().min(1).max(65535).default(587),
+      from: z.string().email(),
+      mode: z.enum(["fixture", "live"]).default("fixture"),
+      events: z.array(z.string()).default(["incident.created"]),
+    }),
+    secrets: z.object({ username: z.string().min(1), password: z.string().min(1) }),
+    create: (c, s) => ({
+      kind: "notify",
+      provider: new EmailNotifier(
+        { host: String(c.host), port: Number(c.port), from: String(c.from), mode: c.mode === "live" ? "live" : "fixture" },
+        { username: String(s.username), password: String(s.password) },
+      ),
+    }),
+  },
   planned("jira", "Jira", "ticketing", ["ticket"], "Incident ↔ issue sync."),
   planned("servicenow", "ServiceNow", "ticketing", ["ticket"], "Security incident ↔ SIR sync."),
 ];

@@ -19,7 +19,7 @@ export default function TwoFactorPage() {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center px-4">
+    <main className="grid min-h-screen place-items-center px-4 font-sans">
       <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-lg border border-border bg-surface p-5">
         <Wordmark />
         <div>

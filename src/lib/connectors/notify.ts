@@ -7,10 +7,19 @@ export type Notification = {
   severity?: string;
   url: string;
   summary: string;
+  /** Phone or email the escalation step selected. Webhooks ignore it. */
+  to?: string;
+};
+
+export type DeliveryReceipt = {
+  status: "sent" | "failed";
+  providerRef: string | null;
+  detail: string;
 };
 
 export interface Notifier {
   send(n: Notification): Promise<void>;
+  deliver(n: Notification): Promise<DeliveryReceipt>;
 }
 
 export class WebhookNotifier implements Notifier {
@@ -46,5 +55,14 @@ export class WebhookNotifier implements Notifier {
     }
     const res = await fetch(this.url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(10_000) });
     if (!res.ok) throw new Error(`webhook ${res.status}`);
+  }
+
+  async deliver(n: Notification): Promise<DeliveryReceipt> {
+    try {
+      await this.send(n);
+      return { status: "sent", providerRef: null, detail: "webhook accepted" };
+    } catch (err) {
+      return { status: "failed", providerRef: null, detail: err instanceof Error ? err.message : "webhook failed" };
+    }
   }
 }
