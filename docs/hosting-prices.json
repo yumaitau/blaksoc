@@ -1,0 +1,70 @@
+{
+  "fetchedAt": "2026-09-29",
+  "aws": {
+    "offer": "AmazonES",
+    "publicationDate": "2026-09-27T12:24:24Z",
+    "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonES/20260927122424/",
+    "instance": {
+      "instanceType": "t3.small.search",
+      "vcpu": "2",
+      "memoryGib": "2",
+      "storage": "EBS Only",
+      "unit": "Hrs",
+      "regions": [
+        {
+          "region": "ap-southeast-2",
+          "location": "Asia Pacific (Sydney)",
+          "usd": "0.0560000000",
+          "usagetype": "APS2-ESInstance:t3.small"
+        },
+        {
+          "region": "ap-southeast-4",
+          "location": "Asia Pacific (Melbourne)",
+          "usd": "0.0560000000",
+          "usagetype": "APS6-ESInstance:t3.small"
+        }
+      ]
+    },
+    "gp3StoragePerGbMonth": [
+      {
+        "region": "ap-southeast-2",
+        "usd": "0.1464000000",
+        "unit": "GB-Mo",
+        "usagetype": "APS2-ES:GP3-Storage"
+      },
+      {
+        "region": "ap-southeast-4",
+        "usd": "0.1460000000",
+        "unit": "GB-Mo",
+        "usagetype": "APS6-ES:GP3-Storage"
+      }
+    ]
+  },
+  "australianIaas": {
+    "provider": "Binary Lane",
+    "currency": "AUD",
+    "tax": "exclusive of GST",
+    "api": "https://api.binarylane.com.au/v2/sizes",
+    "page": "https://www.binarylane.com.au/vps-hosting/linux-vps",
+    "sizes": [
+      {
+        "slug": "cpu-6thr",
+        "vcpus": 6,
+        "memoryMb": 12288,
+        "diskGb": 200,
+        "audMonthly": 108,
+        "audHourly": 0.15,
+        "regions": ["syd", "mel", "bne", "per"]
+      },
+      {
+        "slug": "cpu-8thr",
+        "vcpus": 8,
+        "memoryMb": 16384,
+        "diskGb": 300,
+        "audMonthly": 144,
+        "audHourly": 0.2,
+        "regions": ["syd", "mel", "bne", "per"]
+      }
+    ]
+  }
+}

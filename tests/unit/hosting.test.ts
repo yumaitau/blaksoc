@@ -1,11 +1,14 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { connectorDef } from "@/lib/connectors/registry";
 import { FileArchiveStore } from "@/lib/hosting/store";
+import { openctiIndicatorRequest, searchBulkBody } from "@/lib/hosting/plane-load";
 import { assertDataPlaneStoresInAustralia, assertHostingEnv, assertSearchNodeInAustralia, componentsOutsideAustralia, egressOpensTheWorld, firstSearchNodeAttributes, helmBlockScalar, helmScalar, HOSTING_COMPONENT_NAMES, hostingComponents, type DataPlaneRegions } from "@/lib/hosting/profile";
+import { assertAuRegion } from "@/lib/syslog/retain";
 
 const roots: string[] = [];
 
@@ -112,6 +115,35 @@ describe("hosting profile", () => {
     expect(compose.services["opencti-minio"].image).toBe("chainguard/minio:latest");
     expect(compose.services.opencti.environment.BLAKSOC_REGION).toBe("${OPENCTI_REGION:-ap-southeast-2}");
     expect(wazuh.services["wazuh.indexer"].environment["node.attr.region"]).toBe("ap-southeast-2");
+    const entry = parse(await readFile(path.join(root, "deploy/wazuh/indexer-region.yml"), "utf8")) as {
+      services: { "wazuh.indexer": { entrypoint: string[] } };
+    };
+    const raw = entry.services["wazuh.indexer"].entrypoint[2] ?? "";
+    // Compose turns `$$` into `$` before the container sees the script.
+    const script = raw.replaceAll("$$", "$");
+    expect(entry.services["wazuh.indexer"].entrypoint[0]).toBe("/bin/bash");
+    expect(raw).toContain("$$(printenv 'node.attr.region')");
+    expect(script).toContain("exec /entrypoint.sh opensearchwrapper");
+    const confDir = await mkdtemp(path.join(tmpdir(), "blaksoc-wazuh-"));
+    roots.push(confDir);
+    const conf = path.join(confDir, "opensearch.yml");
+    await writeFile(conf, 'network.host: "0.0.0.0"\n');
+    execFileSync("bash", ["-c", script], {
+      env: { ...process.env, BLAKSOC_INDEXER_CONFIG: conf, "node.attr.region": "ap-southeast-2" },
+    });
+    expect(await readFile(conf, "utf8")).toContain("node.attr.region: ap-southeast-2\n");
+    execFileSync("bash", ["-c", script], {
+      env: { ...process.env, BLAKSOC_INDEXER_CONFIG: conf, "node.attr.region": "ap-southeast-4" },
+    });
+    const written = await readFile(conf, "utf8");
+    expect(written).toContain("node.attr.region: ap-southeast-4\n");
+    expect(written).not.toContain("ap-southeast-2");
+    expect(() =>
+      execFileSync("bash", ["-c", script], {
+        env: { ...process.env, BLAKSOC_INDEXER_CONFIG: conf, "node.attr.region": "us-east-1" },
+        stdio: "pipe",
+      }),
+    ).toThrow(/Australia/);
     assertDataPlaneStoresInAustralia({ opensearch: "ap-southeast-2", wazuhIndexer: "ap-southeast-2", opencti: "ap-southeast-2" });
 
     const observed = {
@@ -141,8 +173,86 @@ describe("hosting profile", () => {
       expect(doc).toContain(row.httpP95Ms);
       expect(doc).toContain(String(row.serverRssBytes));
     }
-    expect(doc).toContain("were not measured");
+    expect(doc).toContain("was not measured");
     expect(worker).toContain('name: "syslog-retain", every: 60 * 60_000');
     expect(doc).toContain("1 hour");
+  });
+
+  it("builds Australian search and OpenCTI load bodies and quotes published AU prices", async () => {
+    const bulk = searchBulkBody("ap-southeast-2", 2, "blaksoc-load");
+    const lines = bulk.trim().split("\n");
+    expect(lines).toHaveLength(4);
+    expect(JSON.parse(lines[0]!)).toEqual({ index: { _index: "blaksoc-load", _id: "0" } });
+    expect(JSON.parse(lines[1]!)).toMatchObject({ region: "ap-southeast-2", n: 0 });
+    expect(() => searchBulkBody("us-east-1", 1, "blaksoc-load")).toThrow(/Australia/);
+
+    const indicator = JSON.parse(openctiIndicatorRequest("ap-southeast-4", 3, "2026-09-29T00:00:00.000Z")) as {
+      variables: { input: { name: string; pattern: string; valid_from: string } };
+    };
+    expect(indicator.variables.input.name).toBe("blaksoc-load-ap-southeast-4-3");
+    expect(indicator.variables.input.pattern).toBe("[domain-name:value = 'load-3.invalid']");
+    expect(indicator.variables.input.valid_from).toBe("2026-09-29T00:00:00.000Z");
+    expect(() => openctiIndicatorRequest("eu-west-1", 0, "2026-09-29T00:00:00.000Z")).toThrow(/Australia/);
+
+    const root = path.resolve(import.meta.dirname, "../..");
+    const prices = JSON.parse(await readFile(path.join(root, "docs/hosting-prices.json"), "utf8")) as {
+      aws: {
+        instance: { instanceType: string; vcpu: string; memoryGib: string; regions: { region: string; usd: string }[] };
+        gp3StoragePerGbMonth: { region: string; usd: string; usagetype: string }[];
+      };
+      australianIaas: { sizes: { slug: string; audMonthly: number; audHourly: number; regions: string[] }[] };
+    };
+    const doc = await readFile(path.join(root, "docs/hosting.md"), "utf8");
+    expect(prices.aws.instance.instanceType).toBe("t3.small.search");
+    expect(prices.aws.instance.vcpu).toBe("2");
+    expect(prices.aws.instance.memoryGib).toBe("2");
+    for (const row of prices.aws.instance.regions) {
+      assertAuRegion(row.region);
+      expect(row.usd.startsWith("0.056")).toBe(true);
+    }
+    for (const row of prices.aws.gp3StoragePerGbMonth) assertAuRegion(row.region);
+    expect(doc).toContain("0.056");
+    expect(doc).toContain("0.1464");
+    expect(doc).toContain("0.146");
+    expect(doc).toContain("t3.small.search");
+    expect(doc).toContain("APS2-ES:GP3-Storage");
+    expect(doc).toContain("APS6-ES:GP3-Storage");
+    for (const size of prices.australianIaas.sizes) {
+      expect(size.regions).not.toContain("sin");
+      expect(doc).toContain(size.slug);
+      expect(doc).toContain(`${size.audMonthly} | ${size.audHourly}`);
+    }
+    expect(doc).toContain("https://api.binarylane.com.au/v2/sizes");
+    expect(doc).toContain("not an invoice");
+
+    const plane = JSON.parse(await readFile(path.join(root, "docs/hosting-plane.json"), "utf8")) as {
+      host: { egressCountry: string; awsAccount: boolean; dataDiskPercent: number };
+      opensearch: { version: string; region: string; profiles: { tenants: number; serverTookMs: number; clientWallMs: number; errors: boolean; mem: string }[] };
+      wazuhIndexer: { region: string; profiles: { serverTookMs: number; clientWallMs: number; errors: boolean; mem: string }[] };
+      opencti: { region: string; searchRegion: string; readName: string; profiles: { calls: number; wallMs: number; readOk: boolean; mem: string }[] };
+    };
+    expect(plane.host.egressCountry).toBe("AU");
+    expect(plane.host.awsAccount).toBe(false);
+    assertAuRegion(plane.opensearch.region);
+    assertAuRegion(plane.wazuhIndexer.region);
+    assertAuRegion(plane.opencti.region);
+    assertAuRegion(plane.opencti.searchRegion);
+    expect(plane.opensearch.version).toBe("2.19.6");
+    expect(plane.opensearch.profiles.map((row) => row.tenants)).toEqual([10, 50, 200]);
+    for (const row of [...plane.opensearch.profiles, ...plane.wazuhIndexer.profiles]) {
+      expect(row.errors).toBe(false);
+      expect(doc).toContain(String(row.serverTookMs));
+      expect(doc).toContain(String(row.clientWallMs));
+      expect(doc).toContain(row.mem);
+    }
+    for (const row of plane.opencti.profiles) {
+      expect(row.readOk).toBe(true);
+      expect(doc).toContain(String(row.wallMs));
+      expect(doc).toContain(row.mem);
+    }
+    expect(doc).toContain(plane.opencti.readName);
+    expect(doc).toContain("flood-stage");
+    expect(doc).toContain("not in an AWS account");
+    expect(doc).toContain(String(plane.host.dataDiskPercent));
   });
 });

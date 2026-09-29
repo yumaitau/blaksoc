@@ -48,12 +48,5 @@
       "serverCpuUserUs": 370923,
       "serverCpuSystemUs": 850405
     }
-  ],
-  "notMeasured": [
-    "opensearch",
-    "wazuh-indexer",
-    "opencti",
-    "australian-iaas-price",
-    "aws-price"
   ]
 }

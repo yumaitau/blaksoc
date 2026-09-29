@@ -1,0 +1,49 @@
+{
+  "measuredAt": "2026-09-29",
+  "host": {
+    "engine": "OrbStack",
+    "serverVersion": "29.4.0",
+    "mem": "47.03GiB",
+    "egressCountry": "AU",
+    "awsAccount": false,
+    "dataDiskPercent": 95,
+    "dataDiskFree": "12.4gb"
+  },
+  "opensearch": {
+    "image": "opensearchproject/opensearch:2",
+    "version": "2.19.6",
+    "region": "ap-southeast-2",
+    "profiles": [
+      { "tenants": 10, "objects": 200, "serverTookMs": 146, "clientWallMs": 665.12, "errors": false, "count": 200, "mem": "2.653GiB" },
+      { "tenants": 50, "objects": 1000, "serverTookMs": 176, "clientWallMs": 760.7, "errors": false, "count": 1000, "mem": "2.677GiB" },
+      { "tenants": 200, "objects": 4000, "serverTookMs": 160, "clientWallMs": 703.65, "errors": false, "count": 4000, "mem": "2.689GiB" }
+    ]
+  },
+  "wazuhIndexer": {
+    "image": "wazuh/wazuh-indexer:4.14.8",
+    "region": "ap-southeast-2",
+    "profiles": [
+      { "tenants": 10, "objects": 200, "serverTookMs": 180, "clientWallMs": 851.7, "errors": false, "count": 200, "mem": "1.44GiB" },
+      { "tenants": 50, "objects": 1000, "serverTookMs": 166, "clientWallMs": 927.09, "errors": false, "count": 1000, "mem": "1.474GiB" },
+      { "tenants": 200, "objects": 4000, "serverTookMs": 194, "clientWallMs": 884.06, "errors": false, "count": 4000, "mem": "1.532GiB" }
+    ]
+  },
+  "opencti": {
+    "image": "opencti/platform:6.8.0",
+    "region": "ap-southeast-2",
+    "searchRegion": "ap-southeast-2",
+    "readName": "blaksoc-load-ap-southeast-2-0",
+    "profiles": [
+      { "tenants": 10, "calls": 200, "wallMs": 5196, "readOk": true, "mem": "357MiB" },
+      { "tenants": 50, "calls": 1000, "wallMs": 20825, "readOk": true, "mem": "335.6MiB" },
+      { "tenants": 200, "calls": 4000, "wallMs": 73931, "readOk": true, "mem": "349.7MiB" }
+    ],
+    "stackMemAfter": {
+      "platform": "256.8MiB",
+      "search": "2.896GiB",
+      "minio": "86.1MiB",
+      "rabbitmq": "116.2MiB",
+      "redis": "11.54MiB"
+    }
+  }
+}

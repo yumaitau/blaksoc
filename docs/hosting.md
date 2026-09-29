@@ -1,6 +1,6 @@
 # Hosting profile
 
-Shared control plane and a single-node k3s install. The load table is the output of `pnpm exec tsx scripts/hosting-load.ts docs/hosting-load.json`. That command runs k6 against the file object store in `src/lib/hosting/store.ts`. OpenSearch, the Wazuh indexer, OpenCTI, Australian IaaS prices, and AWS prices were not measured. Do not read this page as a bill.
+Shared control plane and a single-node k3s install. The archive table is the output of `pnpm exec tsx scripts/hosting-load.ts docs/hosting-load.json`. That command runs k6 against the file object store in `src/lib/hosting/store.ts`. OpenSearch, the Wazuh indexer, and OpenCTI numbers are in the data-plane section. Public list prices are not a bill and are not a sized cluster for 10, 50, or 200 tenants.
 
 ## Measured archive load
 
@@ -13,6 +13,67 @@ k6 v2.3.0 on Darwin arm64, Node v22.23.1, Apple M4, 10 CPUs, 17179869184 bytes o
 | 200 | 4000 | 808000 | 813.22 | 0.23 | 0.43 | 91553792 | 370923 | 850405 |
 
 The same run rejected a `us-east-1` put. Raw rows are in `docs/hosting-load.json`.
+
+## Measured data plane
+
+Measured 2026-09-29 on OrbStack 29.4.0 with 47.03 GiB RAM. The egress country of that host was AU. This run was not in an AWS account. Each tenant is 20 documents. OpenSearch and the Wazuh indexer report the bulk API `took` time. Client wall includes the SSH hop to the Docker host. OpenCTI wall is the time inside the platform container for that many `indicatorAdd` calls. Raw rows are in `docs/hosting-plane.json`.
+
+The OpenSearch node API returned region `ap-southeast-2` (OpenSearch 2.19.6). One stored document read back with that region. The Wazuh indexer image `wazuh/wazuh-indexer:4.14.8` returned the same region after `deploy/wazuh/indexer-region.yml` wrote `node.attr.region` into `opensearch.yml`. One stored document read back with that region. OpenCTI `opencti/platform:6.8.0` had `BLAKSOC_REGION` set to `ap-southeast-2` and wrote into that OpenSearch. One indicator read back was named `blaksoc-load-ap-southeast-2-0`.
+
+The OpenSearch data disk on that host was 95 percent full, with 12.4 GB free. The first OpenCTI `indicatorAdd` hit a flood-stage read-only block. The throwaway cluster's disk watermark was raised and the block was cleared. The calls below then succeeded. MinIO does not advertise a storage region. The platform, search, MinIO, RabbitMQ, and Redis processes were on this same host.
+
+### OpenSearch bulk
+
+| Tenants | Objects | Server took ms | Client wall ms | Errors | Count | Container memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10 | 200 | 146 | 665.12 | false | 200 | 2.653GiB |
+| 50 | 1000 | 176 | 760.7 | false | 1000 | 2.677GiB |
+| 200 | 4000 | 160 | 703.65 | false | 4000 | 2.689GiB |
+
+### Wazuh indexer bulk
+
+| Tenants | Objects | Server took ms | Client wall ms | Errors | Count | Container memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| 10 | 200 | 180 | 851.7 | false | 200 | 1.44GiB |
+| 50 | 1000 | 166 | 927.09 | false | 1000 | 1.474GiB |
+| 200 | 4000 | 194 | 884.06 | false | 4000 | 1.532GiB |
+
+### OpenCTI indicatorAdd
+
+| Tenants | Calls | Wall ms | Read back | Container memory |
+| --- | --- | --- | --- | --- |
+| 10 | 200 | 5196 | true | 357MiB |
+| 50 | 1000 | 20825 | true | 335.6MiB |
+| 200 | 4000 | 73931 | true | 349.7MiB |
+
+After the 200-tenant run the containers were using 256.8MiB (platform), 2.896GiB (OpenSearch), 86.1MiB (MinIO), 116.2MiB (RabbitMQ), and 11.54MiB (Redis).
+
+## Public list prices
+
+Fetched 2026-09-29. Raw rows are in `docs/hosting-prices.json`. These rates are what the publishers listed. They are not an invoice and not a recommendation of how many nodes 10, 50, or 200 tenants need.
+
+### AWS OpenSearch
+
+Public offer `AmazonES`, publication `2026-09-27T12:24:24Z`. On-demand USD per hour. The offer attributes for `t3.small.search` are 2 vCPU, 2 GiB memory, EBS only.
+
+| Instance | vCPU | Memory GiB | ap-southeast-2 USD/hr | ap-southeast-4 USD/hr |
+| --- | --- | --- | --- | --- |
+| t3.small.search | 2 | 2 | 0.056 | 0.056 |
+
+gp3 storage, USD per GB-month: `0.1464` in ap-southeast-2 (`APS2-ES:GP3-Storage`), `0.146` in ap-southeast-4 (`APS6-ES:GP3-Storage`).
+
+Source prefix: `https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonES/20260927122424/`
+
+### Australian-owned IaaS
+
+Binary Lane sizes API `https://api.binarylane.com.au/v2/sizes`, also shown on `https://www.binarylane.com.au/vps-hosting/linux-vps`. AUD, exclusive of GST. The page marks these CPU plans as a starting price ("From"). The API row is that starting disk. Both SKUs list Sydney, Melbourne, Brisbane, and Perth only.
+
+| Slug | vCPU | Memory MB | Disk GB | AUD / month | AUD / hour | Regions |
+| --- | --- | --- | --- | --- | --- | --- |
+| cpu-6thr | 6 | 12288 | 200 | 108 | 0.15 | syd, mel, bne, per |
+| cpu-8thr | 8 | 16384 | 300 | 144 | 0.2 | syd, mel, bne, per |
+
+Binary Lane is an Australian-owned VPS host. This table is not an IRAP sovereign-cloud rate card. Fetches of `https://www.vaultcloud.com.au/` and `https://macquariecloudservices.com/` on the same day returned no readable VM price, so no figure from those providers is listed.
 
 ## Chart requests
 
@@ -52,4 +113,4 @@ The OpenCTI compose profile sets OpenSearch `node.attr.region` from `OPENSEARCH_
 
 `minio/minio` is not publicly pullable. The compose file uses `chainguard/minio:latest`, which still runs `minio server`. MinIO does not advertise a storage region. The OpenCTI service carries `BLAKSOC_REGION` from `OPENCTI_REGION`.
 
-A world-open egress CIDR fails `egressOpensTheWorld`. Load numbers and prices for OpenSearch, the Wazuh indexer, and OpenCTI were not measured.
+A world-open egress CIDR fails `egressOpensTheWorld`. The data-plane section records the region read back from the live OpenSearch and Wazuh indexer APIs, and the OpenCTI indicator stored on that host.
