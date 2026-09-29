@@ -7,6 +7,7 @@ import { advanceRun, resumeRun } from "@/lib/soar/engine";
 import { executeResponseAction } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
+import { runDueHealth } from "@/lib/services/health";
 import { runDueSurface } from "@/lib/services/surface";
 
 const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOString()}] [${scope}] ${m}`);
@@ -18,7 +19,10 @@ const handlers: Record<QueueName, Handler> = {
   [QUEUES.sync]: async (job) => {
     if (job.name === "assets") return syncAllAssets(log("sync"));
     if (job.name === "vulns") return syncAllVulnerabilities(log("sync"));
-    if (job.name === "health") return probeHealth(log("health"));
+    if (job.name === "health") {
+      await probeHealth(log("health"));
+      return runDueHealth();
+    }
   },
   [QUEUES.playbook]: async (job) => {
     const { tenantId, runId } = job.data as { tenantId: string; runId: string };

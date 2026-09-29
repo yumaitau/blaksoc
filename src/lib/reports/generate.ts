@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte, ne, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { alerts, approvals, assets, cveIntel, detectionDeployments, incidentNotes, incidents, intelMatches, reports, responseActions, sigmaRules, tenants, vulnerabilities } from "@/db/schema";
 import type { ReportContent, ReportSection } from "./types";
@@ -116,6 +116,12 @@ export async function buildReport(tx: Tx, tenantId: string, kind: ReportKind, op
   if (kind === "threat_intel" || kind === "monthly_exec" || kind === "weekly") {
     const m = await tx.select({ summary: intelMatches.summary, matchedAt: intelMatches.matchedAt }).from(intelMatches).where(and(eq(intelMatches.tenantId, tenantId), gte(intelMatches.matchedAt, start))).orderBy(desc(intelMatches.matchedAt)).limit(50);
     sections.push({ heading: "Threat intelligence observed in your environment", basis: "observed", table: { columns: ["Indicator", "Verdict", "Source", "Associations", "Seen"], rows: m.map((x) => [x.summary.observable.value, x.summary.verdict, x.summary.source ?? "OpenCTI", [...x.summary.malware, ...x.summary.intrusionSets, ...x.summary.threatActors].slice(0, 3).join(", "), fmt(x.matchedAt)]) } });
+  }
+
+  if (kind === "weekly") {
+    const [seen] = await tx.select({ n: sql<number>`count(*)::int` }).from(assets).where(and(eq(assets.tenantId, tenantId), inArray(assets.kind, ["endpoint", "server"]), gte(assets.lastSeen, start)));
+    const [openHealth] = await tx.select({ n: sql<number>`count(*)::int` }).from(alerts).where(and(eq(alerts.tenantId, tenantId), eq(alerts.source, "health"), notInArray(alerts.status, ["RESOLVED", "FALSE_POSITIVE"])));
+    sections.push({ heading: "Coverage", basis: "observed", body: `${seen?.n ?? 0} endpoints seen this week. ${openHealth?.n ?? 0} open health alerts.` });
   }
 
   if (kind === "detection_coverage") {
