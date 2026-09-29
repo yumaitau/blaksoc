@@ -37,6 +37,7 @@ export default async function MsspPage() {
                 <TH className="text-right">Alerts</TH>
                 <TH className="text-right">Incidents</TH>
                 <TH className="text-right">Endpoints</TH>
+                <TH>Health</TH>
                 <TH className="text-right">KEV exposure</TH>
                 <TH>Last alert</TH>
                 <TH>Sectors</TH>
@@ -66,6 +67,7 @@ export default async function MsspPage() {
                     <Link href={`/assets?tenant=${r.id}&kind=endpoint`} className="num hover:text-accent">{r.endpoints}</Link>
                     {r.endpointsOffline ? <Badge variant="warn" className="ml-2">{r.endpointsOffline} offline</Badge> : null}
                   </TD>
+                  <TD>{r.healthAlerts ? <Badge variant="warn">degraded</Badge> : <Badge variant="ok">ok</Badge>}</TD>
                   <TD className="text-right">
                     <Link href={`/vulnerabilities?tenant=${r.id}&kev=1`} className={cn("num hover:text-accent", r.kevExposure ? "font-semibold text-sev-critical" : "text-muted")}>{r.kevExposure}</Link>
                   </TD>

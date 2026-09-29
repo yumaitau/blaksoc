@@ -33,7 +33,7 @@ export function LiveUpdates() {
   }, [router]);
 
   return (
-    <div className="flex min-w-0 items-center gap-2 text-xs text-muted" aria-live="polite">
+    <div className="flex shrink-0 items-center gap-2 text-xs text-muted" aria-live="polite">
       {last ? <span className="hidden max-w-80 truncate lg:inline">{last.type.replace(".", " ")}: {last.title ?? last.summary ?? ""}</span> : null}
       <span className={cn("inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5", connected ? "text-ok" : "text-faint")}>
         <span className={cn("size-1.5 rounded-full", connected ? "animate-pulse bg-ok" : "bg-faint")} />

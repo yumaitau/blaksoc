@@ -50,11 +50,13 @@ export function AppShell({ ctx, workspace, children }: { ctx: AccessContext; wor
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-border bg-bg/85 px-4 backdrop-blur md:px-6">
-          <div className="flex items-center gap-3 md:hidden">
-            <Wordmark />
+        <header className="sticky top-0 z-30 flex h-14 min-w-0 items-center justify-between gap-2 border-b border-border bg-bg/85 px-4 backdrop-blur md:gap-4 md:px-6">
+          <div className="flex min-w-0 flex-1 items-center gap-2 md:flex-none md:gap-3">
+            <div className="shrink-0 md:hidden">
+              <Wordmark />
+            </div>
+            {customers.length > 1 || ctx.isPlatform ? <WorkspaceSwitcher tenants={customers} current={workspace} /> : <div className="truncate text-sm font-medium">{customers[0]?.name}</div>}
           </div>
-          {customers.length > 1 || ctx.isPlatform ? <WorkspaceSwitcher tenants={customers} current={workspace} /> : <div className="text-sm font-medium">{customers[0]?.name}</div>}
           <LiveUpdates />
         </header>
         <main className="min-w-0 flex-1 px-4 py-6 md:px-6">{children}</main>

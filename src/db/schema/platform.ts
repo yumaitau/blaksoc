@@ -1,4 +1,4 @@
-import { boolean, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid, index } from "drizzle-orm/pg-core";
+import { boolean, integer, jsonb, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid, index } from "drizzle-orm/pg-core";
 import { user } from "./auth";
 
 export const tenantKind = pgEnum("tenant_kind", ["mssp", "customer"]);
@@ -35,12 +35,21 @@ export type AiPolicy = {
   redactPii: boolean;
 };
 
+/** Optional telemetry limits. Absent fields use the code defaults. */
+export type HealthPolicy = {
+  silentHours?: number;
+  pollLagMinutes?: number;
+  dmarcStaleHours?: number;
+  sigmaStaleHours?: number;
+};
+
 export type TenantSettings = {
   sharing: SharingPolicy;
   ai: AiPolicy;
   /** Admin opt-in: playbooks may run destructive containment without a human gate. */
   autoContainment: boolean;
   slaMinutes: { critical: number; high: number; medium: number; low: number };
+  health?: HealthPolicy;
 };
 
 export const DEFAULT_TENANT_SETTINGS: TenantSettings = {
@@ -70,6 +79,16 @@ export const sites = pgTable("sites", {
   timezone: text("timezone").notNull().default("Australia/Sydney"),
   /** standard or low. Low is the satellite / congested-link agent profile. */
   bandwidthProfile: text("bandwidth_profile").notNull().default("standard"),
+  /** Silence override in hours. Null uses the tenant limit, then the profile default. */
+  silentHours: integer("silent_hours"),
+});
+
+/** Last healthy detection coverage. A drop against this row raises one alert. */
+export const healthBaselines = pgTable("health_baselines", {
+  tenantId: uuid("tenant_id").primaryKey().references(() => tenants.id, { onDelete: "cascade" }),
+  techniqueCount: integer("technique_count").notNull(),
+  ruleCount: integer("rule_count").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const roleScope = pgEnum("role_scope", ["platform", "tenant"]);

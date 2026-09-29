@@ -126,14 +126,15 @@ export async function msspOverview(ctx: AccessContext) {
     tx
       .select({
         id: tenants.id, slug: tenants.slug, name: tenants.name, sectors: tenants.sectors, deploymentMode: tenants.deploymentMode,
-        risk: sql<number>`coalesce((select max(a.risk_score) from alerts a where a.tenant_id = ${tenants.id} and a.status not in ('RESOLVED','FALSE_POSITIVE')), 0)::int`,
-        alerts: sql<number>`(select count(*) from alerts a where a.tenant_id = ${tenants.id} and a.status not in ('RESOLVED','FALSE_POSITIVE'))::int`,
-        criticalAlerts: sql<number>`(select count(*) from alerts a where a.tenant_id = ${tenants.id} and a.status = 'NEW' and a.risk_score >= 70)::int`,
-        incidents: sql<number>`(select count(*) from incidents i where i.tenant_id = ${tenants.id} and i.status <> 'CLOSED')::int`,
-        endpoints: sql<number>`(select count(*) from assets s where s.tenant_id = ${tenants.id} and s.kind in ('endpoint','server'))::int`,
-        endpointsOffline: sql<number>`(select count(*) from assets s where s.tenant_id = ${tenants.id} and s.kind in ('endpoint','server') and s.agent_status is not null and s.agent_status <> 'active')::int`,
-        kevExposure: sql<number>`(select count(*) from vulnerabilities v join cve_intel c on c.cve = v.cve where v.tenant_id = ${tenants.id} and v.status = 'open' and c.kev)::int`,
-        lastAlertAt: sql<Date | null>`(select max(a.occurred_at) from alerts a where a.tenant_id = ${tenants.id})`,
+        risk: sql<number>`coalesce((select max(a.risk_score) from alerts a where a.tenant_id = tenants.id and a.status not in ('RESOLVED','FALSE_POSITIVE')), 0)::int`,
+        alerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.status not in ('RESOLVED','FALSE_POSITIVE'))::int`,
+        criticalAlerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.status = 'NEW' and a.risk_score >= 70)::int`,
+        incidents: sql<number>`(select count(*) from incidents i where i.tenant_id = tenants.id and i.status <> 'CLOSED')::int`,
+        endpoints: sql<number>`(select count(*) from assets s where s.tenant_id = tenants.id and s.kind in ('endpoint','server'))::int`,
+        endpointsOffline: sql<number>`(select count(*) from assets s where s.tenant_id = tenants.id and s.kind in ('endpoint','server') and s.agent_status is not null and s.agent_status <> 'active')::int`,
+        kevExposure: sql<number>`(select count(*) from vulnerabilities v join cve_intel c on c.cve = v.cve where v.tenant_id = tenants.id and v.status = 'open' and c.kev)::int`,
+        lastAlertAt: sql<Date | null>`(select max(a.occurred_at) from alerts a where a.tenant_id = tenants.id)`,
+        healthAlerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.source = 'health' and a.status not in ('RESOLVED','FALSE_POSITIVE'))::int`,
       })
       .from(tenants)
       .where(and(inArray(tenants.id, ids), eq(tenants.kind, "customer")))
