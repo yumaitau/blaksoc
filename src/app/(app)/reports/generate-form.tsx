@@ -3,7 +3,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
-import { Label, Select } from "@/components/ui/input";
+import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { generateReportAction } from "./actions";
 
 type Option = { value: string; label: string };
@@ -24,7 +24,33 @@ export function GenerateReportForm({
   const [kind, setKind] = useState(kinds.some((k) => k.value === initial.kind) ? initial.kind! : "weekly");
   const [tenantId, setTenantId] = useState(tenants.some((t) => t.value === initial.tenant) ? initial.tenant! : (tenants[0]?.value ?? ""));
   const [incidentId, setIncidentId] = useState(initial.incident ?? "");
+  const [span, setSpan] = useState("month");
+  const [preamble, setPreamble] = useState("");
+  const [image, setImage] = useState<{ mime: string; data: string } | null>(null);
+  const [imageError, setImageError] = useState("");
   const tenantIncidents = incidents.filter((i) => i.tenantId === tenantId);
+  const board = kind === "board_summary";
+
+  function onImage(file: File | undefined) {
+    setImageError("");
+    setImage(null);
+    if (!file) return;
+    if (file.size > 80_000) {
+      setImageError("Use a PNG or JPEG image under 80 KB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      const match = url.match(/^data:(image\/(?:png|jpeg));base64,(.+)$/);
+      if (!match?.[1] || !match[2]) {
+        setImageError("Use a PNG or JPEG image under 80 KB.");
+        return;
+      }
+      setImage({ mime: match[1], data: match[2] });
+    };
+    reader.readAsDataURL(file);
+  }
 
   if (!tenants.length) return <p className="text-sm text-muted">You don&apos;t have permission to generate reports for any customer.</p>;
 
@@ -33,7 +59,14 @@ export function GenerateReportForm({
       className="grid gap-3 sm:grid-cols-[1fr_1fr_1.4fr_auto] sm:items-end"
       onSubmit={(e) => {
         e.preventDefault();
-        run(() => generateReportAction({ tenantId, kind, incidentId: kind === "incident" ? incidentId : undefined }), (d) => d && router.push(`/reports/${d.id}`));
+        run(() => generateReportAction({
+          tenantId,
+          kind,
+          incidentId: kind === "incident" ? incidentId : undefined,
+          span: board ? span : undefined,
+          preamble: board ? preamble : undefined,
+          image: board ? image : undefined,
+        }), (d) => d && router.push(`/reports/${d.id}`));
       }}
     >
       <div>
@@ -56,8 +89,27 @@ export function GenerateReportForm({
           {tenantIncidents.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
         </Select>
       </div>
-      <Button type="submit" disabled={pending || !tenantId}>{pending ? "Generating…" : "Generate"}</Button>
-      <div className="sm:col-span-4"><ActionError error={error} /></div>
+      <Button type="submit" disabled={pending || !tenantId || Boolean(imageError)}>{pending ? "Generating…" : "Generate"}</Button>
+      {board ? (
+        <div className="grid gap-3 sm:col-span-4 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="report-span">Period</Label>
+            <Select id="report-span" value={span} onChange={(e) => setSpan(e.target.value)}>
+              <option value="month">About 30 days</option>
+              <option value="quarter">About 90 days</option>
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="report-image">Image (optional, PNG or JPEG)</Label>
+            <Input id="report-image" type="file" accept="image/png,image/jpeg" onChange={(e) => onImage(e.target.files?.[0])} />
+          </div>
+          <div className="sm:col-span-2">
+            <Label htmlFor="report-preamble">Note from your group (optional)</Label>
+            <Textarea id="report-preamble" value={preamble} maxLength={600} onChange={(e) => setPreamble(e.target.value)} />
+          </div>
+        </div>
+      ) : null}
+      <div className="sm:col-span-4"><ActionError error={error || imageError} /></div>
     </form>
   );
 }

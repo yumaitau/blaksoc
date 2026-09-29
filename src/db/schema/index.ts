@@ -13,3 +13,4 @@ export * from "./essential-eight";
 export * from "./obligations";
 export * from "./surface";
 export * from "./agents";
+export * from "./board";

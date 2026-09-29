@@ -25,7 +25,7 @@ export async function getReport(ctx: AccessContext, id: string) {
   return scoped(ctx, "report:read", async (tx, ids) => (await tx.select().from(reports).where(and(eq(reports.id, id), inArray(reports.tenantId, ids))))[0] ?? null);
 }
 
-export async function generateReport(ctx: AccessContext, tenantId: string, kind: ReportKind, opts: { incidentId?: string } = {}) {
+export async function generateReport(ctx: AccessContext, tenantId: string, kind: ReportKind, opts: { incidentId?: string; span?: "month" | "quarter" } = {}) {
   assertCan(ctx, "report:generate", tenantId);
   return inTenant(ctx, "report:generate", tenantId, async (tx) => {
     const content = await buildReport(tx, tenantId, kind, opts);
