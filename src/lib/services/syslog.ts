@@ -10,6 +10,7 @@ import { connectorDef } from "@/lib/connectors/registry";
 import { parseSyslog } from "@/lib/syslog/parse";
 import { defaultArchiveStore, type ArchiveStore } from "@/lib/hosting/store";
 import { archiveKey, assertAuRegion, SYSLOG_HOT_MS } from "@/lib/syslog/retain";
+import { assertDemoOnly } from "@/lib/training/isolation";
 import { actor, inTenant } from "./common";
 
 export class SyslogError extends Error {
@@ -40,6 +41,7 @@ export async function createSyslogSource(ctx: AccessContext, tenantId: string, i
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashToken(token);
   const id = await inTenant(ctx, "integration:manage", tenantId, async (tx) => {
+    await assertDemoOnly(tx, tenantId, "syslog");
     const [source] = await tx.insert(syslogSources).values({ tenantId, name, tokenHash, allowIps }).returning({ id: syslogSources.id });
     const [existing] = await tx.select({ id: integrations.id }).from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.provider, "syslog")));
     if (!existing) {

@@ -138,7 +138,9 @@ DECLARE
     'syslog_sources','syslog_events','syslog_archive',
     'dfir_collections','dfir_hunts',
     'partner_escalations',
-    'backup_status'
+    'backup_status',
+    'training_attempts',
+    'training_cosigns'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];

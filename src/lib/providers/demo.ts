@@ -5,9 +5,17 @@ import { wazuhLevelToSeverity } from "./wazuh";
  * Synthetic Wazuh-shaped telemetry for demos and tests (DEMO_MODE=true). Never enabled
  * in production builds unless explicitly configured.
  */
-export const DEMO_SCENARIOS: {
-  ruleId: string; level: number; title: string; groups: string[]; mitre: string[]; data: Record<string, unknown>; log: string;
-}[] = [
+export type DemoEventSpec = {
+  ruleId: string;
+  level: number;
+  title: string;
+  groups: string[];
+  mitre: string[];
+  data: Record<string, unknown>;
+  log: string;
+};
+
+export const DEMO_SCENARIOS: DemoEventSpec[] = [
   { ruleId: "60122", level: 5, title: "Logon failure - unknown user or bad password", groups: ["windows", "authentication_failed"], mitre: ["T1110"],
     data: { srcip: "185.220.101.47", dstuser: "svc-backup" }, log: "An account failed to log on. Source 185.220.101.47" },
   { ruleId: "60106", level: 8, title: "Successful logon from external IP after failures", groups: ["windows", "authentication_success"], mitre: ["T1078"],
@@ -32,28 +40,44 @@ export class DemoProvider implements SecurityEventProvider {
   readonly kind = "demo";
   constructor(private readonly agents: { id: string; name: string; group: string; os: string; ip: string }[]) {}
 
+  /** One authored demo event. Training replay uses this so the queue is the scenario, not a random draw. */
+  materialise(
+    spec: DemoEventSpec,
+    agent: { id: string; name: string; ip: string },
+    externalId: string,
+    now: Date,
+    index = 0,
+  ): NormalisedAlert {
+    const user = (spec.data.dstuser ?? spec.data.srcuser ?? null) as string | null;
+    return {
+      externalId,
+      ruleId: spec.ruleId,
+      title: spec.title,
+      description: spec.log,
+      category: spec.groups[0] ?? null,
+      siemSeverity: spec.level,
+      severity: wazuhLevelToSeverity(spec.level),
+      occurredAt: new Date(now.getTime() - index * 1000),
+      assetExternalId: agent.id,
+      hostname: agent.name,
+      userName: user,
+      attackTechniques: spec.mitre,
+      routingKeys: [`agent:${agent.id}`],
+      raw: {
+        rule: { id: spec.ruleId, level: spec.level, description: spec.title, groups: spec.groups, mitre: { id: spec.mitre } },
+        agent: { id: agent.id, name: agent.name, ip: agent.ip },
+        data: spec.data,
+        full_log: spec.log,
+      },
+    };
+  }
+
   generate(count: number, now = new Date()): NormalisedAlert[] {
     return Array.from({ length: count }, (_, i) => {
-      const s = DEMO_SCENARIOS[Math.floor(Math.random() * DEMO_SCENARIOS.length)]!;
+      const spec = DEMO_SCENARIOS[Math.floor(Math.random() * DEMO_SCENARIOS.length)]!;
       const agent = this.agents[Math.floor(Math.random() * this.agents.length)]!;
       const id = `demo-${now.getTime()}-${i}-${Math.random().toString(36).slice(2, 8)}`;
-      const user = (s.data.dstuser ?? s.data.srcuser ?? null) as string | null;
-      return {
-        externalId: id,
-        ruleId: s.ruleId,
-        title: s.title,
-        description: s.log,
-        category: s.groups[0] ?? null,
-        siemSeverity: s.level,
-        severity: wazuhLevelToSeverity(s.level),
-        occurredAt: new Date(now.getTime() - i * 1000),
-        assetExternalId: agent.id,
-        hostname: agent.name,
-        userName: user,
-        attackTechniques: s.mitre,
-        routingKeys: [`agent:${agent.id}`],
-        raw: { rule: { id: s.ruleId, level: s.level, description: s.title, groups: s.groups, mitre: { id: s.mitre } }, agent: { id: agent.id, name: agent.name, ip: agent.ip }, data: s.data, full_log: s.log },
-      };
+      return this.materialise(spec, agent, id, now, i);
     });
   }
 

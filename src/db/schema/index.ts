@@ -17,3 +17,4 @@ export * from "./board";
 export * from "./syslog";
 export * from "./dfir";
 export * from "./backup";
+export * from "./training";

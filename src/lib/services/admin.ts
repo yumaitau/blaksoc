@@ -1,9 +1,10 @@
 import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db/client";
-import { auditLog, DEFAULT_TENANT_SETTINGS, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
+import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, dbScope, type AccessContext } from "@/lib/auth/access";
 import { audit, verifyAuditChain } from "@/lib/audit";
+import { TrainingIsolationError } from "@/lib/training/isolation";
 import { actor, AccessDenied } from "./common";
 
 const platformOnly = (ctx: AccessContext, perm: "tenant:manage" | "user:manage" | "settings:manage" | "audit:read") => {
@@ -31,6 +32,15 @@ export async function updateTenantSettings(ctx: AccessContext, tenantId: string,
   return withScope({ tenantIds: [tenantId], platform: true }, async (tx) => {
     const [t] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
     if (!t) throw new AccessDenied();
+    if (patch.training === true) {
+      const owned = await tx.select({ provider: integrations.provider }).from(integrations).where(eq(integrations.tenantId, tenantId));
+      const linked = await tx
+        .select({ provider: integrations.provider })
+        .from(integrationTenantLinks)
+        .innerJoin(integrations, eq(integrations.id, integrationTenantLinks.integrationId))
+        .where(eq(integrationTenantLinks.tenantId, tenantId));
+      if ([...owned, ...linked].some((row) => row.provider !== "demo")) throw new TrainingIsolationError("real");
+    }
     const settings = { ...t.settings, ...patch, sharing: { ...t.settings.sharing, ...patch.sharing }, ai: { ...t.settings.ai, ...patch.ai }, slaMinutes: { ...t.settings.slaMinutes, ...patch.slaMinutes } };
     await tx.update(tenants).set({ settings }).where(eq(tenants.id, tenantId));
     await audit(tx, { ...actor(ctx), tenantId, action: "tenant.settings", targetType: "tenant", targetId: tenantId, detail: { before: t.settings, after: settings } });
