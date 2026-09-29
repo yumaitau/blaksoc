@@ -18,6 +18,9 @@ x-app-env: &app-env
   ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
   ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
   AI_DATA_RESIDENCY: ${AI_DATA_RESIDENCY:-AU}
+  OPENSEARCH_REGION: ${OPENSEARCH_REGION:-ap-southeast-2}
+  WAZUH_INDEXER_REGION: ${WAZUH_INDEXER_REGION:-ap-southeast-2}
+  OPENCTI_REGION: ${OPENCTI_REGION:-ap-southeast-2}
   BREAK_GLASS_REQUIRE_MFA: "true"
 
 services:
@@ -74,12 +77,14 @@ services:
       discovery.type: single-node
       DISABLE_SECURITY_PLUGIN: "true"
       OPENSEARCH_JAVA_OPTS: -Xms2g -Xmx2g
+      node.attr.region: ${OPENSEARCH_REGION:-ap-southeast-2}
     ulimits: { memlock: { soft: -1, hard: -1 }, nofile: { soft: 65536, hard: 65536 } }
     volumes: [octi-search:/usr/share/opensearch/data]
 
   opencti-minio:
     profiles: [opencti]
-    image: minio/minio:latest
+    # minio/minio is not publicly pullable. This image still runs `minio server`.
+    image: chainguard/minio:latest
     restart: unless-stopped
     command: server /data
     environment: { MINIO_ROOT_USER: opencti, MINIO_ROOT_PASSWORD: "${OPENCTI_MINIO_PASSWORD:?}" }
@@ -104,6 +109,7 @@ services:
       APP__ADMIN__PASSWORD: ${OPENCTI_ADMIN_PASSWORD:?}
       APP__ADMIN__TOKEN: ${OPENCTI_ADMIN_TOKEN:?}
       APP__HEALTH_ACCESS_KEY: ${OPENCTI_HEALTH_KEY:?}
+      BLAKSOC_REGION: ${OPENCTI_REGION:-ap-southeast-2}
       REDIS__HOSTNAME: opencti-redis
       ELASTICSEARCH__URL: http://opencti-search:9200
       MINIO__ENDPOINT: opencti-minio

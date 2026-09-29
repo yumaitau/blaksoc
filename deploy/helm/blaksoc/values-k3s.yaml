@@ -7,6 +7,9 @@
 config:
   AI_DATA_RESIDENCY: AU
   BLAKSOC_ARCHIVE_DIR: /tmp/blaksoc-archive
+  OPENSEARCH_REGION: ap-southeast-2
+  WAZUH_INDEXER_REGION: ap-southeast-2
+  OPENCTI_REGION: ap-southeast-2
 
 web:
   replicas: 1
