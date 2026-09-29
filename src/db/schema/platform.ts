@@ -68,6 +68,8 @@ export const sites = pgTable("sites", {
   name: text("name").notNull(),
   location: text("location"),
   timezone: text("timezone").notNull().default("Australia/Sydney"),
+  /** standard or low. Low is the satellite / congested-link agent profile. */
+  bandwidthProfile: text("bandwidth_profile").notNull().default("standard"),
 });
 
 export const roleScope = pgEnum("role_scope", ["platform", "tenant"]);

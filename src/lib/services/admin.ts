@@ -38,9 +38,9 @@ export async function updateTenantSettings(ctx: AccessContext, tenantId: string,
   });
 }
 
-export async function createSite(ctx: AccessContext, tenantId: string, name: string, location?: string) {
+export async function createSite(ctx: AccessContext, tenantId: string, name: string, location?: string, link: "standard" | "low" = "standard") {
   assertCan(ctx, "asset:write", tenantId);
-  return withScope({ tenantIds: [tenantId], platform: false }, (tx) => tx.insert(sites).values({ tenantId, name, location }).returning());
+  return withScope({ tenantIds: [tenantId], platform: false }, (tx) => tx.insert(sites).values({ tenantId, name, location, bandwidthProfile: link }).returning());
 }
 
 /** Users visible to the caller: platform staff see all; customer admins see their tenant's users. */

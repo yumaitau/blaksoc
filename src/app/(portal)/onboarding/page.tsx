@@ -1,6 +1,6 @@
 import { COPY } from "@/lib/onboarding/copy";
 import {
-  CONTACT_CHANNELS, ONBOARDING_STEPS, ORG_TYPES, REMOTE_FLAGS,
+  BANDWIDTH_PROFILES, CONTACT_CHANNELS, ONBOARDING_STEPS, ORG_TYPES, REMOTE_FLAGS,
   type ConnectDraft, type ContactsDraft, type OnboardingStep, type OrgDraft, type PlanDraft, type StackDraft,
 } from "@/lib/onboarding/types";
 import { requireAccess } from "@/lib/auth/session";
@@ -51,6 +51,11 @@ const REMOTE_LABEL: Record<(typeof REMOTE_FLAGS)[number], string> = {
   remote: COPY.remoteYes,
   "very remote": COPY.remoteVery,
 };
+
+const LINK_LABEL = {
+  standard: COPY.linkStandard,
+  low: COPY.linkLow,
+} as const;
 
 function errorText(code: string | undefined): string | null {
   if (!code) return null;
@@ -187,12 +192,22 @@ function OrgFields({ org }: { org: OrgDraft | null }) {
           {REMOTE_FLAGS.map((flag) => <option key={flag} value={flag}>{REMOTE_LABEL[flag]}</option>)}
         </select>
       </label>
+      <label className="block text-sm">{COPY.link}
+        <select className={inputCls} name="link_1" defaultValue={loc?.link ?? "standard"}>
+          {BANDWIDTH_PROFILES.map((link) => <option key={link} value={link}>{LINK_LABEL[link]}</option>)}
+        </select>
+      </label>
       <label className="block text-sm">{COPY.location}
         <input className={inputCls} name="location_2" defaultValue={loc2?.name ?? ""} />
       </label>
       <label className="block text-sm">{COPY.remote}
         <select className={inputCls} name="remote_2" defaultValue={loc2?.remote ?? "no"}>
           {REMOTE_FLAGS.map((flag) => <option key={flag} value={flag}>{REMOTE_LABEL[flag]}</option>)}
+        </select>
+      </label>
+      <label className="block text-sm">{COPY.link}
+        <select className={inputCls} name="link_2" defaultValue={loc2?.link ?? "standard"}>
+          {BANDWIDTH_PROFILES.map((link) => <option key={link} value={link}>{LINK_LABEL[link]}</option>)}
         </select>
       </label>
     </div>

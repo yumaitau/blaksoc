@@ -55,3 +55,11 @@ integration's `activeResponse` config.
 
 **Test in a lab first.** Isolation cuts RDP/SSH; recovery is via the Wazuh manager (release
 action in blakSOC) or console access.
+
+## 4. Enrolment kits
+
+Customer administrators download pre-configured installers from **Portal → Agents**.
+Each file carries the tenant agent group, a revocable enrolment token, and either the
+standard or low-bandwidth profile selected for that site. Links expire after 15 minutes.
+See `docs/agents.md`. The official Wazuh MSI, pkg, deb, or rpm is still the agent package.
+These scripts only pin the manager, group, and profile.
