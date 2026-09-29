@@ -77,3 +77,15 @@ CREATE POLICY audit_read ON audit_log FOR SELECT
   USING (tenant_id = ANY (app_tenant_ids()) OR (tenant_id IS NULL AND app_is_platform()));
 CREATE POLICY audit_insert ON audit_log FOR INSERT
   WITH CHECK (tenant_id IS NULL OR tenant_id = ANY (app_tenant_ids()));
+
+-- Drafts exist before a tenant, so tenant_id is often null. A tenant_id policy would hide
+-- those rows and block inserts. No permissive policy: the app role sees nothing.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['onboarding_drafts'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
+  END LOOP;
+END $$;
