@@ -4,6 +4,7 @@ import { OpenCtiProvider } from "@/lib/intel/opencti";
 import type { IntelProvider } from "@/lib/intel/types";
 import { googleWorkspaceConnector } from "@/lib/providers/google/connector";
 import { entraConnector } from "@/lib/providers/m365/connector";
+import { CloudflareProvider, DefenderProvider, FortinetProvider, SophosProvider } from "@/lib/providers/containment";
 import { DemoProvider } from "@/lib/providers/demo";
 import type { SecurityEventProvider } from "@/lib/providers/types";
 import { SyslogProvider } from "@/lib/providers/syslog";
@@ -178,13 +179,73 @@ export const CONNECTORS: ConnectorDefinition[] = [
   planned("splunk", "Splunk", "siem", ["events"], "Notable events and SPL searches."),
   planned("security-onion", "Security Onion", "siem", ["events"], "NSM alerts and hunts."),
   planned("graylog", "Graylog", "siem", ["events"], "Event definitions and streams."),
-  planned("defender", "Microsoft Defender XDR", "endpoint", ["events", "assets", "response", "vulnerabilities"], "Device isolation, TVM, incidents."),
+  {
+    provider: "defender",
+    name: "Microsoft Defender XDR",
+    category: "endpoint",
+    description: "Device isolation, an antivirus scan, and the vulnerability list. Incidents come in as alerts. Release lifts isolation. Fixture results only. This build does not call Microsoft.",
+    status: "available",
+    capabilities: ["events", "assets", "response", "vulnerabilities"],
+    remotePermissions: ["Machine.Read.All", "Machine.Isolate", "Machine.Scan", "Vulnerability.Read.All", "Alert.Read.All"],
+    config: z.object({ tenantDomain: z.string().min(1), mode: z.enum(["fixture", "live"]).default("fixture") }),
+    secrets: z.object({ clientId: z.string().min(1), clientSecret: z.string().min(1) }),
+    create: (c, s) => ({ kind: "events", provider: new DefenderProvider(c as never, s as never) }),
+  },
   planned("crowdstrike", "CrowdStrike Falcon", "endpoint", ["events", "assets", "response"], "Detections and host containment."),
   planned("sentinelone", "SentinelOne", "endpoint", ["events", "assets", "response"], "Threats and network quarantine."),
   planned("active-directory", "Active Directory", "identity", ["assets", "identity_response"], "On-prem identity via LDAPS agent."),
-  planned("fortinet", "Fortinet FortiGate", "network", ["response"], "Address-group IOC blocking."),
+  {
+    provider: "fortinet",
+    name: "Fortinet FortiGate",
+    category: "network",
+    description: "Puts an indicator in one FortiGate address group. Unblock takes it out. Fixture results only. This build does not call the firewall.",
+    status: "available",
+    capabilities: ["response"],
+    remotePermissions: ["REST API admin limited to one firewall address group"],
+    config: z.object({
+      host: z.string().url(),
+      addressGroup: z.string().min(1),
+      mode: z.enum(["fixture", "live"]).default("fixture"),
+    }),
+    secrets: z.object({ apiToken: z.string().min(1) }),
+    create: (c, s) => ({ kind: "events", provider: new FortinetProvider(c as never, s as never) }),
+  },
   planned("palo-alto", "Palo Alto Networks", "network", ["response"], "EDL / dynamic address group blocking."),
-  planned("cloudflare", "Cloudflare", "network", ["response"], "WAF custom lists and Zero Trust blocks."),
+  {
+    provider: "cloudflare",
+    name: "Cloudflare",
+    category: "network",
+    description: "Puts an indicator on a WAF custom list and a Zero Trust Gateway block list. Unblock takes it off. Fixture results only. This build does not call Cloudflare.",
+    status: "available",
+    capabilities: ["response"],
+    remotePermissions: [
+      "Account API token limited to one WAF custom list",
+      "Account API token limited to one Zero Trust Gateway block list",
+    ],
+    config: z.object({
+      accountId: z.string().min(1),
+      listName: z.string().min(1).default("blaksoc-block"),
+      mode: z.enum(["fixture", "live"]).default("fixture"),
+    }),
+    secrets: z.object({ apiToken: z.string().min(1) }),
+    create: (c, s) => ({ kind: "events", provider: new CloudflareProvider(c as never, s as never) }),
+  },
+  {
+    provider: "sophos",
+    name: "Sophos Central",
+    category: "endpoint",
+    description: "Isolates an endpoint, runs an antivirus scan, and blocks an indicator on the firewall host group. Release and unblock undo those steps. Fixture results only. This build does not call Sophos.",
+    status: "available",
+    capabilities: ["events", "assets", "response"],
+    remotePermissions: ["Sophos Central endpoint isolation", "Sophos Central endpoint scan", "Sophos firewall host group edit"],
+    config: z.object({
+      centralId: z.string().min(1),
+      region: z.string().min(1).default("au"),
+      mode: z.enum(["fixture", "live"]).default("fixture"),
+    }),
+    secrets: z.object({ clientId: z.string().min(1), clientSecret: z.string().min(1) }),
+    create: (c, s) => ({ kind: "events", provider: new SophosProvider(c as never, s as never) }),
+  },
   planned("cisco", "Cisco", "network", ["response"], "Secure Firewall / Umbrella blocking."),
   planned("aws", "AWS", "cloud", ["events", "assets"], "GuardDuty, Security Hub, inventory."),
   planned("azure", "Azure", "cloud", ["events", "assets"], "Defender for Cloud, Resource Graph inventory."),
