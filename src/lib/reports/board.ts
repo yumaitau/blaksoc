@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, lte, ne, notInArray, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
-import { alerts, boardBriefs, cveIntel, e8Assessments, incidents, irExercises, responseActions, vulnerabilities } from "@/db/schema";
+import { alerts, awarenessCampaigns, awarenessClicks, boardBriefs, cveIntel, e8Assessments, incidents, irExercises, responseActions, vulnerabilities } from "@/db/schema";
 import type { BoardLight, ReportContent, ReportImage, ReportLink, ReportSection } from "./types";
 
 export type BoardSpan = "month" | "quarter";
@@ -57,6 +57,7 @@ export type BoardFacts = {
   newProblems: number;
   actionPhrases: string[];
   exercises: number;
+  awareness: { sends: number; clicks: number };
   assessment: BoardAssessment | null;
   preamble: string | null;
   links: {
@@ -66,6 +67,17 @@ export type BoardFacts = {
     essentialEight: ReportLink;
   };
 };
+
+export function awarenessBody(sends: number, clicks: number): string {
+  if (sends === 0) return "No practice send was scheduled in this time.";
+  const send = sends === 1 ? "One practice send was scheduled." : `${sends} practice sends were scheduled.`;
+  const click = clicks === 0
+    ? "No practice click was recorded."
+    : clicks === 1
+      ? "One practice click was recorded."
+      : `${clicks} practice clicks were recorded.`;
+  return `${send} ${click} No person is named here.`;
+}
 
 export function boardSpanDays(span: BoardSpan): number {
   return span === "quarter" ? 90 : 30;
@@ -204,6 +216,11 @@ export function boardSections(facts: BoardFacts): ReportSection[] {
         ? "One tabletop exercise was finished in this time."
         : `${facts.exercises} tabletop exercises were finished in this time.`,
   });
+  sections.push({
+    heading: "Awareness",
+    basis: "observed",
+    body: awarenessBody(facts.awareness.sends, facts.awareness.clicks),
+  });
   sections.push({ heading: "Decisions for the board", basis: "interpretation", author: "system", body: decisions.join(" ") });
   sections.push({
     heading: "Essential Eight progress",
@@ -271,6 +288,14 @@ export async function buildBoardContent(
     .select({ n: sql<number>`count(*)::int` })
     .from(irExercises)
     .where(and(eq(irExercises.tenantId, tenantId), gte(irExercises.completedAt, opts.start), lte(irExercises.completedAt, opts.end)));
+  const [sends] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(awarenessCampaigns)
+    .where(and(eq(awarenessCampaigns.tenantId, tenantId), eq(awarenessCampaigns.consented, true), gte(awarenessCampaigns.scheduledAt, opts.start), lte(awarenessCampaigns.scheduledAt, opts.end)));
+  const [clicks] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(awarenessClicks)
+    .where(and(eq(awarenessClicks.tenantId, tenantId), gte(awarenessClicks.clickedAt, opts.start), lte(awarenessClicks.clickedAt, opts.end)));
 
   const openCritical = num(open?.critical);
   const openHigh = num(open?.high);
@@ -300,6 +325,7 @@ export async function buildBoardContent(
     newProblems: num(fresh?.n),
     actionPhrases: acts.map((row) => boardActionPhrase(row.action)),
     exercises: num(practice?.n),
+    awareness: { sends: num(sends?.n), clicks: num(clicks?.n) },
     assessment: stored,
     preamble: brief?.preamble ?? null,
     links: {

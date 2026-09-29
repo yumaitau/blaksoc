@@ -17,6 +17,7 @@ function facts(patch: Partial<BoardFacts> = {}): BoardFacts {
     newProblems: 0,
     actionPhrases: [],
     exercises: 0,
+    awareness: { sends: 0, clicks: 0 },
     assessment: null,
     preamble: null,
     links: {
@@ -84,6 +85,7 @@ describe("board summary prose", () => {
       "What happened",
       "What we did",
       "Practice",
+      "Awareness",
       "Decisions for the board",
       "Essential Eight progress",
       "Words we use",
