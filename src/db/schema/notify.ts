@@ -16,7 +16,7 @@ export const notificationDeliveries = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    incidentId: uuid("incident_id").notNull().references(() => incidents.id, { onDelete: "cascade" }),
+    incidentId: uuid("incident_id").references(() => incidents.id, { onDelete: "cascade" }),
     provider: text("provider").notNull(),
     channel: text("channel").notNull(),
     destination: text("destination").notNull(),
