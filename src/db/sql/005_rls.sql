@@ -56,15 +56,33 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   )
 $$;
 
+-- Grafana and other read-only tools log in as their own role. The mapping is
+-- session_user: inside a security definer function current_user is the owner.
+-- A dash_ login never consults the settable app.tenant_ids GUC.
+CREATE TABLE IF NOT EXISTS dashboard_readers (
+  role_name text PRIMARY KEY,
+  tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
+);
+REVOKE ALL ON TABLE dashboard_readers FROM PUBLIC;
+REVOKE ALL ON TABLE dashboard_readers FROM blaksoc_app;
+
+CREATE OR REPLACE FUNCTION app_reader_tenant() RETURNS uuid
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT tenant_id FROM dashboard_readers WHERE role_name = session_user
+$$;
+
 CREATE OR REPLACE FUNCTION app_can_touch(row_tenant uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
-  SELECT
-    row_tenant = ANY (app_grant_ids())
-    OR (
-      row_tenant = ANY (app_tenant_ids())
-      AND (app_is_platform() OR NOT app_partner_customer(row_tenant))
-    )
-    OR app_partner_consented(row_tenant)
+  SELECT CASE
+    WHEN left(session_user, 5) = 'dash_' THEN row_tenant = app_reader_tenant()
+    ELSE
+      row_tenant = ANY (app_grant_ids())
+      OR (
+        row_tenant = ANY (app_tenant_ids())
+        AND (app_is_platform() OR NOT app_partner_customer(row_tenant))
+      )
+      OR app_partner_consented(row_tenant)
+  END
 $$;
 
 CREATE OR REPLACE FUNCTION app_can_see_tenant(row_id uuid) RETURNS boolean
@@ -97,11 +115,13 @@ REVOKE ALL ON FUNCTION app_partner_customer(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_partner_consented(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_can_touch(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_can_see_tenant(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION app_reader_tenant() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION app_is_partner(uuid) TO blaksoc_app;
 GRANT EXECUTE ON FUNCTION app_partner_customer(uuid) TO blaksoc_app;
 GRANT EXECUTE ON FUNCTION app_partner_consented(uuid) TO blaksoc_app;
 GRANT EXECUTE ON FUNCTION app_can_touch(uuid) TO blaksoc_app;
 GRANT EXECUTE ON FUNCTION app_can_see_tenant(uuid) TO blaksoc_app;
+GRANT EXECUTE ON FUNCTION app_reader_tenant() TO blaksoc_app;
 
 DO $$
 DECLARE
@@ -210,3 +230,45 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
   END LOOP;
 END $$;
+
+-- Login role for one customer. Name is dash_ plus the tenant uuid without hyphens.
+-- NOBYPASSRLS, and app_can_touch ignores GUCs for that login. Password is not stored here.
+CREATE OR REPLACE PROCEDURE provision_dashboard_reader(p_tenant uuid, p_password text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_role text;
+BEGIN
+  IF p_password IS NULL OR length(p_password) < 16 THEN
+    RAISE EXCEPTION 'dashboard reader password is too short';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM tenants WHERE id = p_tenant AND kind = 'customer') THEN
+    RAISE EXCEPTION 'dashboard reader is for a customer tenant';
+  END IF;
+  v_role := 'dash_' || replace(p_tenant::text, '-', '');
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
+    EXECUTE format(
+      'CREATE ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD %L',
+      v_role, p_password
+    );
+  ELSE
+    EXECUTE format(
+      'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE PASSWORD %L',
+      v_role, p_password
+    );
+  END IF;
+  EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', v_role);
+  EXECUTE format('GRANT SELECT ON alerts, assets, incidents TO %I', v_role);
+  EXECUTE format(
+    'GRANT EXECUTE ON FUNCTION app_can_touch(uuid), app_reader_tenant(), app_tenant_ids(), app_grant_ids(), app_is_platform(), app_is_partner(uuid), app_partner_customer(uuid), app_partner_consented(uuid) TO %I',
+    v_role
+  );
+  INSERT INTO dashboard_readers (role_name, tenant_id)
+  VALUES (v_role, p_tenant)
+  ON CONFLICT (role_name) DO UPDATE SET tenant_id = EXCLUDED.tenant_id;
+END;
+$$;
+
+REVOKE ALL ON PROCEDURE provision_dashboard_reader(uuid, text) FROM PUBLIC;

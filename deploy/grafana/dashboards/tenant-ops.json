@@ -1,0 +1,50 @@
+{
+  "title": "Tenant operations",
+  "uid": "tenant-ops",
+  "schemaVersion": 39,
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Alerts per day",
+      "datasource": "Tenant operations",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT to_char(date_trunc('day', occurred_at at time zone 'UTC'), 'YYYY-MM-DD') AS day, count(*)::int AS alerts FROM alerts WHERE occurred_at >= now() - interval '90 days' GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Top detections",
+      "datasource": "Tenant operations",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT coalesce(rule_id, 'unspecified') AS rule_id, count(*)::int AS alerts FROM alerts WHERE occurred_at >= now() - interval '90 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 8"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Noisy assets",
+      "datasource": "Tenant operations",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawSql": "SELECT s.name, count(*)::int AS alerts FROM alerts a JOIN assets s ON s.id = a.asset_id WHERE a.occurred_at >= now() - interval '90 days' GROUP BY s.name ORDER BY 2 DESC LIMIT 8"
+        }
+      ]
+    }
+  ]
+}

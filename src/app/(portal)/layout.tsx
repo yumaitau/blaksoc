@@ -24,6 +24,7 @@ export default async function PortalLayout({ children }: { children: React.React
         <nav aria-label="Portal" className="flex flex-wrap items-center gap-1">
           <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal">Overview</a>
           <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/usage">Usage</a>
+          {can(ctx, "alert:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/trends">Trends</a> : null}
           {partnerHome(ctx) ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/partner">Customers</a> : null}
           {can(ctx, "report:generate") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/essential-eight">Essential Eight</a> : null}
           {can(ctx, "vuln:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/domains">Domains</a> : null}
