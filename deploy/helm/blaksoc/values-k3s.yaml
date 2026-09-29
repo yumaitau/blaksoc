@@ -1,0 +1,22 @@
+# Single-node k3s overlay. Apply with the base values:
+#   helm upgrade --install blaksoc deploy/helm/blaksoc \
+#     -f deploy/helm/blaksoc/values.yaml \
+#     -f deploy/helm/blaksoc/values-k3s.yaml
+# Requests below are the chart budget for one small dedicated tenant, not a load measurement.
+
+config:
+  AI_DATA_RESIDENCY: AU
+  BLAKSOC_ARCHIVE_DIR: /tmp/blaksoc-archive
+
+web:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+  autoscaling: { enabled: false, minReplicas: 1, maxReplicas: 1, targetCPU: 70 }
+
+worker:
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }

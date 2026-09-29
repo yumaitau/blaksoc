@@ -14,6 +14,8 @@ existingSecret: blaksoc
 config:
   AI_DATA_RESIDENCY: AU
   BREAK_GLASS_REQUIRE_MFA: "true"
+  # Worker root is read-only. This emptyDir path dies with the pod; mount a volume for a durable archive.
+  BLAKSOC_ARCHIVE_DIR: /tmp/blaksoc-archive
 
 web:
   replicas: 2

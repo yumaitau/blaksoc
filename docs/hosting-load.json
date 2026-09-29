@@ -1,0 +1,59 @@
+{
+  "tool": "k6",
+  "k6Version": "k6 v2.3.0 (commit/devel, go1.27.1, darwin/arm64)",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v22.23.1",
+    "cpuModel": "Apple M4",
+    "cpuCount": 10,
+    "totalMemBytes": 17179869184
+  },
+  "linesPerTenant": 20,
+  "rejectedNonAu": true,
+  "profiles": [
+    {
+      "tenants": 10,
+      "objects": 200,
+      "bytes": 40400,
+      "wallMs": "306.49",
+      "httpAvgMs": "0.37",
+      "httpP95Ms": "0.58",
+      "httpReqs": 400,
+      "serverRssBytes": 89571328,
+      "serverCpuUserUs": 40441,
+      "serverCpuSystemUs": 46578
+    },
+    {
+      "tenants": 50,
+      "objects": 1000,
+      "bytes": 202000,
+      "wallMs": "440.36",
+      "httpAvgMs": "0.28",
+      "httpP95Ms": "0.54",
+      "httpReqs": 2000,
+      "serverRssBytes": 90275840,
+      "serverCpuUserUs": 135526,
+      "serverCpuSystemUs": 219121
+    },
+    {
+      "tenants": 200,
+      "objects": 4000,
+      "bytes": 808000,
+      "wallMs": "813.22",
+      "httpAvgMs": "0.23",
+      "httpP95Ms": "0.43",
+      "httpReqs": 8000,
+      "serverRssBytes": 91553792,
+      "serverCpuUserUs": 370923,
+      "serverCpuSystemUs": 850405
+    }
+  ],
+  "notMeasured": [
+    "opensearch",
+    "wazuh-indexer",
+    "opencti",
+    "australian-iaas-price",
+    "aws-price"
+  ]
+}
