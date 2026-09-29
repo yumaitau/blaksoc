@@ -18,6 +18,7 @@ export default async function PortalLayout({ children }: { children: React.React
         <nav aria-label="Portal" className="flex flex-wrap items-center gap-1">
           <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal">Overview</a>
           <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/usage">Usage</a>
+          {can(ctx, "report:generate") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/essential-eight">Essential Eight</a> : null}
           {ctx.isPlatform && can(ctx, "tenant:manage") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/onboarding">{COPY.nav}</a> : null}
           {ctx.isPlatform ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/soc">SOC</a> : null}
           <form action="/portal/leave" method="post">

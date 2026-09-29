@@ -36,6 +36,13 @@
       "when": 1790597000000,
       "tag": "0004_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790598000000,
+      "tag": "0005_essential_eight",
+      "breakpoints": true
     }
   ]
 }

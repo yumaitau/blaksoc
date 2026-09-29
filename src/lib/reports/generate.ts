@@ -89,7 +89,7 @@ export async function buildReport(tx: Tx, tenantId: string, kind: ReportKind, op
   }
 
   if (kind === "essential_eight") {
-    // Evidence only — maturity is assessed by an assessor against ACSC guidance, not asserted by blakSOC.
+    // Telemetry only. Indicative maturity is the separate self-assessment, not this table.
     const [ep] = await tx.select({ total: sql<number>`count(*)::int`, active: sql<number>`count(*) filter (where ${assets.agentStatus} = 'active')::int` }).from(assets).where(and(eq(assets.tenantId, tenantId), inArray(assets.kind, ["endpoint", "server"])));
     const [kevOpen] = await tx.select({ n: sql<number>`count(*)::int`, oldest: sql<Date | null>`min(${vulnerabilities.firstSeen})` }).from(vulnerabilities).innerJoin(cveIntel, eq(cveIntel.cve, vulnerabilities.cve)).where(and(eq(vulnerabilities.tenantId, tenantId), eq(vulnerabilities.status, "open"), eq(cveIntel.kev, true)));
     const [mfa] = await tx.select({ n: sql<number>`count(*)::int` }).from(alerts).where(and(eq(alerts.tenantId, tenantId), inPeriod(alerts.occurredAt), sql`${alerts.attackTechniques} && array['T1110','T1110.001','T1110.003','T1078']`));
@@ -110,7 +110,7 @@ export async function buildReport(tx: Tx, tenantId: string, kind: ReportKind, op
         ],
       },
     });
-    sections.push({ heading: "Scope note", basis: "interpretation", author: "system", body: "This section compiles telemetry that supports an Essential Eight assessment. It is not a maturity rating; maturity must be assessed against the ACSC Essential Eight Assessment Process Guide." });
+    sections.push({ heading: "Scope note", basis: "interpretation", author: "system", body: "This table is supporting telemetry. Indicative maturity is the Essential Eight self-assessment. That self-assessment is not an ACSC-endorsed audit." });
   }
 
   if (kind === "threat_intel" || kind === "monthly_exec" || kind === "weekly") {
