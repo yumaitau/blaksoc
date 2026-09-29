@@ -6,6 +6,7 @@ import { googleWorkspaceConnector } from "@/lib/providers/google/connector";
 import { entraConnector } from "@/lib/providers/m365/connector";
 import { DemoProvider } from "@/lib/providers/demo";
 import type { SecurityEventProvider } from "@/lib/providers/types";
+import { SyslogProvider } from "@/lib/providers/syslog";
 import { WazuhProvider } from "@/lib/providers/wazuh";
 import { BedrockProvider, OpenAICompatibleProvider } from "@/lib/ai/providers";
 import type { AIProvider } from "@/lib/ai/types";
@@ -82,6 +83,21 @@ export const CONNECTORS: ConnectorDefinition[] = [
     config: z.object({ agents: z.array(z.object({ id: z.string(), name: z.string(), group: z.string(), os: z.string(), ip: z.string() })) }),
     secrets: z.object({}),
     create: (c) => ({ kind: "events", provider: new DemoProvider((c as { agents: never }).agents) }),
+  },
+  {
+    provider: "syslog",
+    name: "Firewall syslog",
+    category: "siem",
+    description: "Per-tenant syslog from small-office firewalls. Vector forwards each line. Parsers cover UniFi, Sophos, FortiGate, MikroTik, and DrayTek.",
+    status: "available",
+    capabilities: ["events"],
+    remotePermissions: ["TLS syslog listener or Vector HTTP sink using a per-tenant bearer token"],
+    config: z.object({
+      tenantId: z.string().uuid().optional(),
+      region: z.enum(["ap-southeast-2", "ap-southeast-4"]).default("ap-southeast-2"),
+    }),
+    secrets: z.object({}),
+    create: (c) => ({ kind: "events", provider: new SyslogProvider(typeof c.tenantId === "string" ? c.tenantId : "") }),
   },
   {
     provider: "opencti",

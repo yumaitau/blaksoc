@@ -18,7 +18,7 @@ export default async function NewIntegrationPage({ searchParams }: { searchParam
   if (!def) notFound();
   const manageable = tenantsWith(ctx, "integration:manage");
   const owners = [
-    ...(ctx.isPlatform && can(ctx, "integration:manage") ? [{ id: null, name: "Platform (shared)" }] : []),
+    ...(ctx.isPlatform && can(ctx, "integration:manage") && provider !== "syslog" ? [{ id: null, name: "Platform (shared)" }] : []),
     ...ctx.tenants.filter((t) => manageable.includes(t.id)).map((t) => ({ id: t.id as string | null, name: t.name })),
   ];
   if (!owners.length) redirect("/integrations");

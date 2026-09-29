@@ -33,6 +33,7 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   sms: { from: "+61400000000", mode: "fixture", events: ["incident.created"] },
   voice: { from: "+61400000000", mode: "fixture", events: ["incident.created"] },
   email: { host: "smtp.example.com", port: 587, from: "soc@example.com", mode: "fixture", events: ["incident.created"] },
+  syslog: { region: "ap-southeast-2" },
 };
 
 export function exampleConfig(provider: string): Record<string, unknown> {

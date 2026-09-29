@@ -5,6 +5,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { instantiate, secretAad } from "@/lib/connectors/instances";
 import { connectorDef, CONNECTORS } from "@/lib/connectors/registry";
+import { stampSyslogTenant } from "@/lib/services/syslog";
 import { encryptSecret } from "@/lib/crypto";
 import { actor, AccessDenied, scoped } from "./common";
 
@@ -46,7 +47,7 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
   assertManage(ctx, input.tenantId);
   const def = connectorDef(input.provider);
   if (!def || def.status !== "available") throw new Error(`connector ${input.provider} is not available`);
-  const config = def.config.parse(input.config);
+  const config = stampSyslogTenant(def.provider, def.config.parse(input.config) as Record<string, unknown>, input.tenantId);
   const secrets = def.secrets.parse(input.secrets ?? {});
   return withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: !input.tenantId }, async (tx) => {
     const [row] = await tx.insert(integrations).values({ tenantId: input.tenantId, category: def.category, provider: def.provider, name: input.name, config, permissions: def.remotePermissions }).returning({ id: integrations.id });
@@ -68,7 +69,7 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
     const patch: Partial<typeof integrations.$inferInsert> = {};
     if (input.name) patch.name = input.name;
     if (input.enabled !== undefined) patch.enabled = input.enabled;
-    if (input.config !== undefined) patch.config = def.config.parse(input.config);
+    if (input.config !== undefined) patch.config = stampSyslogTenant(cur.provider, def.config.parse(input.config) as Record<string, unknown>, cur.tenantId);
     if (input.secrets && Object.values(input.secrets).some(Boolean)) {
       const existing = cur.secretCiphertext ? (JSON.parse((await import("@/lib/crypto")).decryptSecret(cur.secretCiphertext, secretAad(id))) as Record<string, string>) : {};
       const merged = def.secrets.parse({ ...existing, ...Object.fromEntries(Object.entries(input.secrets).filter(([, v]) => v)) });
