@@ -9,8 +9,9 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { SECTOR_TAGS, type SectorTag } from "@/db/schema";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
+import { splitTechniqueCoverage } from "@/lib/detections/advisory-coverage";
 import { intelMatchesFor } from "@/lib/services/alerts";
-import { listAdvisories, listFeeds, searchIntel, sightingQueue } from "@/lib/services/intel";
+import { coveredAttackTechniques, listAdvisories, listFeeds, searchIntel, sightingQueue } from "@/lib/services/intel";
 import { cn, fmtDateTime } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 import { EntitlementToggles, FeedToggle, ShareSightingButton, TagRelevance } from "./intel-controls";
@@ -33,6 +34,7 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
   if (!ctx.isPlatform) redirect("/portal");
   const sp = await searchParams;
   const tab: TabKey = TABS.some((t) => t.key === sp.tab) ? (sp.tab as TabKey) : sp.q ? "search" : "australia";
+  const coveredIds = tab === "australia" && can(ctx, "detection:read") ? await coveredAttackTechniques(ctx) : null;
 
   return (
     <div className="space-y-5">
@@ -53,7 +55,7 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
           </Link>
         ))}
       </nav>
-      {tab === "australia" ? <Australian ctx={ctx} tag={sp.tag} /> : null}
+      {tab === "australia" ? <Australian ctx={ctx} tag={sp.tag} coveredIds={coveredIds} /> : null}
       {tab === "search" ? <Search ctx={ctx} q={sp.q?.trim() ?? ""} /> : null}
       {tab === "matches" ? <Matches ctx={ctx} /> : null}
       {tab === "sightings" ? <Sightings ctx={ctx} /> : null}
@@ -62,12 +64,49 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
   );
 }
 
-async function Australian({ ctx, tag }: { ctx: AccessContext; tag?: string }) {
+function TechniqueLine({ named, coveredIds }: { named: string[]; coveredIds: string[] }) {
+  const split = splitTechniqueCoverage(named, coveredIds);
+  if (!split.covered.length && !split.uncovered.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      {split.covered.map((id) => (
+        <Link key={id} href={`/detections/attack?t=${id}`}><Badge variant="ok">{id} covered</Badge></Link>
+      ))}
+      {split.uncovered.map((id) => (
+        <Link key={id} href={`/detections/attack?t=${id}`}><Badge variant="danger">{id} gap</Badge></Link>
+      ))}
+    </div>
+  );
+}
+
+function AdvisoryCoverage({ rows, coveredIds }: { rows: { id: string; title: string; attackTechniques: string[] }[]; coveredIds: string[] }) {
+  const unique = [...new Set(rows.flatMap((row) => row.attackTechniques))];
+  const covered = splitTechniqueCoverage(unique, coveredIds).covered;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Advisory detection coverage</CardTitle>
+        <span className="text-xs text-muted">Techniques named in ingested advisories</span>
+      </CardHeader>
+      <CardContent>
+        {unique.length === 0 ? (
+          <p className="text-sm text-muted">No ingested advisory names a technique yet.</p>
+        ) : (
+          <p className="text-sm text-muted">{covered.length} of {unique.length} techniques named in these advisories have an enabled detection.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+async function Australian({ ctx, tag, coveredIds }: { ctx: AccessContext; tag?: string; coveredIds: string[] | null }) {
   const active = SECTOR_TAGS.includes(tag as SectorTag) ? (tag as SectorTag) : null;
   const all = await listAdvisories(ctx, { limit: 200 });
   const rows = active ? all.filter((a) => a.tags.includes(active)) : all;
   return (
-    <Card>
+    <div className="space-y-5">
+      {coveredIds ? <AdvisoryCoverage rows={rows} coveredIds={coveredIds} /> : null}
+      <Card>
       <CardHeader>
         <CardTitle>Australian threat advisories</CardTitle>
         <span className="text-xs text-muted">ACSC and CISA, newest first</span>
@@ -115,11 +154,13 @@ async function Australian({ ctx, tag }: { ctx: AccessContext; tag?: string }) {
                   <span className="text-[11px] text-faint">Not yet normalised in OpenCTI</span>
                 )}
               </div>
+              {coveredIds ? <TechniqueLine named={a.attackTechniques} coveredIds={coveredIds} /> : null}
             </div>
           ))}
         </div>
       )}
-    </Card>
+      </Card>
+    </div>
   );
 }
 

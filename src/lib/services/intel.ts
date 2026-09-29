@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { adminDb, db } from "@/db/client";
-import { advisories, intelFeeds, intelMatches, intelTags, SECTOR_TAGS, tenantFeedEntitlements, tenants, type SectorTag } from "@/db/schema";
+import { advisories, intelFeeds, intelMatches, intelTags, SECTOR_TAGS, sigmaRules, tenantFeedEntitlements, tenants, type SectorTag } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -41,6 +41,17 @@ export async function listTagged(ctx: AccessContext, tag?: SectorTag) {
 export async function listAdvisories(ctx: AccessContext, opts: { source?: string; limit?: number } = {}) {
   if (!ctx.tenantIds.length) throw new AccessDenied();
   return db().select().from(advisories).where(opts.source ? eq(advisories.source, opts.source) : undefined).orderBy(desc(advisories.publishedAt)).limit(opts.limit ?? 50);
+}
+
+/** Techniques named by enabled Sigma rules the caller can see. */
+export async function coveredAttackTechniques(ctx: AccessContext): Promise<string[]> {
+  const rows = await scoped(ctx, "detection:read", (tx, scopeTenants) =>
+    tx
+      .select({ techniques: sigmaRules.attackTechniques })
+      .from(sigmaRules)
+      .where(and(eq(sigmaRules.enabled, true), or(isNull(sigmaRules.tenantId), scopeTenants.length ? inArray(sigmaRules.tenantId, scopeTenants) : sql`false`))),
+  );
+  return [...new Set(rows.flatMap((row) => row.techniques))];
 }
 
 /** Advisories relevant to a tenant: tag overlap with its sectors, or CVEs present in its estate. */

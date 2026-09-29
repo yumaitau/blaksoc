@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { adminDb } from "@/db/client";
 import { advisories, assets, cveIntel, intelFeeds, intelMatches, tenants, vulnerabilities } from "@/db/schema";
+import { extractAdvisoryTechniques } from "@/lib/detections/advisory-coverage";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -145,6 +146,13 @@ export function tagAdvisory(feedKey: string, text: string): string[] {
   return [...new Set([...(feedKey.startsWith("acsc") ? ["AUSTRALIA"] : []), ...SECTOR_HINTS.filter(([rx]) => rx.test(text)).map(([, t]) => t)])];
 }
 
+/** Fields stored for one advisory item. Callers pass already-fetched text. */
+export function advisoryFields(feedKey: string, title: string, description: string) {
+  const text = `${title} ${description}`;
+  const cves = [...new Set((text.match(/CVE-\d{4}-\d{4,7}/gi) ?? []).map((c) => c.toUpperCase()))];
+  return { cves, tags: tagAdvisory(feedKey, text), attackTechniques: extractAdvisoryTechniques(text), summary: description.slice(0, 2000) };
+}
+
 /** Pull public advisory feeds (ACSC / CISA / CERTs) configured as intel_feeds of category "advisory". */
 export async function ingestAdvisories(log: (m: string) => void) {
   const db = adminDb();
@@ -157,12 +165,10 @@ export async function ingestAdvisories(log: (m: string) => void) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       let added = 0;
       for (const item of parseRss(await res.text()).slice(0, 50)) {
-        const text = `${item.title} ${item.description}`;
-        const cves = [...new Set((text.match(/CVE-\d{4}-\d{4,7}/gi) ?? []).map((c) => c.toUpperCase()))];
-        const tags = tagAdvisory(f.key, text);
+        const fields = advisoryFields(f.key, item.title, item.description);
         const inserted = await db
           .insert(advisories)
-          .values({ source: f.name, externalId: `${f.key}:${item.guid}`, title: item.title, url: item.link, summary: item.description.slice(0, 2000), publishedAt: item.pubDate ? new Date(item.pubDate) : null, cves, tags })
+          .values({ source: f.name, externalId: `${f.key}:${item.guid}`, title: item.title, url: item.link, summary: fields.summary, publishedAt: item.pubDate ? new Date(item.pubDate) : null, cves: fields.cves, tags: fields.tags, attackTechniques: fields.attackTechniques })
           .onConflictDoNothing()
           .returning({ id: advisories.id });
         if (!inserted.length) continue;
@@ -170,7 +176,7 @@ export async function ingestAdvisories(log: (m: string) => void) {
         // Normalise into OpenCTI as a STIX Report so analysts see it alongside other intel.
         if (intel?.provider.kind === "opencti") {
           const r = await intel.provider
-            .createReport({ name: item.title, description: item.description.slice(0, 4000), published: item.pubDate ? new Date(item.pubDate) : new Date(), externalUrl: item.link, labels: tags.map((t) => t.toLowerCase()), cves })
+            .createReport({ name: item.title, description: item.description.slice(0, 4000), published: item.pubDate ? new Date(item.pubDate) : new Date(), externalUrl: item.link, labels: fields.tags.map((t) => t.toLowerCase()), cves: fields.cves })
             .catch(() => null);
           if (r) await db.update(advisories).set({ openctiReportId: r.id }).where(eq(advisories.id, inserted[0]!.id));
         }

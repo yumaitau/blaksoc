@@ -7,6 +7,7 @@ import { encryptSecret, sha256 } from "@/lib/crypto";
 import { CREDENTIAL_EXPOSURE_PLAYBOOK } from "@/lib/credentials/playbook";
 import { BEC_DETECTIONS, SUSPECTED_BEC_PLAYBOOK } from "@/lib/detections/bec";
 import { attackTechniques as sigmaAttack, parseSigma, runTests } from "@/lib/detections/sigma";
+import { smeImportPlan } from "@/lib/detections/sme-pack";
 import { env } from "@/lib/env";
 import { FixtureIntelProvider } from "@/lib/intel/fixture";
 import { ingestAlert } from "@/lib/pipeline/ingest";
@@ -70,6 +71,19 @@ async function main() {
     const [already] = await db.select({ id: s.sigmaRuleTests.id }).from(s.sigmaRuleTests).where(eq(s.sigmaRuleTests.ruleId, rule.id)).limit(1);
     if (already) continue;
     await db.insert(s.sigmaRuleTests).values({ ruleId: rule.id, tenantId: null, version: rule.currentVersion, cases: d.cases, results, passed, ranBy: null });
+  }
+  for (const row of smeImportPlan()) {
+    if (!row.tests.passed) throw new Error(`SME rule "${row.title}" failed its fixture cases`);
+    const [exists] = await db.select().from(s.sigmaRules).where(eq(s.sigmaRules.sigmaId, row.sigmaId));
+    if (!exists) {
+      const [inserted] = await db.insert(s.sigmaRules).values({ tenantId: null, sigmaId: row.sigmaId, title: row.title, description: row.description, status: row.status, severity: row.severity, logsource: row.logsource, attackTechniques: row.attackTechniques, falsePositives: row.falsePositives, confidence: row.confidence, enabled: row.enabled }).returning();
+      await db.insert(s.sigmaRuleVersions).values({ ruleId: inserted!.id, tenantId: null, version: 1, yaml: row.yaml, sha256: sha256(row.yaml), changeNote: "Initial import" });
+    }
+    const [rule] = await db.select().from(s.sigmaRules).where(eq(s.sigmaRules.sigmaId, row.sigmaId));
+    if (!rule) continue;
+    const [already] = await db.select({ id: s.sigmaRuleTests.id }).from(s.sigmaRuleTests).where(eq(s.sigmaRuleTests.ruleId, rule.id)).limit(1);
+    if (already) continue;
+    await db.insert(s.sigmaRuleTests).values({ ruleId: rule.id, tenantId: null, version: rule.currentVersion, cases: row.cases, results: row.tests.results, passed: row.tests.passed, ranBy: null });
   }
 
   const [pb] = await db.select().from(s.playbooks).where(eq(s.playbooks.name, "Critical malicious IP detection"));

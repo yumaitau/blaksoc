@@ -64,6 +64,7 @@ export const advisories = pgTable("advisories", {
   publishedAt: timestamp("published_at", { withTimezone: true }),
   cves: text("cves").array().notNull().default([]),
   tags: text("tags").array().notNull().default([]),
+  attackTechniques: text("attack_techniques").array().notNull().default([]),
   openctiReportId: text("opencti_report_id"),
   ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
 });
