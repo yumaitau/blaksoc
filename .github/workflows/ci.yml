@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: blaksoc
+          POSTGRES_PASSWORD: blaksoc
+          POSTGRES_DB: blaksoc
+        ports:
+          - 55471:5432
+        options: >-
+          --health-cmd "pg_isready -U blaksoc"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 56471:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      APP_URL: http://localhost:3107
+      DATABASE_URL: postgres://blaksoc_app:change-me@localhost:55471/blaksoc
+      DATABASE_ADMIN_URL: postgres://blaksoc:blaksoc@localhost:55471/blaksoc
+      BLAKSOC_APP_DB_PASSWORD: change-me
+      REDIS_URL: redis://localhost:56471
+      BETTER_AUTH_SECRET: ci-only-secret-change-me-ci-only-secret
+      BLAKSOC_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWNoYW5nZS1tZS0zMi1ieXRlcyE=
+      DEMO_MODE: "true"
+      BREAK_GLASS_REQUIRE_MFA: "true"
+      AI_DATA_RESIDENCY: AU
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:migrate
+      - run: pnpm db:seed
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:integration
