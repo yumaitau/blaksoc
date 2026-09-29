@@ -28,6 +28,7 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   "azure-openai": { baseUrl: "https://<resource>.openai.azure.com/openai/deployments/<deployment>", model: "<deployment>", apiVersion: "2024-10-21", region: "australiaeast", country: "AU" },
   "openai-compatible": { baseUrl: "https://api.example.com/v1", model: "<model>", region: "<processing region>", country: "AU" },
   bedrock: { region: "ap-southeast-2", model: "anthropic.claude-sonnet-4-5-20250929-v1:0" },
+  entra: { azureTenantId: "00000000-0000-0000-0000-000000000000", mode: "live", subscribedSkus: [] },
 };
 
 export function exampleConfig(provider: string): Record<string, unknown> {

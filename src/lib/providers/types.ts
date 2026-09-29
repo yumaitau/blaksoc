@@ -27,7 +27,7 @@ export type NormalisedAlert = {
 
 export type NormalisedAsset = {
   externalId: string;
-  kind: "endpoint" | "server" | "network_device" | "cloud_resource";
+  kind: "endpoint" | "server" | "network_device" | "cloud_resource" | "identity";
   name: string;
   hostname: string | null;
   ips: string[];
@@ -60,7 +60,7 @@ export type AlertQuery = {
 };
 
 export type ResponseActionRequest = {
-  action: "isolate_endpoint" | "release_endpoint" | "block_ip" | "kill_process" | "custom";
+  action: "isolate_endpoint" | "release_endpoint" | "block_ip" | "kill_process" | "custom" | "disable_identity" | "revoke_sessions" | "require_mfa" | "remove_inbox_rule" | "revoke_oauth_grant" | "suspend_user" | "sign_out" | "reset_signin_cookies" | "revoke_oauth_token";
   assetExternalId: string;
   params?: Record<string, unknown>;
 };
