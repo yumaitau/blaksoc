@@ -9,6 +9,7 @@ a re-implementation of them:
 | Capability | Component | blakSOC's role |
 |---|---|---|
 | SIEM / XDR / endpoint telemetry | **Wazuh** (first provider behind `SecurityEventProvider`) | Ingest, route to tenant, enrich, score, respond |
+| Endpoint detection and response | **Tawny EDR** (Yuma IT's agent, via its `twny_` API) | Alerts with ATT&CK, agent inventory, kill process with the agent's result tracked to completion |
 | Cyber threat intelligence | **OpenCTI** (system of record, STIX 2.1) | Enrichment, sightings feedback, AU advisory reports, sector tags |
 | Detection content | **Sigma** | Repository, versioning, testing, deployment as scheduled SIEM queries, ATT&CK coverage |
 | Orchestration | Native lightweight SOAR | Trigger → conditions → actions → **human approval** → execution |
@@ -63,7 +64,7 @@ SIEMs ──┘                         ▼   ▼
             Alert queue · Incidents · Assets · Vulnerabilities · Intel · Detections · Portal · AI analyst
 ```
 
-- `src/lib/providers` — `SecurityEventProvider` contract, Wazuh implementation (API + indexer), demo provider.
+- `src/lib/providers` — `SecurityEventProvider` contract, Wazuh implementation (API + indexer), Tawny EDR, demo provider.
 - `src/lib/intel` — observable extraction, OpenCTI GraphQL provider, enrichment cache, entitlement filter.
 - `src/lib/risk/engine.ts` — deterministic, additive 0–100 scores for alerts and vulnerabilities; every point carries evidence.
 - `src/lib/pipeline` — alert ingest and asset deduplication.
@@ -75,7 +76,8 @@ SIEMs ──┘                         ▼   ▼
 - `src/worker` — BullMQ workers and schedules.
 - `deploy/` — Docker targets, full-stack Compose (with OpenCTI + feeds + Ollama), Wazuh active-response scripts, Helm chart.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY.md](docs/SECURITY.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY.md](docs/SECURITY.md). Connector setup guides:
+[Microsoft 365](docs/connectors/entra-setup.md), [Tawny EDR](docs/connectors/tawny.md).
 
 ## Multi-tenancy in one paragraph
 
