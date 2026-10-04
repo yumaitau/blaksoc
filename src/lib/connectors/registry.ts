@@ -8,6 +8,7 @@ import { CloudflareProvider, DefenderProvider, FortinetProvider, SophosProvider 
 import { DemoProvider } from "@/lib/providers/demo";
 import type { ProviderHealth, SecurityEventProvider } from "@/lib/providers/types";
 import { SyslogProvider } from "@/lib/providers/syslog";
+import { TawnyProvider } from "@/lib/providers/tawny";
 import { VeeamProvider } from "@/lib/providers/veeam";
 import { WazuhProvider } from "@/lib/providers/wazuh";
 import { veeamConfig } from "@/lib/backup/status";
@@ -206,6 +207,26 @@ export const CONNECTORS: ConnectorDefinition[] = [
     config: z.object({ tenantDomain: z.string().min(1), mode: z.enum(["fixture", "live"]).default("fixture") }),
     secrets: z.object({ clientId: z.string().min(1), clientSecret: z.string().min(1) }),
     create: (c, s) => ({ kind: "events", provider: new DefenderProvider(c as never, s as never) }),
+  },
+  {
+    provider: "tawny",
+    name: "Tawny EDR",
+    category: "endpoint",
+    description: "Yuma IT's endpoint agent. Alerts with ATT&CK techniques, agent inventory, and kill process by PID. Actions run on the agent's next heartbeat, and blakSOC records the agent's result. Isolation and release need an agent build with isolation support; current agents report them as failed. Fixture mode returns canned data without calling Tawny.",
+    status: "available",
+    capabilities: ["events", "assets", "response"],
+    remotePermissions: [
+      "Tawny API token (twny_) from the customer's Tawny tenant",
+      "Viewer role for alerts and agents only; Admin role to run and track response actions",
+    ],
+    config: z.object({
+      apiUrl: z.string().url(),
+      region: z.enum(["ap-southeast-2", "ap-southeast-4"]),
+      mode: z.enum(["fixture", "live"]).default("live"),
+      ...tls,
+    }),
+    secrets: z.object({ apiToken: z.string().regex(/^twny_[A-Za-z0-9_-]{16,}$/, "Tawny API tokens start with twny_") }),
+    create: (c, s) => ({ kind: "events", provider: new TawnyProvider(c as never, s as never) }),
   },
   planned("crowdstrike", "CrowdStrike Falcon", "endpoint", ["events", "assets", "response"], "Detections and host containment."),
   planned("sentinelone", "SentinelOne", "endpoint", ["events", "assets", "response"], "Threats and network quarantine."),

@@ -50,6 +50,8 @@ export const PROVIDER_CAPABILITY: Record<string, Capability> = {
   google: "google_monitoring",
   wazuh: "wazuh_endpoint",
   demo: "wazuh_endpoint",
+  // Same managed endpoint detection and response service as Wazuh, sold at the same tier.
+  tawny: "wazuh_endpoint",
   velociraptor: "velociraptor_dfir",
 };
 

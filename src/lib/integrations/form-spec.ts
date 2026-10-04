@@ -39,6 +39,7 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   defender: { tenantDomain: "example.org", mode: "fixture" },
   cloudflare: { accountId: "00000000000000000000000000000000", listName: "blaksoc-block", mode: "fixture" },
   fortinet: { host: "https://firewall.example", addressGroup: "blaksoc-block", mode: "fixture" },
+  tawny: { apiUrl: "https://tawny.example.com", region: "ap-southeast-2", mode: "live", tlsVerify: true },
   sophos: { centralId: "sophos-central-example", region: "au", mode: "fixture" },
   veeam: { mode: "fixture", staleHours: 24, systems: [] },
 };

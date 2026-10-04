@@ -12,6 +12,8 @@ import { actor, inTenant } from "./common";
 
 const ENROL_MS = 14 * 86_400_000;
 const INVENTORY = new Set(["m365", "entra", "google-workspace"]);
+/** Endpoint agents that count as coverage. */
+const AGENTS = new Set(["wazuh", "tawny"]);
 const MANAGER = "wazuh.blaksoc.local";
 
 export class AgentError extends Error {
@@ -124,12 +126,12 @@ export async function syncCoverage(ctx: AccessContext, tenantId: string) {
     }
     const enrolled = new Set<string>();
     for (const item of byAsset.values()) {
-      if (item.providers.has("wazuh")) enrolled.add(item.hostname);
+      if ([...item.providers].some((provider) => AGENTS.has(provider))) enrolled.add(item.hostname);
     }
     const gaps: { assetId: string; hostname: string }[] = [];
     for (const [assetId, item] of byAsset) {
       const inventory = [...item.providers].some((provider) => INVENTORY.has(provider));
-      if (inventory && !item.providers.has("wazuh") && !enrolled.has(item.hostname)) gaps.push({ assetId, hostname: item.hostname });
+      if (inventory && !enrolled.has(item.hostname)) gaps.push({ assetId, hostname: item.hostname });
     }
     for (const gap of gaps) {
       await tx
