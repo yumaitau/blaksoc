@@ -6,6 +6,7 @@ import { can, dbScope, tenantsWith, type AccessContext } from "@/lib/auth/access
 import { audit } from "@/lib/audit";
 import { queue, QUEUES } from "@/lib/queue";
 import { stepCatalogue } from "@/lib/soar/engine";
+import { responseHintOf } from "@/lib/soar/hint";
 import { actor, AccessDenied, scoped } from "./common";
 
 export const TRIGGER_EVENTS = ["alert.created", "alert.enriched", "incident.created", "manual"] as const;
@@ -190,7 +191,7 @@ export async function runPlaybookManually(ctx: AccessContext, playbookId: string
     if (!alert) throw new AccessDenied("alert not found or missing playbook:run");
     if (pb.tenantId && pb.tenantId !== alert.tenantId) throw new Error("This playbook belongs to a different customer than the alert.");
     const [asset] = alert.assetId ? await tx.select().from(assets).where(eq(assets.id, alert.assetId)) : [];
-    const runCtx = { tenantId: alert.tenantId, alertId, incidentId: alert.incidentId ?? undefined, alert: { ...alert, raw: undefined }, asset };
+    const runCtx = { tenantId: alert.tenantId, alertId, incidentId: alert.incidentId ?? undefined, alert: { ...alert, raw: undefined, responseHint: responseHintOf(alert.raw) }, asset };
     const [run] = await tx
       .insert(playbookRuns)
       .values({ tenantId: alert.tenantId, playbookId, playbookVersion: pb.version, trigger: { event: "manual", alertId, requestedBy: ctx.principal.userId }, context: runCtx, alertId, incidentId: alert.incidentId })

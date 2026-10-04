@@ -14,6 +14,7 @@ import { queue, QUEUES } from "@/lib/queue";
 import { addTimeline, createIncidentFromAlerts } from "@/lib/services/incidents";
 import { isResponseAction, RESPONSE_ACTIONS } from "./actions";
 import { allHold, evaluate, getPath } from "./conditions";
+import { responseHintOf, type ResponseHint } from "./hint";
 import { requestResponseAction } from "./response";
 
 type RunCtx = Record<string, unknown> & { tenantId: string; alertId?: string; incidentId?: string };
@@ -128,13 +129,14 @@ async function responseStep(tx: Tx, step: PlaybookStep, run: { id: string; tenan
   const alert = ctx.alert as { id: string; assetId?: string | null; userName?: string | null; intel?: { matches?: { verdict: string; observable: { type: string; value: string } }[] } } | undefined;
   const badIp = alert?.intel?.matches?.find((m) => m.verdict === "malicious" && m.observable.type.startsWith("ip"))?.observable.value;
   const badIoc = alert?.intel?.matches?.find((m) => m.verdict === "malicious")?.observable.value;
-  const hint = (alert as { responseHint?: { ruleId?: string; grantId?: string } } | undefined)?.responseHint;
+  const hint = (alert as { responseHint?: ResponseHint } | undefined)?.responseHint;
   const identityAction = step.action === "disable_identity" || step.action === "revoke_sessions" || step.action === "require_mfa" || step.action === "remove_inbox_rule" || step.action === "revoke_oauth_grant" || step.action === "suspend_user" || step.action === "sign_out" || step.action === "reset_signin_cookies" || step.action === "revoke_oauth_token" || step.action === "reset_password";
   const target = {
     assetId: alert?.assetId ?? undefined,
     identity: identityAction ? (alert?.userName ?? undefined) : undefined,
     ip: step.action === "block_ip" ? badIp : undefined,
     observable: step.action === "block_ioc" || step.action === "unblock_ioc" ? (badIoc ?? (typeof step.params?.indicator === "string" ? step.params.indicator : undefined)) : undefined,
+    process: step.action === "kill_process" ? (typeof step.params?.process === "string" ? step.params.process : hint?.process) : undefined,
     ruleId: hint?.ruleId,
     grantId: hint?.grantId,
   };
@@ -162,8 +164,7 @@ export async function evaluateTriggers(tenantId: string, event: PlaybookTrigger[
     const books = await tx.select().from(playbooks).where(and(eq(playbooks.enabled, true), or(eq(playbooks.tenantId, tenantId), isNull(playbooks.tenantId))));
     const [alert] = payload.alertId ? await tx.select().from(alerts).where(eq(alerts.id, payload.alertId)) : [];
     const [asset] = alert?.assetId ? await tx.select().from(assets).where(eq(assets.id, alert.assetId)) : [];
-    const rawHint = alert?.raw && typeof alert.raw === "object" ? (alert.raw as { ruleId?: string; grantId?: string }) : undefined;
-    const responseHint = rawHint && (rawHint.ruleId || rawHint.grantId) ? { ruleId: rawHint.ruleId, grantId: rawHint.grantId } : undefined;
+    const responseHint = responseHintOf(alert?.raw);
     const ctx: RunCtx = { tenantId, alertId: payload.alertId, incidentId: payload.incidentId ?? alert?.incidentId ?? undefined, alert: alert ? { ...alert, raw: undefined, responseHint } : undefined, asset };
     for (const pb of books) {
       if (pb.trigger.event !== event || !allHold(pb.trigger.conditions, ctx)) continue;
