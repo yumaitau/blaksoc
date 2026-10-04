@@ -22,7 +22,7 @@ alerts / observables / intel_matches rows (RLS scope = that tenant)  →  Redis 
 evaluateTriggers("alert.created")  →  playbook runs  →  approval gates  →  response actions
 ```
 
-Scheduled jobs (`src/worker/index.ts`): alert poll 30s, asset sync 15m, vulnerability sync 1h,
+Scheduled jobs (`src/worker/index.ts`): alert poll 30s, in-flight response action status 30s, asset sync 15m, vulnerability sync 1h,
 integration health 5m, Sigma deployments 5m, CISA KEV + FIRST EPSS + OpenCTI CVE context 6h,
 ACSC/CISA advisories 1h.
 
@@ -58,6 +58,11 @@ notification, record note, explicit approval gate. Response steps (isolate, disa
 always go through `requestResponseAction()`, which creates an approval unless the tenant has
 admin-enabled auto-containment and the requester is a playbook (never AI). Runs pause at gates and resume
 when a human decides.
+
+Most providers finish a response action in the call. Endpoint agents that act on their next check-in
+(Tawny) return `pending` with a provider reference; the action stays `EXECUTING`, the worker asks
+`getResponseActionStatus` every 30s, and settles it `SUCCEEDED`/`FAILED` from the agent's answer, or
+`FAILED` after 15 minutes. The blakSOC action id goes to the provider as its idempotency key.
 
 ## UI routes
 

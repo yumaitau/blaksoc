@@ -62,10 +62,17 @@ export type AlertQuery = {
 export type ResponseActionRequest = {
   action: "isolate_endpoint" | "release_endpoint" | "scan_endpoint" | "block_ip" | "block_ioc" | "unblock_ioc" | "kill_process" | "custom" | "disable_identity" | "revoke_sessions" | "require_mfa" | "remove_inbox_rule" | "revoke_oauth_grant" | "suspend_user" | "sign_out" | "reset_signin_cookies" | "revoke_oauth_token" | "reset_password";
   assetExternalId: string;
+  /** Executor-supplied hints. `actionId` is the blakSOC response action id, usable as an idempotency key. */
   params?: Record<string, unknown>;
 };
 
-export type ResponseActionResult = { ok: boolean; message: string; providerRef?: string };
+/**
+ * `pending: true` means the provider accepted the action but the endpoint has not finished it.
+ * The worker then polls `getResponseActionStatus` with `providerRef` until it settles.
+ */
+export type ResponseActionResult = { ok: boolean; message: string; providerRef?: string; pending?: boolean };
+
+export type ResponseActionState = { state: "pending" | "running" | "succeeded" | "failed"; message: string };
 
 export type ProviderHealth = {
   ok: boolean;
@@ -85,5 +92,7 @@ export interface SecurityEventProvider {
   /** Actions this provider can execute; the SOAR layer refuses anything else. */
   supportedActions(): ResponseActionRequest["action"][];
   executeResponseAction(req: ResponseActionRequest): Promise<ResponseActionResult>;
+  /** Asynchronous providers only: current state of an action previously returned with `pending: true`. */
+  getResponseActionStatus?(ref: { assetExternalId: string; providerRef: string }): Promise<ResponseActionState>;
   health(): Promise<ProviderHealth>;
 }

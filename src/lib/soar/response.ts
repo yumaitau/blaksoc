@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Tx } from "@/db/client";
 import { approvals, assetSources, integrations, responseActions, tenants, user } from "@/db/schema";
@@ -6,6 +6,7 @@ import { withScope } from "@/db/scope";
 import { can, systemScope, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { eventProvider } from "@/lib/connectors/instances";
+import type { ResponseActionState } from "@/lib/providers/types";
 import { adminDb } from "@/db/client";
 import { publish } from "@/lib/events";
 import { queue, QUEUES } from "@/lib/queue";
@@ -13,6 +14,7 @@ import { settleDfirApproval } from "@/lib/services/dfir";
 import { addTimeline } from "@/lib/services/incidents";
 import { AccessDenied } from "@/lib/services/common";
 import { RESPONSE_ACTIONS, type ResponseActionKey } from "./actions";
+import { decidePending, isPendingResult, type PendingResult } from "./pending";
 
 export type RequestInput = {
   tenantId: string;
@@ -183,6 +185,8 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
   let ok = false;
   let message = "";
   let integrationId: string | null = null;
+  let providerRef: string | undefined;
+  let pending: PendingResult | null = null;
   try {
     const target = act.target as RequestInput["target"];
     let externalId = "";
@@ -229,19 +233,94 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
     const supported = provider.supportedActions() as string[];
     if (providerAction === act.action && act.action === "block_ioc" && !supported.includes("block_ioc") && supported.includes("block_ip")) providerAction = "block_ip";
     if (!supported.includes(providerAction)) throw new Error(`${row.name} does not support ${act.action}`);
-    const r = await provider.executeResponseAction({ action: providerAction as never, assetExternalId: externalId, params: { srcip: target.ip ?? target.observable, indicator: target.observable ?? target.ip, arguments: target.process ? [target.process] : [], platform, ruleId: target.ruleId, grantId: target.grantId } });
+    const r = await provider.executeResponseAction({ action: providerAction as never, assetExternalId: externalId, params: { srcip: target.ip ?? target.observable, indicator: target.observable ?? target.ip, arguments: target.process ? [target.process] : [], platform, ruleId: target.ruleId, grantId: target.grantId, actionId } });
     ok = r.ok;
     message = r.message;
+    providerRef = r.providerRef;
+    // Only providers that can report status may leave an action in flight; others are final as before.
+    if (r.ok && r.pending && r.providerRef && provider.getResponseActionStatus) {
+      pending = { message: r.message, providerRef: r.providerRef, pending: true, assetExternalId: externalId, dispatchedAt: new Date().toISOString() };
+    }
   } catch (err) {
     message = (err as Error).message;
   }
-  await withScope(scope, async (tx) => {
-    await tx.update(responseActions).set({ status: ok ? "SUCCEEDED" : "FAILED", result: { message }, executedAt: new Date(), integrationId }).where(eq(responseActions.id, actionId));
-    if (act.incidentId) {
-      await addTimeline(tx, { tenantId, incidentId: act.incidentId, origin: "machine", category: "response", title: `${RESPONSE_ACTIONS[act.action as ResponseActionKey]?.label ?? act.action} ${ok ? "succeeded" : "failed"}`, detail: message, refType: "response_action", refId: actionId });
-    }
-    await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "response.execute", targetType: "response_action", targetId: actionId, detail: { ok, message } });
-  });
-  await publish({ type: "response.updated", tenantId, id: actionId, status: ok ? "SUCCEEDED" : "FAILED" });
+  if (pending) {
+    const inFlight = pending;
+    await withScope(scope, async (tx) => {
+      await tx.update(responseActions).set({ result: inFlight, integrationId }).where(eq(responseActions.id, actionId));
+      if (act.incidentId) {
+        await addTimeline(tx, { tenantId, incidentId: act.incidentId, origin: "machine", category: "response", title: `${actionLabel(act.action)} sent to endpoint`, detail: inFlight.message, refType: "response_action", refId: actionId });
+      }
+      await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "response.dispatch", targetType: "response_action", targetId: actionId, detail: { providerRef: inFlight.providerRef, message: inFlight.message } });
+    });
+    await publish({ type: "response.updated", tenantId, id: actionId, status: "EXECUTING" });
+    return { ok: true, message, pending: true };
+  }
+  await settleResponseAction(tenantId, actionId, act.incidentId, act.action, { ok, message, integrationId, providerRef });
   return { ok, message };
+}
+
+function actionLabel(action: string) {
+  return RESPONSE_ACTIONS[action as ResponseActionKey]?.label ?? action;
+}
+
+/** Final status for an EXECUTING action, with timeline and audit. A second caller finds nothing to settle. */
+async function settleResponseAction(
+  tenantId: string,
+  actionId: string,
+  incidentId: string | null,
+  action: string,
+  outcome: { ok: boolean; message: string; integrationId?: string | null; providerRef?: string },
+) {
+  const { ok, message, providerRef } = outcome;
+  const status = ok ? "SUCCEEDED" : "FAILED";
+  const settled = await withScope(systemScope(tenantId), async (tx) => {
+    const [row] = await tx
+      .update(responseActions)
+      .set({ status, result: { message, ...(providerRef ? { providerRef } : {}) }, executedAt: new Date(), ...(outcome.integrationId !== undefined ? { integrationId: outcome.integrationId } : {}) })
+      .where(and(eq(responseActions.id, actionId), eq(responseActions.status, "EXECUTING")))
+      .returning({ id: responseActions.id });
+    if (!row) return false;
+    if (incidentId) {
+      await addTimeline(tx, { tenantId, incidentId, origin: "machine", category: "response", title: `${actionLabel(action)} ${ok ? "succeeded" : "failed"}`, detail: message, refType: "response_action", refId: actionId });
+    }
+    await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "response.execute", targetType: "response_action", targetId: actionId, detail: { ok, message, ...(providerRef ? { providerRef } : {}) } });
+    return true;
+  });
+  if (settled) await publish({ type: "response.updated", tenantId, id: actionId, status });
+  return settled;
+}
+
+/**
+ * Worker: ask asynchronous providers about actions still in flight. Each settles as SUCCEEDED or
+ * FAILED when the endpoint reports, or FAILED once PENDING_TIMEOUT_MS passes without an answer.
+ */
+export async function pollPendingResponseActions(now = new Date(), log: (m: string) => void = () => {}) {
+  const rows = await adminDb()
+    .select()
+    .from(responseActions)
+    .where(and(eq(responseActions.status, "EXECUTING"), sql`${responseActions.result}->>'pending' = 'true'`));
+  let settled = 0;
+  for (const act of rows) {
+    const result = act.result;
+    if (!isPendingResult(result)) continue;
+    let state: ResponseActionState | null = null;
+    try {
+      const [row] = act.integrationId ? await adminDb().select().from(integrations).where(eq(integrations.id, act.integrationId)) : [];
+      if (!row) throw new Error("integration missing");
+      const provider = eventProvider(row);
+      if (!provider.getResponseActionStatus) throw new Error(`${row.name} cannot report action status`);
+      state = await provider.getResponseActionStatus({ assetExternalId: result.assetExternalId, providerRef: result.providerRef });
+    } catch (err) {
+      log(`response ${act.id.slice(0, 8)} status check failed: ${(err as Error).message}`);
+    }
+    const decision = decidePending(state, new Date(result.dispatchedAt), now);
+    if (decision.final) {
+      if (await settleResponseAction(act.tenantId, act.id, act.incidentId, act.action, { ok: decision.ok, message: decision.message, providerRef: result.providerRef })) settled++;
+    } else if (decision.state && (decision.state.state !== result.providerState || decision.state.message !== result.message)) {
+      const next: PendingResult = { ...result, providerState: decision.state.state, message: decision.state.message };
+      await withScope(systemScope(act.tenantId), (tx) => tx.update(responseActions).set({ result: next }).where(and(eq(responseActions.id, act.id), eq(responseActions.status, "EXECUTING"))));
+    }
+  }
+  return { checked: rows.length, settled };
 }

@@ -4,7 +4,7 @@ import { redisConnectionOptions } from "@/lib/redis";
 import { runDueEscalations } from "@/lib/services/escalation";
 import { runDueObligationReminders } from "@/lib/services/obligations";
 import { advanceRun, resumeRun } from "@/lib/soar/engine";
-import { executeResponseAction } from "@/lib/soar/response";
+import { executeResponseAction, pollPendingResponseActions } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
 import { runDueBoardSummaries } from "@/lib/services/board";
@@ -41,6 +41,7 @@ const handlers: Record<QueueName, Handler> = {
     return advanceRun(tenantId, runId);
   },
   [QUEUES.response]: async (job) => {
+    if (job.name === "poll-pending") return pollPendingResponseActions(new Date(), log("response"));
     const { tenantId, actionId } = job.data as { tenantId: string; actionId: string };
     return executeResponseAction(tenantId, actionId);
   },
@@ -73,6 +74,7 @@ const handlers: Record<QueueName, Handler> = {
 const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.ingest, name: "poll", every: 30_000 },
   { queue: QUEUES.ingest, name: "syslog-retain", every: 60 * 60_000 },
+  { queue: QUEUES.response, name: "poll-pending", every: 30_000 },
   { queue: QUEUES.sync, name: "assets", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
   { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },
