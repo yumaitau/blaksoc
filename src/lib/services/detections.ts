@@ -4,6 +4,8 @@ import { withScope } from "@/db/scope";
 import { assertCan, can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { sha256 } from "@/lib/crypto";
+import type { Tx } from "@/db/client";
+import { eventProvider } from "@/lib/connectors/instances";
 import { attackTechniques as sigmaTechniques, parseSigma, runTests, toOpenSearchQuery } from "@/lib/detections/sigma";
 import { actor, AccessDenied, scoped } from "./common";
 
@@ -95,7 +97,25 @@ export async function testRule(ctx: AccessContext, id: string, cases: { name: st
   });
 }
 
-/** Deploy the current version as a scheduled Wazuh-indexer query for each target tenant. */
+/** The tenant's own enabled integration that imports Sigma itself (e.g. Tawny), if any. */
+async function pushTarget(tx: Tx, tenantId: string) {
+  const rows = await tx.select().from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.enabled, true)));
+  for (const row of rows) {
+    try {
+      const provider = eventProvider(row);
+      if (provider.deployDetection) return { row, provider };
+    } catch {
+      /* not an event provider */
+    }
+  }
+  return null;
+}
+
+/**
+ * Deploy the current version for each target tenant. A tenant linked to a shared SIEM gets a scheduled
+ * Wazuh-indexer query. Otherwise, a tenant-owned integration that imports Sigma itself (Tawny) receives
+ * the YAML, and a rejection aborts the deployment with the provider's reason.
+ */
 export async function deployRule(ctx: AccessContext, id: string, tenantIds: string[]) {
   for (const t of tenantIds) assertCan(ctx, "detection:deploy", t);
   return withScope({ tenantIds, platform: false }, async (tx) => {
@@ -107,15 +127,25 @@ export async function deployRule(ctx: AccessContext, id: string, tenantIds: stri
     const tests = await tx.select().from(sigmaRuleTests).where(and(eq(sigmaRuleTests.ruleId, id), eq(sigmaRuleTests.version, r.currentVersion))).orderBy(desc(sigmaRuleTests.createdAt)).limit(1);
     if (r.status !== "experimental" && tests[0] && !tests[0].passed) throw new Error("latest test run for this version failed; fix before deploying");
     const query = toOpenSearchQuery(rule);
+    const pushed: { tenantId: string; integration: string; message: string }[] = [];
     for (const tenantId of tenantIds) {
       const [link] = await tx.select({ integrationId: integrationTenantLinks.integrationId }).from(integrationTenantLinks).where(eq(integrationTenantLinks.tenantId, tenantId)).limit(1);
+      let integrationId = link?.integrationId ?? null;
+      let stored = query;
+      const target = link ? null : await pushTarget(tx, tenantId);
+      if (target) {
+        const res = await target.provider.deployDetection!(v!.yaml);
+        integrationId = target.row.id;
+        stored = `${target.row.provider}:alert-rule:${res.providerRef}`;
+        pushed.push({ tenantId, integration: target.row.name, message: res.message });
+      }
       await tx
         .insert(detectionDeployments)
-        .values({ ruleId: id, tenantId, integrationId: link?.integrationId ?? null, version: r.currentVersion, query, deployedBy: ctx.principal.userId })
-        .onConflictDoUpdate({ target: [detectionDeployments.ruleId, detectionDeployments.tenantId], set: { version: r.currentVersion, query, status: "active", deployedBy: ctx.principal.userId, deployedAt: new Date() } });
-      await audit(tx, { ...actor(ctx), tenantId, action: "detection.deploy", targetType: "sigma_rule", targetId: id, detail: { version: r.currentVersion } });
+        .values({ ruleId: id, tenantId, integrationId, version: r.currentVersion, query: stored, deployedBy: ctx.principal.userId })
+        .onConflictDoUpdate({ target: [detectionDeployments.ruleId, detectionDeployments.tenantId], set: { version: r.currentVersion, query: stored, ...(target ? { integrationId } : {}), status: "active", deployedBy: ctx.principal.userId, deployedAt: new Date() } });
+      await audit(tx, { ...actor(ctx), tenantId, action: "detection.deploy", targetType: "sigma_rule", targetId: id, detail: { version: r.currentVersion, ...(target ? { integrationId, providerRef: stored } : {}) } });
     }
-    return { query, deployed: tenantIds.length };
+    return { query, deployed: tenantIds.length, pushed };
   });
 }
 

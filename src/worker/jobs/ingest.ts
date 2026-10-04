@@ -174,6 +174,8 @@ export async function runDetections(log: Log) {
     if (!collectionAllowed(tierOf(d.tenantId), row.provider)) continue;
     try {
       const provider = eventProvider(row);
+      // The provider runs this rule itself (e.g. Tawny); its hits arrive through the alert poll.
+      if (provider.deployDetection) continue;
       const agents = await adminDb().select({ externalId: assetSources.externalId }).from(assetSources).where(and(eq(assetSources.integrationId, row.id), eq(assetSources.tenantId, d.tenantId)));
       const since = d.lastRunAt ?? new Date(Date.now() - 15 * 60_000);
       const res = await provider.searchEvents({ query: d.query, since, routingKeys: agents.map((a) => `agent:${a.externalId}`), limit: 100 });

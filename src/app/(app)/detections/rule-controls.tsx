@@ -149,7 +149,7 @@ export function TestResultsTable({ results }: { results: TestResult[] }) {
 
 export function DeployPanel({ ruleId, customers, canDeploy, enabled }: { ruleId: string; customers: { id: string; name: string; deployedVersion: number | null }[]; canDeploy: boolean; enabled: boolean }) {
   const [selected, setSelected] = useState<string[]>([]);
-  const [out, setOut] = useState<{ query: string; deployed: number } | null>(null);
+  const [out, setOut] = useState<{ query: string; deployed: number; pushed?: { tenantId: string; integration: string; message: string }[] } | null>(null);
   const { pending, error, run } = useAction();
   const toggle = (id: string, on: boolean) => setSelected((s) => (on ? [...s, id] : s.filter((x) => x !== id)));
   if (!customers.length) return <p className="text-sm text-muted">No customers in scope for deployment.</p>;
@@ -178,6 +178,9 @@ export function DeployPanel({ ruleId, customers, canDeploy, enabled }: { ruleId:
         <div role="status" className="space-y-1.5">
           <p className="text-sm text-ok">Deployed to {out.deployed} customer{out.deployed === 1 ? "" : "s"}. Generated Wazuh-indexer (OpenSearch) query:</p>
           <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[12px] text-fg">{out.query}</pre>
+          {out.pushed?.map((p) => (
+            <p key={p.tenantId} className="text-sm text-muted">{p.integration}: {p.message}</p>
+          ))}
         </div>
       ) : null}
     </div>

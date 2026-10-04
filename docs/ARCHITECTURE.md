@@ -47,7 +47,8 @@ Sigma YAML is the source of truth. Each save creates an immutable version (sha25
 version against sample events with blakSOC's Sigma evaluator. Deploying converts the current version to an
 OpenSearch `query_string` with Wazuh field mappings and records a per-tenant deployment; the worker runs it
 every 5 minutes against that tenant's agents and feeds hits back through the normal ingest pipeline
-(`source = blaksoc-sigma`). ATT&CK coverage compares enabled rules and active deployments against observed
+(`source = blaksoc-sigma`). A customer with no shared-SIEM link that owns a provider able to run Sigma itself
+(`deployDetection`, e.g. Tawny) gets the raw YAML pushed there instead; that provider's own alerts carry the hits. ATT&CK coverage compares enabled rules and active deployments against observed
 alerts and incidents per technique.
 
 ## SOAR

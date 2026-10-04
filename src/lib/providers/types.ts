@@ -95,4 +95,9 @@ export interface SecurityEventProvider {
   /** Asynchronous providers only: current state of an action previously returned with `pending: true`. */
   getResponseActionStatus?(ref: { assetExternalId: string; providerRef: string }): Promise<ResponseActionState>;
   health(): Promise<ProviderHealth>;
+  /**
+   * Providers that run detections themselves (e.g. Tawny) import the Sigma YAML and return their rule id.
+   * Throws with the provider's reason when it rejects the rule. blakSOC does not schedule queries for them.
+   */
+  deployDetection?(sigmaYaml: string): Promise<{ providerRef: string; message: string }>;
 }
