@@ -9,7 +9,7 @@ a re-implementation of them:
 | Capability | Component | blakSOC's role |
 |---|---|---|
 | SIEM / XDR / endpoint telemetry | **Wazuh** (first provider behind `SecurityEventProvider`) | Ingest, route to tenant, enrich, score, respond |
-| Endpoint detection and response | **Tawny EDR** (Yuma IT's agent, via its `twny_` API) | Alerts with ATT&CK, agent inventory, kill process with the agent's result tracked to completion |
+| Endpoint detection and response | **Tawny EDR** (Yuma IT's agent, via its `twny_` API) | Alerts with ATT&CK, agent inventory, kill process with the agent's result tracked to completion, Sigma rules deployed as Tawny alert rules |
 | Cyber threat intelligence | **OpenCTI** (system of record, STIX 2.1) | Enrichment, sightings feedback, AU advisory reports, sector tags |
 | Detection content | **Sigma** | Repository, versioning, testing, deployment as scheduled SIEM queries, ATT&CK coverage |
 | Orchestration | Native lightweight SOAR | Trigger → conditions → actions → **human approval** → execution |

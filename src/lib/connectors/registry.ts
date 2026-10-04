@@ -212,12 +212,12 @@ export const CONNECTORS: ConnectorDefinition[] = [
     provider: "tawny",
     name: "Tawny EDR",
     category: "endpoint",
-    description: "Yuma IT's endpoint agent. Alerts with ATT&CK techniques, agent inventory, and kill process by PID. Actions run on the agent's next heartbeat, and blakSOC records the agent's result. Isolation and release need an agent build with isolation support; current agents report them as failed. Fixture mode returns canned data without calling Tawny.",
+    description: "Yuma IT's endpoint agent. Alerts with ATT&CK techniques, agent inventory, and kill process by PID. Actions run on the agent's next heartbeat, and blakSOC records the agent's result. Sigma rules deploy as Tawny alert rules. Isolation and release need an agent build with isolation support; current agents report them as failed. Fixture mode returns canned data without calling Tawny.",
     status: "available",
     capabilities: ["events", "assets", "response"],
     remotePermissions: [
       "Tawny API token (twny_) from the customer's Tawny tenant",
-      "Viewer role for alerts and agents only; Admin role to run and track response actions",
+      "Viewer role to read alerts, agents and action status; Admin role to run response actions and deploy Sigma rules",
     ],
     config: z.object({
       apiUrl: z.string().url(),

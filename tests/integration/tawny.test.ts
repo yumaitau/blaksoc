@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
-import { alerts, assetSources, assets, auditLog, incidents, incidentTimeline, integrations, playbookRuns, responseActions, tenants } from "@/db/schema";
+import { alerts, assetSources, assets, auditLog, detectionDeployments, incidents, incidentTimeline, integrations, integrationTenantLinks, playbookRuns, responseActions, tenants } from "@/db/schema";
 import type { AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
 import { eventProvider } from "@/lib/connectors/instances";
@@ -14,13 +14,14 @@ import { PENDING_TIMEOUT_MS } from "@/lib/soar/pending";
 import { decideApproval, executeResponseAction, pollPendingResponseActions, requestFromUser } from "@/lib/soar/response";
 import { createIntegration } from "@/lib/services/integrations";
 import { runPlaybookManually, savePlaybook } from "@/lib/services/playbooks";
+import { deployRule, saveRule } from "@/lib/services/detections";
 
 const created: string[] = [];
 const TOKEN = "twny_integrationTestToken0123456789abcdef";
 const original = globalThis.fetch;
 
 function staff(tenantId: string): AccessContext {
-  const permissions: Permission[] = ["integration:manage", "response:request", "response:approve", "playbook:write", "playbook:run", "playbook:read"];
+  const permissions: Permission[] = ["detection:write", "detection:deploy", "integration:manage", "response:request", "response:approve", "playbook:write", "playbook:run", "playbook:read"];
   return {
     principal: { userId: "tawny-lead", name: "Tawny Lead", email: "tawny@example.invalid", isBreakGlass: false },
     isPlatform: false,
@@ -132,15 +133,18 @@ describe("tawny response path", () => {
 
   it("sends the blakSOC action id as the idempotency key and fails after the endpoint timeout", async () => {
     const agentId = "7c0e2f4a-1b2c-4d5e-8f90-a1b2c3d4e5f6";
+    const tawnyAction = "9f8e7d6c-5b4a-4321-8765-0123456789ab";
     const posted: unknown[] = [];
+    const polled: string[] = [];
     globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/agents")) return Response.json([{ id: agentId, hostname: "chair-3", operating_system: "linux", os_version: "6.8", status: "online", last_heartbeat_at: new Date().toISOString() }]);
       if (init?.method === "POST") {
         posted.push(JSON.parse(String(init.body)));
-        return Response.json({ id: "tawny-act-1", agent_id: agentId, action_type: "kill_process", status: "pending" }, { status: 201 });
+        return Response.json({ id: tawnyAction, agent_id: agentId, action_type: "kill_process", status: "pending" }, { status: 201 });
       }
-      return Response.json([{ id: "tawny-act-1", agent_id: agentId, action_type: "kill_process", status: "dispatched" }]);
+      polled.push(url);
+      return Response.json({ id: tawnyAction, agent_id: agentId, action_type: "kill_process", status: "dispatched" });
     }) as typeof fetch;
 
     const { tenant, lead, row, incident } = await setup("live");
@@ -149,9 +153,10 @@ describe("tawny response path", () => {
     await decideApproval(lead, requested.approvalId!, "APPROVED", "Kill it");
     expect(await executeResponseAction(tenant.id, requested.action.id)).toMatchObject({ ok: true, pending: true });
     expect(posted).toEqual([{ action_type: "kill_process", payload: { pid: 311 }, idempotency_key: requested.action.id }]);
-    expect((await actionRow(requested.action.id)).result).toMatchObject({ providerRef: "tawny-act-1" });
+    expect((await actionRow(requested.action.id)).result).toMatchObject({ providerRef: tawnyAction });
 
     await pollPendingResponseActions(new Date());
+    expect(polled).toEqual([`https://tawny.example.com/api/agents/${agentId}/actions/${tawnyAction}`]);
     const running = await actionRow(requested.action.id);
     expect(running.status).toBe("EXECUTING");
     expect(running.result).toMatchObject({ providerState: "running", pending: true });
@@ -203,5 +208,45 @@ describe("tawny response path", () => {
     const done = await actionRow(requested.action.id);
     expect(done.status).toBe("SUCCEEDED");
     expect(done.result).toMatchObject({ message: expect.stringMatching(/^scanned/), providerRef: expect.stringContaining("defender:") });
+  });
+
+  it("deploys a Sigma rule to Tawny and surfaces Tawny's rejection", async () => {
+    const yaml = (title: string) => `title: ${title}\nid: ${randomUUID()}\nlevel: high\nlogsource:\n  product: windows\n  category: process_creation\ndetection:\n  sel:\n    Image|endswith: powershell.exe\n  condition: sel\n`;
+    const imported: unknown[] = [];
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/alert-rules")) return Response.json([]);
+      const body = JSON.parse(String(init?.body)) as { rule_yaml: string };
+      imported.push(body);
+      if (body.rule_yaml.includes("Broken")) return Response.json({ title: "Unsupported Sigma field modifier 're'.", status: 400 }, { status: 400 });
+      return Response.json({ id: "4d1c1d1e-0000-4000-8000-00000000abcd", name: "PowerShell", format: "sigma" }, { status: 201 });
+    }) as typeof fetch;
+
+    const { tenant, lead, row } = await setup("live");
+    const good = await saveRule(lead, { tenantId: tenant.id, yaml: yaml("PowerShell") });
+    const res = await deployRule(lead, good.id, [tenant.id]);
+    expect(res.pushed).toEqual([{ tenantId: tenant.id, integration: "Tawny", message: 'imported to Tawny as "PowerShell"' }]);
+    expect(imported).toEqual([{ rule_yaml: expect.stringContaining("title: PowerShell"), is_enabled: true }]);
+    const [dep] = await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, good.id));
+    expect(dep).toMatchObject({ integrationId: row.id, status: "active", query: "tawny:alert-rule:4d1c1d1e-0000-4000-8000-00000000abcd" });
+
+    const bad = await saveRule(lead, { tenantId: tenant.id, yaml: yaml("Broken") });
+    await expect(deployRule(lead, bad.id, [tenant.id])).rejects.toThrow("Tawny rejected the Sigma rule: Unsupported Sigma field modifier 're'.");
+    expect(await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, bad.id))).toEqual([]);
+  });
+
+  it("keeps the scheduled indexer query for a linked shared SIEM", async () => {
+    const { tenant, lead } = await setup("fixture");
+    const [shared] = await adminDb().insert(integrations).values({ tenantId: null, category: "siem", provider: "wazuh", name: `Shared ${tenant.slug}`, enabled: true }).returning();
+    await adminDb().insert(integrationTenantLinks).values({ integrationId: shared!.id, tenantId: tenant.id, selector: {} });
+    const rule = await saveRule(lead, { tenantId: tenant.id, yaml: `title: Shared\nid: ${randomUUID()}\nlogsource:\n  product: windows\ndetection:\n  sel:\n    Image|endswith: cmd.exe\n  condition: sel\n` });
+    globalThis.fetch = (() => {
+      throw new Error("network");
+    }) as typeof fetch;
+    const res = await deployRule(lead, rule.id, [tenant.id]);
+    expect(res.pushed).toEqual([]);
+    const [dep] = await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, rule.id));
+    expect(dep).toMatchObject({ integrationId: shared!.id, query: res.query });
+    await adminDb().delete(integrations).where(eq(integrations.id, shared!.id));
   });
 });

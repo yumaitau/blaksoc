@@ -43,7 +43,7 @@ export type TawnyAlert = {
   mitre_techniques?: string[];
 };
 
-/** `GET /api/agents` row (AgentSummary). Tawny does not report agent IPs or tags yet. */
+/** `GET /api/agents` row (AgentSummary). */
 export type TawnyAgent = {
   id: string;
   hostname: string;
@@ -54,7 +54,12 @@ export type TawnyAgent = {
   status: "online" | "stale" | "offline" | "unknown" | "revoked";
   last_heartbeat_at?: string | null;
   enrolled_at?: string;
+  public_ip?: string | null;
+  tags?: string[];
 };
+
+/** `GET /api/alert-rules` / `POST /api/alert-rules/sigma` row. Only the fields blakSOC reads are typed. */
+export type TawnyAlertRule = { id: string; name: string; format: string; external_id?: string | null; source_definition?: string | null };
 
 type TawnyActionType = "kill_process" | "isolate_host" | "release_host";
 type TawnyActionStatus = "pending" | "dispatched" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
@@ -116,7 +121,10 @@ export function normaliseTawnyAlert(a: TawnyAlert): NormalisedAlert {
   };
 }
 
-/** Tawny agent → blakSOC asset. `raw.os.platform` is what the response executor reads. */
+/**
+ * Tawny agent → blakSOC asset. `raw.os.platform` is what the response executor reads. Tags become
+ * `group:<tag>` routing keys so a shared integration's tenant links (selector.agentGroups) can route by tag.
+ */
 export function normaliseTawnyAgent(a: TawnyAgent): NormalisedAsset {
   const os = [OS_LABEL[a.operating_system] ?? a.operating_system, a.os_version].filter(Boolean).join(" ") || null;
   return {
@@ -124,12 +132,12 @@ export function normaliseTawnyAgent(a: TawnyAgent): NormalisedAsset {
     kind: "endpoint",
     name: a.hostname,
     hostname: a.hostname,
-    ips: [],
+    ips: str(a.public_ip) ? [a.public_ip!.trim()] : [],
     os,
     macs: [],
     agentStatus: a.status ?? null,
     lastSeen: a.last_heartbeat_at ? new Date(a.last_heartbeat_at) : null,
-    routingKeys: [`agent:${a.id}`],
+    routingKeys: [`agent:${a.id}`, ...(a.tags ?? []).filter((t) => str(t)).map((t) => `group:${t}`)],
     raw: {
       id: a.id,
       hostname: a.hostname,
@@ -138,6 +146,8 @@ export function normaliseTawnyAgent(a: TawnyAgent): NormalisedAsset {
       architecture: a.architecture ?? null,
       enrolled_at: a.enrolled_at ?? null,
       last_heartbeat_at: a.last_heartbeat_at ?? null,
+      public_ip: a.public_ip ?? null,
+      tags: a.tags ?? [],
       os: { platform: a.operating_system, version: a.os_version ?? null },
     },
   };
@@ -184,6 +194,8 @@ const FIXTURE_AGENT: TawnyAgent = {
   status: "online",
   last_heartbeat_at: FIXTURE_SEEN,
   enrolled_at: FIXTURE_SEEN,
+  public_ip: "203.0.113.24",
+  tags: ["fixture"],
 };
 const FIXTURE_ALERTS: TawnyAlert[] = [
   {
@@ -249,14 +261,18 @@ export class TawnyProvider implements SecurityEventProvider {
     return { alerts, cursor: last ? String(last.id) : null };
   }
 
-  /** Tawny has no single-alert route; `after_id = id - 1, limit = 1` returns exactly that id when it exists. */
   async getAlert(externalId: string) {
     if (!/^\d+$/.test(externalId)) return null;
-    const id = Number(externalId);
-    if (!Number.isSafeInteger(id) || id < 1) return null;
-    const rows = await this.alerts(new URLSearchParams({ after_id: String(id - 1), limit: "1" }));
-    const row = rows[0];
-    return row && String(row.id) === externalId ? normaliseTawnyAlert(row) : null;
+    if (this.fixture) {
+      const row = FIXTURE_ALERTS.find((a) => String(a.id) === externalId);
+      return row ? normaliseTawnyAlert(row) : null;
+    }
+    try {
+      return normaliseTawnyAlert(await this.api<TawnyAlert>(`/api/alerts/${externalId}`));
+    } catch (err) {
+      if ((err as Error).message.startsWith("404 ")) return null;
+      throw err;
+    }
   }
 
   async searchEvents(q: AlertQuery) {
@@ -268,7 +284,7 @@ export class TawnyProvider implements SecurityEventProvider {
   /** Revoked agents are left out: they cannot heartbeat, so no action could ever reach them. */
   async getAssets(routingKeys?: string[]) {
     const rows = this.fixture ? [FIXTURE_AGENT] : await this.api<TawnyAgent[]>("/api/agents");
-    const wanted = (routingKeys ?? []).filter((k) => k.startsWith("agent:"));
+    const wanted = (routingKeys ?? []).filter((k) => k.startsWith("agent:") || k.startsWith("group:"));
     return rows
       .filter((a) => a.status !== "revoked")
       .map(normaliseTawnyAgent)
@@ -326,11 +342,37 @@ export class TawnyProvider implements SecurityEventProvider {
       if (type === "kill_process") return { state: "succeeded", message: "[fixture] process terminated" };
       return { state: "failed", message: `[fixture] Tawny ${type ?? "action"} failed: this agent build does not support host isolation` };
     }
-    // No single-action route: list the agent's newest 100 actions and pick ours.
-    const rows = await this.api<TawnyAction[]>(`/api/agents/${ref.assetExternalId}/actions`);
-    const row = rows.find((r) => r.id === ref.providerRef);
-    if (!row) return { state: "pending", message: `Tawny action ${ref.providerRef} not in the agent's recent actions` };
-    return tawnyActionState(row);
+    if (!/^[0-9a-f-]{36}$/i.test(ref.assetExternalId) || !/^[0-9a-f-]{36}$/i.test(ref.providerRef)) {
+      return { state: "failed", message: `"${ref.providerRef.slice(0, 60)}" is not a Tawny action on agent ${ref.assetExternalId.slice(0, 60)}` };
+    }
+    try {
+      return tawnyActionState(await this.api<TawnyAction>(`/api/agents/${ref.assetExternalId}/actions/${ref.providerRef}`));
+    } catch (err) {
+      if ((err as Error).message.startsWith("404 ")) return { state: "failed", message: `Tawny has no action ${ref.providerRef} on this agent` };
+      throw new Error(explain(err));
+    }
+  }
+
+  /**
+   * Imports the Sigma YAML as a Tawny alert rule; Tawny maps Sigma fields to its own telemetry. The same
+   * YAML already on Tawny is reused, so a redeploy does not create a duplicate rule.
+   */
+  async deployDetection(sigmaYaml: string): Promise<{ providerRef: string; message: string }> {
+    if (this.fixture) return { providerRef: "fixture:alert-rule", message: "[fixture] Sigma rule imported" };
+    let existing: TawnyAlertRule | undefined;
+    try {
+      const rules = await this.api<TawnyAlertRule[]>("/api/alert-rules");
+      existing = rules.find((r) => r.format === "sigma" && r.source_definition === sigmaYaml);
+    } catch (err) {
+      throw new Error(explain(err));
+    }
+    if (existing) return { providerRef: existing.id, message: `already on Tawny as "${existing.name}"` };
+    try {
+      const rule = await this.api<TawnyAlertRule>("/api/alert-rules/sigma", { method: "POST", json: { rule_yaml: sigmaYaml, is_enabled: true } });
+      return { providerRef: rule.id, message: `imported to Tawny as "${rule.name}"` };
+    } catch (err) {
+      throw new Error(`Tawny rejected the Sigma rule: ${rejection(err)}`);
+    }
   }
 
   async health(): Promise<ProviderHealth> {
@@ -344,6 +386,22 @@ export class TawnyProvider implements SecurityEventProvider {
       return { ok: false, latencyMs: Date.now() - start, detail: { mode: "live" }, error: explain(err) };
     }
   }
+}
+
+/** Tawny problem details carry the importer's reason in `title`. */
+function rejection(err: unknown): string {
+  const message = (err as Error).message;
+  if (message.startsWith("403 ")) return "Sigma import needs an Admin API token (403)";
+  const body = message.slice(message.indexOf(": ") + 2);
+  try {
+    const problem = JSON.parse(body) as { title?: string; detail?: string };
+    if (problem.title) return problem.detail ? `${problem.title} ${problem.detail}` : problem.title;
+  } catch {
+    // httpJson truncates the body; the title usually survives.
+    const title = /"title":"((?:[^"\\]|\\.)*)"/.exec(body)?.[1];
+    if (title) return title.replace(/\\"/g, '"');
+  }
+  return message;
 }
 
 function explain(err: unknown): string {

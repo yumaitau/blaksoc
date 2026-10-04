@@ -7,6 +7,7 @@ import type { SecurityEventProvider } from "@/lib/providers/types";
 
 const TOKEN = "twny_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
 const AGENT = "7c0e2f4a-1b2c-4d5e-8f90-a1b2c3d4e5f6";
+const ACT = "9f8e7d6c-5b4a-4321-8765-0123456789ab";
 const LIVE = { apiUrl: "https://tawny.example.com/", region: "ap-southeast-2", mode: "live" };
 
 function provider(config: Record<string, unknown>, secrets: Record<string, string> = { apiToken: TOKEN }): SecurityEventProvider {
@@ -152,6 +153,14 @@ describe("tawny normalisation", () => {
     expect(normaliseTawnyAgent({ ...agent, last_heartbeat_at: null }).lastSeen).toBeNull();
   });
 
+  it("takes the public IP and turns tags into group routing keys", () => {
+    const a = normaliseTawnyAgent({ ...agent, public_ip: "203.0.113.9", tags: ["wattle", "clinic-2", ""] });
+    expect(a.ips).toEqual(["203.0.113.9"]);
+    expect(a.routingKeys).toEqual([`agent:${AGENT}`, "group:wattle", "group:clinic-2"]);
+    expect(a.raw).toMatchObject({ public_ip: "203.0.113.9", tags: ["wattle", "clinic-2", ""] });
+    expect(normaliseTawnyAgent({ ...agent, public_ip: null, tags: [] }).ips).toEqual([]);
+  });
+
   it("parses a kill_process PID and refuses names", () => {
     expect(parseTawnyPid({ arguments: ["4242"] })).toEqual({ pid: 4242 });
     expect(parseTawnyPid({ arguments: [" 17 "] })).toEqual({ pid: 17 });
@@ -206,6 +215,7 @@ describe("tawny fixture mode", () => {
     expect(await p.executeResponseAction({ action: "kill_process", assetExternalId: assets[0]!.externalId, params: { arguments: ["explorer.exe"] } })).toMatchObject({ ok: false, message: expect.stringMatching(/numeric/) });
     expect(await p.executeResponseAction({ action: "block_ip", assetExternalId: assets[0]!.externalId })).toMatchObject({ ok: false });
     await expect(p.searchEvents({ query: "process.name:x" })).rejects.toThrow(/provider-native/);
+    expect(await p.deployDetection!("title: x")).toMatchObject({ providerRef: "fixture:alert-rule" });
   });
 });
 
@@ -229,31 +239,36 @@ describe("tawny live mode", () => {
     await expect(p.getAlerts({ afterCursor: "eyJ3YXp1aCI6MX0" })).rejects.toThrow(/invalid Tawny cursor/);
   });
 
-  it("returns a null cursor on an empty page and finds one alert by id", async () => {
-    const calls = stubFetch((call) => ({ body: call.url.includes("after_id=41") ? [alert] : [] }));
+  it("returns a null cursor on an empty page and fetches one alert by id", async () => {
+    const calls = stubFetch((call) => (call.url.endsWith("/api/alerts/42") ? { body: alert } : call.url.endsWith("/api/alerts/7") ? { status: 404, body: {} } : { body: [] }));
     const p = provider(LIVE);
     expect(await p.getAlerts({ afterCursor: "50" })).toEqual({ alerts: [], cursor: null });
     expect((await p.getAlert("42"))?.externalId).toBe("42");
-    expect(calls[1]!.url).toBe("https://tawny.example.com/api/alerts?after_id=41&limit=1");
-    expect(await p.getAlert("not-a-number")).toBeNull();
+    expect(calls[1]!.url).toBe("https://tawny.example.com/api/alerts/42");
+    expect(await p.getAlert("7")).toBeNull();
+    expect(await p.getAlert("../agents")).toBeNull();
+    expect(calls).toHaveLength(3);
   });
 
-  it("syncs agents and skips revoked ones", async () => {
-    const calls = stubFetch(() => ({ body: [agent, { ...agent, id: "11111111-2222-3333-4444-555555555555", status: "revoked" }] }));
-    const assets = await provider(LIVE).getAssets();
+  it("syncs agents, skips revoked ones, and filters by tag group", async () => {
+    const other = "11111111-2222-3333-4444-555555555555";
+    const calls = stubFetch(() => ({ body: [{ ...agent, tags: ["wattle"] }, { ...agent, id: other, tags: ["murray"] }, { ...agent, id: "22222222-2222-3333-4444-555555555555", status: "revoked" }] }));
+    const p = provider(LIVE);
+    expect((await p.getAssets()).map((a) => a.externalId)).toEqual([AGENT, other]);
     expect(calls[0]!.url).toBe("https://tawny.example.com/api/agents");
-    expect(assets.map((a) => a.externalId)).toEqual([AGENT]);
+    expect((await p.getAssets(["group:murray"])).map((a) => a.externalId)).toEqual([other]);
   });
 
   it("posts kill_process with the PID and the blakSOC action id as idempotency key, then polls the result", async () => {
     let state = "pending";
     const calls = stubFetch((call) => {
-      if (call.method === "POST") return { status: 201, body: { id: "act-1", agent_id: AGENT, action_type: "kill_process", status: "pending", payload: { pid: 4242 }, result: null } };
-      return { body: [{ id: "act-0", agent_id: AGENT, action_type: "kill_process", status: "failed" }, { id: "act-1", agent_id: AGENT, action_type: "kill_process", status: state, result: state === "succeeded" ? { message: "terminated pid 4242" } : null }] };
+      if (call.method === "POST") return { status: 201, body: { id: ACT, agent_id: AGENT, action_type: "kill_process", status: "pending", payload: { pid: 4242 }, result: null } };
+      if (call.url.endsWith(ACT)) return { body: { id: ACT, agent_id: AGENT, action_type: "kill_process", status: state, result: state === "succeeded" ? { message: "terminated pid 4242" } : null } };
+      return { status: 404, body: {} };
     });
     const p = provider(LIVE);
     const r = await p.executeResponseAction({ action: "kill_process", assetExternalId: AGENT, params: { arguments: ["4242"], actionId: "9b3d6f1e-0000-4000-8000-000000000001", platform: "windows" } });
-    expect(r).toMatchObject({ ok: true, pending: true, providerRef: "act-1" });
+    expect(r).toMatchObject({ ok: true, pending: true, providerRef: ACT });
     expect(calls[0]).toMatchObject({
       url: `https://tawny.example.com/api/agents/${AGENT}/actions`,
       method: "POST",
@@ -262,13 +277,16 @@ describe("tawny live mode", () => {
     expect(calls[0]!.headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(calls[0]!.headers["content-type"]).toBe("application/json");
 
-    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: "act-1" })).toMatchObject({ state: "pending" });
+    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: ACT })).toMatchObject({ state: "pending" });
     state = "running";
-    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: "act-1" })).toMatchObject({ state: "running" });
+    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: ACT })).toMatchObject({ state: "running" });
     state = "succeeded";
-    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: "act-1" })).toEqual({ state: "succeeded", message: "terminated pid 4242" });
-    expect(calls[1]!.url).toBe(`https://tawny.example.com/api/agents/${AGENT}/actions`);
-    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: "act-missing" })).toMatchObject({ state: "pending" });
+    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: ACT })).toEqual({ state: "succeeded", message: "terminated pid 4242" });
+    expect(calls[1]!.url).toBe(`https://tawny.example.com/api/agents/${AGENT}/actions/${ACT}`);
+    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: "33333333-2222-3333-4444-555555555555" })).toEqual({ state: "failed", message: expect.stringMatching(/no action/) });
+    const before = calls.length;
+    expect(await p.getResponseActionStatus!({ assetExternalId: AGENT, providerRef: "../../alerts" })).toMatchObject({ state: "failed" });
+    expect(calls).toHaveLength(before);
   });
 
   it("maps isolate and release to Tawny host actions with an empty payload", async () => {
@@ -296,6 +314,34 @@ describe("tawny live mode", () => {
     expect(await p.executeResponseAction({ action: "kill_process", assetExternalId: "../../admin", params: { arguments: ["1"] } })).toMatchObject({ ok: false });
     expect(await p.executeResponseAction({ action: "kill_process", assetExternalId: AGENT, params: { arguments: ["notepad"] } })).toMatchObject({ ok: false });
     expect(calls).toHaveLength(1);
+  });
+
+  it("imports Sigma YAML as a Tawny alert rule and reuses an identical one", async () => {
+    const yaml = "title: Encoded PowerShell\ndetection:\n  sel:\n    Image|endswith: powershell.exe\n  condition: sel\n";
+    const calls = stubFetch((call) => {
+      if (call.method === "POST") return { status: 201, body: { id: "rule-new", name: "Encoded PowerShell", format: "sigma", source_definition: yaml } };
+      return { body: [{ id: "rule-old", name: "Other", format: "sigma", source_definition: "title: other" }] };
+    });
+    const p = provider(LIVE);
+    expect(await p.deployDetection!(yaml)).toEqual({ providerRef: "rule-new", message: 'imported to Tawny as "Encoded PowerShell"' });
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ["GET", "https://tawny.example.com/api/alert-rules"],
+      ["POST", "https://tawny.example.com/api/alert-rules/sigma"],
+    ]);
+    expect(calls[1]!.body).toEqual({ rule_yaml: yaml, is_enabled: true });
+
+    stubFetch(() => ({ body: [{ id: "rule-same", name: "Encoded PowerShell", format: "sigma", source_definition: yaml }] }));
+    expect(await provider(LIVE).deployDetection!(yaml)).toEqual({ providerRef: "rule-same", message: 'already on Tawny as "Encoded PowerShell"' });
+  });
+
+  it("surfaces Tawny's reason when it rejects a Sigma rule", async () => {
+    stubFetch((call) => (call.method === "POST"
+      ? { status: 400, body: { type: "https://tools.ietf.org/html/rfc9110#section-15.5.1", title: "Unsupported Sigma field modifier 're'.", status: 400 } }
+      : { body: [] }));
+    await expect(provider(LIVE).deployDetection!("title: x")).rejects.toThrow("Tawny rejected the Sigma rule: Unsupported Sigma field modifier 're'.");
+
+    stubFetch((call) => (call.method === "POST" ? { status: 403, body: {} } : { body: [] }));
+    await expect(provider(LIVE).deployDetection!("title: x")).rejects.toThrow(/needs an Admin API token/);
   });
 
   it("checks the API and the token in health", async () => {
