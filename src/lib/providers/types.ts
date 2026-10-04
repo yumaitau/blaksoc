@@ -100,4 +100,6 @@ export interface SecurityEventProvider {
    * Throws with the provider's reason when it rejects the rule. blakSOC does not schedule queries for them.
    */
   deployDetection?(sigmaYaml: string): Promise<{ providerRef: string; message: string }>;
+  /** Stops a rule `deployDetection` created. Throws with the provider's reason when it cannot. */
+  withdrawDetection?(providerRef: string): Promise<{ message: string }>;
 }

@@ -215,7 +215,7 @@ describe("tawny fixture mode", () => {
     expect(await p.executeResponseAction({ action: "kill_process", assetExternalId: assets[0]!.externalId, params: { arguments: ["explorer.exe"] } })).toMatchObject({ ok: false, message: expect.stringMatching(/numeric/) });
     expect(await p.executeResponseAction({ action: "block_ip", assetExternalId: assets[0]!.externalId })).toMatchObject({ ok: false });
     await expect(p.searchEvents({ query: "process.name:x" })).rejects.toThrow(/provider-native/);
-    expect(await p.deployDetection!("title: x")).toMatchObject({ providerRef: "fixture:alert-rule" });
+    expect(await p.deployDetection!("title: x")).toMatchObject({ providerRef: expect.stringMatching(/^fixture:/) });
   });
 });
 
@@ -341,7 +341,47 @@ describe("tawny live mode", () => {
     await expect(provider(LIVE).deployDetection!("title: x")).rejects.toThrow("Tawny rejected the Sigma rule: Unsupported Sigma field modifier 're'.");
 
     stubFetch((call) => (call.method === "POST" ? { status: 403, body: {} } : { body: [] }));
-    await expect(provider(LIVE).deployDetection!("title: x")).rejects.toThrow(/needs an Admin API token/);
+    await expect(provider(LIVE).deployDetection!("title: x")).rejects.toThrow(/need an Admin API token/);
+  });
+
+  it("re-enables an identical rule a pause disabled", async () => {
+    const yaml = "title: x";
+    const calls = stubFetch((call) => (call.method === "PUT"
+      ? { body: { id: "r1", name: "X", format: "sigma", is_enabled: true } }
+      : { body: [{ id: "r1", name: "X", format: "sigma", source_definition: yaml, is_enabled: false, event_type: "process_launch", severity: "high", operator: "contains", payload_path: "processes.name", match_value: "x.exe", mitre_techniques: ["T1059"] }] }));
+    expect(await provider(LIVE).deployDetection!(yaml)).toEqual({ providerRef: "r1", message: 're-enabled on Tawny as "X"' });
+    expect(calls[1]).toMatchObject({ method: "PUT", url: "https://tawny.example.com/api/alert-rules/r1", body: { is_enabled: true, match_value: "x.exe" } });
+  });
+
+  it("withdraws a deployed rule by disabling it with its stored match logic", async () => {
+    const stored = { id: "r1", name: "Encoded PowerShell", format: "sigma", is_enabled: true, event_type: "process_launch", severity: "high", operator: "contains", payload_path: "processes.name", match_value: "powershell.exe", mitre_techniques: ["T1059.001"] };
+    const calls = stubFetch((call) => (call.method === "PUT" ? { body: { ...stored, is_enabled: false } } : { body: [stored] }));
+    const p = provider(LIVE);
+    expect(await p.withdrawDetection!("r1")).toEqual({ message: 'disabled Tawny rule "Encoded PowerShell"' });
+    expect(calls[1]).toMatchObject({ method: "PUT", url: "https://tawny.example.com/api/alert-rules/r1" });
+    expect(calls[1]!.body).toEqual({
+      name: "Encoded PowerShell", event_type: "process_launch", severity: "high", operator: "contains", payload_path: "processes.name", match_value: "powershell.exe", is_enabled: false, mitre_techniques: ["T1059.001"],
+    });
+
+    stubFetch(() => ({ body: [{ ...stored, is_enabled: false }] }));
+    expect(await provider(LIVE).withdrawDetection!("r1")).toMatchObject({ message: expect.stringMatching(/already disabled/) });
+    stubFetch(() => ({ body: [] }));
+    expect(await provider(LIVE).withdrawDetection!("r1")).toMatchObject({ message: expect.stringMatching(/already gone/) });
+    expect(await provider({ ...LIVE, mode: "fixture" }).withdrawDetection!("fixture:abc")).toMatchObject({ message: expect.stringMatching(/fixture/) });
+  });
+
+  it("deletes a rule Tawny will not disable, and reports when it can do neither", async () => {
+    const compiled = { id: "r2", name: "Two selections", format: "sigma", is_enabled: true, operator: "contains", payload_path: null, match_value: null, severity: "medium" };
+    const calls = stubFetch((call) => (call.method === "PUT"
+      ? { status: 400, body: { title: "match_value is required unless the operator is exists.", status: 400 } }
+      : call.method === "DELETE" ? { body: {} } : { body: [compiled] }));
+    expect(await provider(LIVE).withdrawDetection!("r2")).toMatchObject({ message: expect.stringMatching(/^deleted Tawny rule "Two selections" \(Tawny would not disable it: match_value is required/) });
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PUT", "DELETE"]);
+
+    stubFetch((call) => (call.method === "PUT"
+      ? { status: 400, body: { title: "match_value is required unless the operator is exists.", status: 400 } }
+      : call.method === "DELETE" ? { status: 409, body: { title: "Alert rule has alerts and cannot be deleted. Disable it instead.", status: 409 } } : { body: [compiled] }));
+    await expect(provider(LIVE).withdrawDetection!("r2")).rejects.toThrow(/could not disable rule "Two selections": match_value is required.*delete failed: Alert rule has alerts/);
   });
 
   it("checks the API and the token in health", async () => {

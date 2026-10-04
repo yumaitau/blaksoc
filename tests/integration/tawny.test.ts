@@ -14,7 +14,7 @@ import { PENDING_TIMEOUT_MS } from "@/lib/soar/pending";
 import { decideApproval, executeResponseAction, pollPendingResponseActions, requestFromUser } from "@/lib/soar/response";
 import { createIntegration } from "@/lib/services/integrations";
 import { runPlaybookManually, savePlaybook } from "@/lib/services/playbooks";
-import { deployRule, saveRule } from "@/lib/services/detections";
+import { deployRule, saveRule, setRuleEnabled } from "@/lib/services/detections";
 
 const created: string[] = [];
 const TOKEN = "twny_integrationTestToken0123456789abcdef";
@@ -248,5 +248,57 @@ describe("tawny response path", () => {
     const [dep] = await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, rule.id));
     expect(dep).toMatchObject({ integrationId: shared!.id, query: res.query });
     await adminDb().delete(integrations).where(eq(integrations.id, shared!.id));
+  });
+
+  it("disables the superseded Tawny rule on redeploy and when the rule is paused", async () => {
+    type Rule = { id: string; name: string; format: string; source_definition: string; is_enabled: boolean; operator: string; match_value: string; payload_path: string; severity: string; event_type: string };
+    const rules: Rule[] = [];
+    const puts: { id: string; body: Record<string, unknown> }[] = [];
+    let refuse = false;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (method === "GET" && url.endsWith("/api/alert-rules")) return Response.json(rules);
+      if (method === "POST") {
+        const { rule_yaml } = JSON.parse(String(init!.body)) as { rule_yaml: string };
+        const rule = { id: randomUUID(), name: `v${rules.length + 1}`, format: "sigma", source_definition: rule_yaml, is_enabled: true, operator: "contains", match_value: "powershell.exe", payload_path: "processes.name", severity: "high", event_type: "process_launch" };
+        rules.push(rule);
+        return Response.json(rule, { status: 201 });
+      }
+      const id = url.split("/").at(-1)!;
+      if (method === "PUT") {
+        if (refuse) return Response.json({ title: "Tawny is read-only today", status: 503 }, { status: 503 });
+        const body = JSON.parse(String(init!.body)) as Record<string, unknown>;
+        puts.push({ id, body });
+        const rule = rules.find((r) => r.id === id)!;
+        rule.is_enabled = body.is_enabled as boolean;
+        return Response.json(rule);
+      }
+      return Response.json({ title: "Alert rule has alerts and cannot be deleted. Disable it instead.", status: 409 }, { status: 409 });
+    }) as typeof fetch;
+
+    const { tenant, lead } = await setup("live");
+    const sigmaId = randomUUID();
+    const yaml = (match: string) => `title: PowerShell\nid: ${sigmaId}\nlogsource:\n  product: windows\ndetection:\n  sel:\n    Image|endswith: ${match}\n  condition: sel\n`;
+    const saved = await saveRule(lead, { tenantId: tenant.id, yaml: yaml("powershell.exe") });
+    await deployRule(lead, saved.id, [tenant.id]);
+    expect(rules.map((r) => r.is_enabled)).toEqual([true]);
+
+    await saveRule(lead, { id: saved.id, tenantId: tenant.id, yaml: yaml("pwsh.exe") });
+    const res = await deployRule(lead, saved.id, [tenant.id]);
+    expect(res.pushed[0]!.message).toMatch(/imported to Tawny as "v2"; disabled Tawny rule "v1"/);
+    expect(rules.map((r) => r.is_enabled)).toEqual([false, true]);
+    expect(puts[0]).toEqual({ id: rules[0]!.id, body: expect.objectContaining({ is_enabled: false, match_value: "powershell.exe", operator: "contains", payload_path: "processes.name", event_type: "process_launch" }) });
+
+    refuse = true;
+    await expect(setRuleEnabled(lead, saved.id, false)).rejects.toThrow(/could not disable rule "v2": Tawny is read-only today; delete failed: Alert rule has alerts/);
+    const [still] = await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, saved.id));
+    expect(still!.status).toBe("active");
+
+    refuse = false;
+    await setRuleEnabled(lead, saved.id, false);
+    expect(rules.map((r) => r.is_enabled)).toEqual([false, false]);
+    const [paused] = await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, saved.id));
+    expect(paused!.status).toBe("paused");
   });
 });

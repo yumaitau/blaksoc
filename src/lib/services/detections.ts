@@ -77,7 +77,19 @@ export async function setRuleEnabled(ctx: AccessContext, id: string, enabled: bo
   return scoped(ctx, "detection:write", async (tx) => {
     const [r] = await tx.update(sigmaRules).set({ enabled, updatedAt: new Date() }).where(eq(sigmaRules.id, id)).returning();
     if (!r) throw new AccessDenied("rule not found or not writable");
-    if (!enabled) await tx.update(detectionDeployments).set({ status: "paused" }).where(eq(detectionDeployments.ruleId, id));
+    if (!enabled) {
+      // Rules pushed to a provider keep running there until withdrawn; a failure aborts the pause.
+      const active = await tx.select().from(detectionDeployments).where(and(eq(detectionDeployments.ruleId, id), eq(detectionDeployments.status, "active")));
+      for (const dep of active) {
+        if (!dep.integrationId) continue;
+        const [row] = await tx.select().from(integrations).where(eq(integrations.id, dep.integrationId));
+        const ref = row ? pushedRef(dep.query, row.provider) : null;
+        if (!row || !ref) continue;
+        const provider = eventProvider(row);
+        if (provider.withdrawDetection) await provider.withdrawDetection(ref);
+      }
+      await tx.update(detectionDeployments).set({ status: "paused" }).where(eq(detectionDeployments.ruleId, id));
+    }
     await audit(tx, { ...actor(ctx), tenantId: r.tenantId, action: enabled ? "detection.enable" : "detection.disable", targetType: "sigma_rule", targetId: id });
     return r;
   });
@@ -95,6 +107,12 @@ export async function testRule(ctx: AccessContext, id: string, cases: { name: st
     }
     return { results, passed };
   });
+}
+
+/** Pushed deployments store `<provider>:alert-rule:<providerRef>` in place of a query. */
+function pushedRef(query: string, provider: string): string | null {
+  const prefix = `${provider}:alert-rule:`;
+  return query.startsWith(prefix) ? query.slice(prefix.length) : null;
 }
 
 /** The tenant's own enabled integration that imports Sigma itself (e.g. Tawny), if any. */
@@ -137,7 +155,18 @@ export async function deployRule(ctx: AccessContext, id: string, tenantIds: stri
         const res = await target.provider.deployDetection!(v!.yaml);
         integrationId = target.row.id;
         stored = `${target.row.provider}:alert-rule:${res.providerRef}`;
-        pushed.push({ tenantId, integration: target.row.name, message: res.message });
+        let message = res.message;
+        // Stop the rule this deployment replaces. The new one is live already, so a failure is reported, not fatal.
+        const [prev] = await tx.select().from(detectionDeployments).where(and(eq(detectionDeployments.ruleId, id), eq(detectionDeployments.tenantId, tenantId)));
+        const prevRef = prev?.integrationId === target.row.id ? pushedRef(prev.query, target.row.provider) : null;
+        if (prevRef && prevRef !== res.providerRef && target.provider.withdrawDetection) {
+          try {
+            message += `; ${(await target.provider.withdrawDetection(prevRef)).message}`;
+          } catch (err) {
+            message += `; superseded rule still enabled: ${(err as Error).message}`;
+          }
+        }
+        pushed.push({ tenantId, integration: target.row.name, message });
       }
       await tx
         .insert(detectionDeployments)

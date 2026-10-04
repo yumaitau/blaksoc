@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { httpJson, type HttpOptions } from "./http";
 import type {
   AlertQuery, NormalisedAlert, NormalisedAsset, ProviderHealth, ResponseActionRequest, ResponseActionResult, ResponseActionState,
@@ -59,7 +60,20 @@ export type TawnyAgent = {
 };
 
 /** `GET /api/alert-rules` / `POST /api/alert-rules/sigma` row. Only the fields blakSOC reads are typed. */
-export type TawnyAlertRule = { id: string; name: string; format: string; external_id?: string | null; source_definition?: string | null };
+export type TawnyAlertRule = {
+  id: string;
+  name: string;
+  format: string;
+  external_id?: string | null;
+  source_definition?: string | null;
+  event_type?: string | null;
+  severity?: string;
+  operator?: string;
+  payload_path?: string | null;
+  match_value?: string | null;
+  is_enabled?: boolean;
+  mitre_techniques?: string[];
+};
 
 type TawnyActionType = "kill_process" | "isolate_host" | "release_host";
 type TawnyActionStatus = "pending" | "dispatched" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
@@ -355,23 +369,49 @@ export class TawnyProvider implements SecurityEventProvider {
 
   /**
    * Imports the Sigma YAML as a Tawny alert rule; Tawny maps Sigma fields to its own telemetry. The same
-   * YAML already on Tawny is reused, so a redeploy does not create a duplicate rule.
+   * YAML already on Tawny is reused (and re-enabled if a pause disabled it), so a redeploy does not duplicate it.
    */
   async deployDetection(sigmaYaml: string): Promise<{ providerRef: string; message: string }> {
-    if (this.fixture) return { providerRef: "fixture:alert-rule", message: "[fixture] Sigma rule imported" };
-    let existing: TawnyAlertRule | undefined;
-    try {
-      const rules = await this.api<TawnyAlertRule[]>("/api/alert-rules");
-      existing = rules.find((r) => r.format === "sigma" && r.source_definition === sigmaYaml);
-    } catch (err) {
-      throw new Error(explain(err));
+    if (this.fixture) {
+      return { providerRef: `fixture:${createHash("sha256").update(sigmaYaml).digest("hex").slice(0, 12)}`, message: "[fixture] Sigma rule imported" };
     }
-    if (existing) return { providerRef: existing.id, message: `already on Tawny as "${existing.name}"` };
+    const existing = (await this.rules()).find((r) => r.format === "sigma" && r.source_definition === sigmaYaml);
+    if (existing && existing.is_enabled !== false) return { providerRef: existing.id, message: `already on Tawny as "${existing.name}"` };
+    if (existing) {
+      try {
+        await this.putEnabled(existing, true);
+        return { providerRef: existing.id, message: `re-enabled on Tawny as "${existing.name}"` };
+      } catch {
+        /* Tawny would not re-enable it; import a fresh copy instead */
+      }
+    }
     try {
       const rule = await this.api<TawnyAlertRule>("/api/alert-rules/sigma", { method: "POST", json: { rule_yaml: sigmaYaml, is_enabled: true } });
       return { providerRef: rule.id, message: `imported to Tawny as "${rule.name}"` };
     } catch (err) {
       throw new Error(`Tawny rejected the Sigma rule: ${rejection(err)}`);
+    }
+  }
+
+  /**
+   * Stops a deployed rule. Disables it (match logic sent back unchanged, as Tawny requires for imported
+   * rules); if Tawny refuses the update, deletes it instead, which Tawny allows only while it has no alerts.
+   */
+  async withdrawDetection(providerRef: string): Promise<{ message: string }> {
+    if (this.fixture) return { message: "[fixture] Sigma rule disabled" };
+    const rule = (await this.rules()).find((r) => r.id === providerRef);
+    if (!rule) return { message: `Tawny rule ${providerRef} is already gone` };
+    if (rule.is_enabled === false) return { message: `Tawny rule "${rule.name}" already disabled` };
+    try {
+      await this.putEnabled(rule, false);
+      return { message: `disabled Tawny rule "${rule.name}"` };
+    } catch (putErr) {
+      try {
+        await this.api(`/api/alert-rules/${rule.id}`, { method: "DELETE" });
+        return { message: `deleted Tawny rule "${rule.name}" (Tawny would not disable it: ${rejection(putErr)})` };
+      } catch (delErr) {
+        throw new Error(`Tawny could not disable rule "${rule.name}": ${rejection(putErr)}; delete failed: ${rejection(delErr)}`);
+      }
     }
   }
 
@@ -386,12 +426,36 @@ export class TawnyProvider implements SecurityEventProvider {
       return { ok: false, latencyMs: Date.now() - start, detail: { mode: "live" }, error: explain(err) };
     }
   }
+
+  private async rules(): Promise<TawnyAlertRule[]> {
+    try {
+      return await this.api<TawnyAlertRule[]>("/api/alert-rules");
+    } catch (err) {
+      throw new Error(explain(err));
+    }
+  }
+
+  private putEnabled(rule: TawnyAlertRule, enabled: boolean) {
+    return this.api<TawnyAlertRule>(`/api/alert-rules/${rule.id}`, {
+      method: "PUT",
+      json: {
+        name: rule.name,
+        event_type: rule.event_type ?? null,
+        severity: rule.severity,
+        operator: rule.operator,
+        payload_path: rule.payload_path ?? null,
+        match_value: rule.match_value ?? null,
+        is_enabled: enabled,
+        mitre_techniques: rule.mitre_techniques ?? [],
+      },
+    });
+  }
 }
 
 /** Tawny problem details carry the importer's reason in `title`. */
 function rejection(err: unknown): string {
   const message = (err as Error).message;
-  if (message.startsWith("403 ")) return "Sigma import needs an Admin API token (403)";
+  if (message.startsWith("403 ")) return "Sigma rule changes need an Admin API token (403)";
   const body = message.slice(message.indexOf(": ") + 2);
   try {
     const problem = JSON.parse(body) as { title?: string; detail?: string };

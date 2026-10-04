@@ -11,7 +11,7 @@ Tawny is Yuma IT's endpoint agent. Its API sends blakSOC alerts and the agent in
 | Kill process | `POST /api/agents/{id}/actions` | Needs a numeric PID. A process name is refused. A playbook step uses the PID of the process that raised the alert. |
 | Isolate / release | `POST /api/agents/{id}/actions` | Sent to Tawny, but current agents do not implement isolation and report it as failed. blakSOC shows that failure. Do not rely on Tawny for containment until the agent build supports isolation. |
 | Action status | `GET /api/agents/{id}/actions/{actionId}` | Polled every 30 seconds while an action is in flight. |
-| Sigma detections | `GET /api/alert-rules`, `POST /api/alert-rules/sigma` | Deploying a blakSOC Sigma rule to a customer with a Tawny integration sends the raw YAML to Tawny, which maps Sigma fields to its telemetry and runs the rule itself. Hits come back through the alert poll. Tawny's reason is shown if it rejects the rule. |
+| Sigma detections | `GET /api/alert-rules`, `POST /api/alert-rules/sigma`, `PUT`/`DELETE /api/alert-rules/{id}` | Deploying a blakSOC Sigma rule to a customer with a Tawny integration sends the raw YAML to Tawny, which maps Sigma fields to its telemetry and runs the rule itself. Hits come back through the alert poll. Tawny's reason is shown if it rejects the rule. |
 | Health | `GET /api/health` + `GET /api/agents` | Checks the API is up and the token works. |
 
 Response actions are asynchronous. Tawny delivers each action on the agent's next heartbeat (60 seconds or less). blakSOC keeps the action in **Executing**, checks Tawny every 30 seconds, and records the agent's result as **Succeeded** or **Failed** on the incident timeline and in the audit log. If the agent has not answered after 15 minutes, blakSOC marks the action **Failed** ("timed out waiting for endpoint"). Tawny itself expires an undelivered action after 15 minutes.
@@ -52,5 +52,10 @@ Tawny collection is plan-gated like the Wazuh endpoint service (Standard plan an
 
 - Isolation and release are not implemented by the Tawny agent yet. They finish as Failed.
 - Kill process needs a PID. Tawny does not kill by process name.
-- Sigma deployment imports a rule; it never edits or removes one. Redeploying the same YAML reuses the existing Tawny rule. Deploying a new version adds a new Tawny rule, and pausing a rule in blakSOC does not disable it in Tawny. Disable or delete superseded rules in the Tawny console (Tawny's rule update and delete routes do not accept API tokens).
+- Sigma rule lifecycle on Tawny:
+  - Redeploying the same YAML reuses the existing Tawny rule, and re-enables it if a pause disabled it.
+  - Deploying a new version imports it, then disables the Tawny rule it replaces. If that disable fails, the deploy still succeeds and the result says the superseded rule is still enabled.
+  - Pausing a rule in blakSOC disables its Tawny rules first. If Tawny refuses, the pause is aborted with Tawny's reason, so blakSOC never shows a rule as paused while Tawny still runs it.
+  - blakSOC disables rather than deletes, because Tawny refuses to delete a rule that has alerts. It deletes only when Tawny will not accept the disable (see below).
+- Tawny currently rejects a metadata update on a Sigma rule compiled from more than one selection ("match_value is required unless the operator is exists"). blakSOC then deletes the rule instead, which works until the rule has alerts. After that, disable it in the Tawny console.
 - A customer linked to a shared Wazuh cluster keeps getting the scheduled Wazuh query; Sigma goes to Tawny only when the customer has no shared-SIEM link and owns an enabled Tawny integration.
