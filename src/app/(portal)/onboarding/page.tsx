@@ -1,3 +1,5 @@
+import { env } from "@/lib/env";
+import { consentConfigured } from "@/lib/onboarding/m365-consent";
 import { COPY } from "@/lib/onboarding/copy";
 import {
   BANDWIDTH_PROFILES, CONTACT_CHANNELS, ONBOARDING_STEPS, ORG_TYPES, REMOTE_FLAGS,
@@ -143,7 +145,7 @@ function Wizard(props: {
         {props.step === "org" ? <OrgFields org={props.org} /> : null}
         {props.step === "contacts" ? <ContactFields contacts={props.contacts} /> : null}
         {props.step === "stack" ? <StackFields stack={props.stack} /> : null}
-        {props.step === "connect" ? <ConnectFields connect={props.connect} identity={props.stack?.identity} /> : null}
+        {props.step === "connect" ? <ConnectFields draftId={props.draftId} connect={props.connect} identity={props.stack?.identity} /> : null}
         {props.step === "governance" ? <GovFields /> : null}
         {props.step === "plan" ? <PlanFields plan={props.plan} partnerName={props.partnerName} /> : null}
         <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg" type="submit">
@@ -152,6 +154,12 @@ function Wizard(props: {
       </form>
     </div>
   );
+}
+
+function abnLine(org: OrgDraft): string {
+  if (org.abnSource === "unavailable") return COPY.abnUnavailable;
+  if (org.abnSource === "abr") return org.abnFound ? `${COPY.abnHitLive} ${org.abnName ?? ""}${org.abnStatus ? ` (${org.abnStatus})` : ""}` : COPY.abnMissLive;
+  return `${org.abnFound ? COPY.abnHit : COPY.abnMiss} ${org.abnName ?? ""}`;
 }
 
 function OrgFields({ org }: { org: OrgDraft | null }) {
@@ -165,8 +173,8 @@ function OrgFields({ org }: { org: OrgDraft | null }) {
       <label className="block text-sm">{COPY.abn}
         <input className={inputCls} name="abn" required inputMode="numeric" defaultValue={org?.abn ?? ""} />
       </label>
-      <p className="text-sm text-muted">{COPY.abnHint}</p>
-      {org ? <p className="text-sm text-muted">{org.abnFound ? COPY.abnHit : COPY.abnMiss} {org.abnName ?? ""}</p> : null}
+      <p className="text-sm text-muted">{env().ABR_GUID ? COPY.abnHintLive : COPY.abnHint}</p>
+      {org ? <p className="text-sm text-muted">{abnLine(org)}</p> : null}
       <label className="block text-sm">{COPY.oric}
         <input className={inputCls} name="oricIcn" defaultValue={org?.oricIcn ?? ""} />
       </label>
@@ -272,14 +280,29 @@ function StackFields({ stack }: { stack: StackDraft | null }) {
   );
 }
 
-function ConnectFields({ connect, identity }: { connect: ConnectDraft | null; identity?: StackDraft["identity"] }) {
+function ConnectFields({ draftId, connect, identity }: { draftId: string; connect: ConnectDraft | null; identity?: StackDraft["identity"] }) {
+  const consent = connect?.m365Consent ?? null;
+  const live = identity === "m365" && consentConfigured();
   return (
     <div className="space-y-3">
-      <p className="text-sm text-muted">{identity === "google" ? COPY.connectGoogle : identity === "other" ? COPY.connectOther : COPY.connectM365}</p>
-      <label className="block text-sm">{COPY.azureId}
-        <input className={inputCls} name="azureTenantId" defaultValue={connect?.azureTenantId ?? ""} />
-      </label>
-      <p className="text-sm text-muted">{COPY.azureHint}</p>
+      {identity === "google" ? <p className="text-sm text-muted">{COPY.connectGoogle}</p> : null}
+      {identity === "other" ? <p className="text-sm text-muted">{COPY.connectOther}</p> : null}
+      {identity === "m365" && consent ? <p className="text-sm">{COPY.connectM365Done} {consent.organisation ?? ""}</p> : null}
+      {identity === "m365" && !consent && live ? (
+        <>
+          <p className="text-sm text-muted">{COPY.connectM365Live}</p>
+          <a className="inline-flex min-h-11 items-center rounded-md border border-border px-3" href={`/onboarding/m365/consent?draft=${draftId}`}>{COPY.connectM365Button}</a>
+        </>
+      ) : null}
+      {identity === "m365" && !consent && !live ? <p className="text-sm text-muted">{COPY.connectM365}</p> : null}
+      {consent ? null : (
+        <>
+          <label className="block text-sm">{COPY.azureId}
+            <input className={inputCls} name="azureTenantId" defaultValue={connect?.azureTenantId ?? ""} />
+          </label>
+          <p className="text-sm text-muted">{COPY.azureHint}</p>
+        </>
+      )}
       <label className="block text-sm">{COPY.domains}
         <textarea className={inputCls} name="domains" rows={3} defaultValue={connect?.domains.join("\n") ?? ""} />
       </label>

@@ -7,7 +7,8 @@ import {
 import { SECTOR_TAGS } from "@/db/schema/platform";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
-import { lookupAbn } from "@/lib/onboarding/abn";
+import { lookupAbn, normaliseAbn, validAbn } from "@/lib/onboarding/abn";
+import { connectorCredentials, parseCallback, verifyConsent, verifyState } from "@/lib/onboarding/m365-consent";
 import { COPY } from "@/lib/onboarding/copy";
 import {
   BANDWIDTH_PROFILES, CONTACT_CHANNELS, ONBOARDING_STEPS, ORG_TYPES, REMOTE_FLAGS,
@@ -35,7 +36,7 @@ const ROLE_KEYS = ["customer_admin", "customer_security", "customer_readonly"] a
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class OnboardingError extends Error {
-  readonly code: "missing" | "order" | "slug" | "email";
+  readonly code: "missing" | "order" | "slug" | "email" | "abn" | "consent";
   constructor(code: OnboardingError["code"]) {
     super(code);
     this.name = "OnboardingError";
@@ -98,10 +99,11 @@ function parseLocations(raw: Record<string, unknown>): OrgLocation[] {
   return out;
 }
 
-function parseOrg(raw: Record<string, unknown>): OrgDraft {
+async function parseOrg(raw: Record<string, unknown>): Promise<OrgDraft> {
   const name = need(text(raw, "name", 80));
-  const looked = lookupAbn(text(raw, "abn", 20));
-  if (looked.abn.length !== 11) throw new OnboardingError("missing");
+  const abn = normaliseAbn(text(raw, "abn", 20));
+  if (abn.length !== 11) throw new OnboardingError("missing");
+  if (!validAbn(abn)) throw new OnboardingError("abn");
   const orgType = text(raw, "orgType", 40);
   if (!ORG_TYPES.includes(orgType as OrgType)) throw new OnboardingError("missing");
   const sectors = asStrings(raw.sectors).filter((s) => (SECTOR_TAGS as readonly string[]).includes(s));
@@ -113,8 +115,10 @@ function parseOrg(raw: Record<string, unknown>): OrgDraft {
   const locations = parseLocations(raw);
   if (!locations.length) throw new OnboardingError("missing");
   const oric = text(raw, "oricIcn", 20);
+  // Look the number up last, after every local check passed.
+  const looked = await lookupAbn(abn, { guid: env().ABR_GUID });
   return {
-    name, abn: looked.abn, abnName: looked.name, abnFound: looked.found, oricIcn: oric || null,
+    name, abn: looked.abn, abnName: looked.name, abnFound: looked.found, abnSource: looked.source, abnStatus: looked.status ?? null, oricIcn: oric || null,
     orgType: orgType as OrgType, sectors, headcount, locations,
   };
 }
@@ -154,10 +158,12 @@ function parseDomains(value: unknown): string[] {
   return domains;
 }
 
-function parseConnect(raw: Record<string, unknown>): ConnectDraft {
+/** A recorded admin consent survives a re-save of the step and fixes the tenant id. */
+function parseConnect(raw: Record<string, unknown>, prior: ConnectDraft | null): ConnectDraft {
   const azure = text(raw, "azureTenantId", 40);
   if (azure && !UUID.test(azure)) throw new OnboardingError("missing");
-  return { azureTenantId: azure || null, domains: parseDomains(raw.domains), agents: "later" };
+  const consent = prior?.m365Consent ?? null;
+  return { azureTenantId: consent?.azureTenantId ?? (azure || null), m365Consent: consent, domains: parseDomains(raw.domains), agents: "later" };
 }
 
 function parseGovernance(raw: Record<string, unknown>): GovernanceDraft {
@@ -172,11 +178,11 @@ function parsePlan(raw: Record<string, unknown>): PlanDraft {
   return { tier, nonprofit: flag === true || flag === "yes" };
 }
 
-function parseStep(step: OnboardingStep, raw: Record<string, unknown>) {
-  if (step === "org") return { org: parseOrg(raw) };
+async function parseStep(step: OnboardingStep, raw: Record<string, unknown>, row: typeof onboardingDrafts.$inferSelect) {
+  if (step === "org") return { org: await parseOrg(raw) };
   if (step === "contacts") return { contacts: parseContacts(raw) };
   if (step === "stack") return { stack: parseStack(raw) };
-  if (step === "connect") return { connect: parseConnect(raw) };
+  if (step === "connect") return { connect: parseConnect(raw, row.connect) };
   if (step === "governance") return { governance: parseGovernance(raw) };
   return { plan: parsePlan(raw) };
 }
@@ -231,22 +237,58 @@ export async function ownDraft(ctx: AccessContext) {
 export async function saveOnboardingStep(ctx: AccessContext, draftId: string, step: OnboardingStep, raw: Record<string, unknown>) {
   assertAnalyst(ctx);
   if (!ONBOARDING_STEPS.includes(step)) throw new OnboardingError("missing");
+  // Parse outside the transaction: the org step calls the business register.
+  const pre = await getDraft(ctx, draftId);
+  if (pre.status === "complete") return pre;
+  const patch = await parseStep(step, raw, pre);
   return adminDb().transaction(async (tx) => {
-    const [row] = await tx.select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId));
+    const [row] = await tx.select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId)).for("update");
     if (!row || row.ownerUserId !== ctx.principal.userId) throw new AccessDenied("draft");
     if (row.status === "complete") return row;
     const current = ONBOARDING_STEPS.indexOf(row.step as OnboardingStep);
     const saving = ONBOARDING_STEPS.indexOf(step);
     if (current < 0 || saving > current) throw new OnboardingError("order");
-    const patch = parseStep(step, raw);
+    if (patch.connect && row.connect?.m365Consent) {
+      patch.connect.m365Consent = row.connect.m365Consent;
+      patch.connect.azureTenantId = row.connect.m365Consent.azureTenantId;
+    }
     const next = ONBOARDING_STEPS[Math.max(current, Math.min(ONBOARDING_STEPS.length - 1, saving + 1))]!;
     const [saved] = await tx.update(onboardingDrafts).set({ ...patch, step: next, updatedAt: new Date() }).where(eq(onboardingDrafts.id, draftId)).returning();
     await audit(tx, { ...actor(ctx), tenantId: row.tenantId, action: "onboarding.save", targetType: "onboarding_draft", targetId: draftId, detail: { step } });
     if (step === "org" && patch.org) {
-      await audit(tx, { ...actor(ctx), tenantId: row.tenantId, action: "onboarding.abn_lookup", targetType: "onboarding_draft", targetId: draftId, detail: { found: patch.org.abnFound } });
+      await audit(tx, { ...actor(ctx), tenantId: row.tenantId, action: "onboarding.abn_lookup", targetType: "onboarding_draft", targetId: draftId, detail: { found: patch.org.abnFound, source: patch.org.abnSource } });
     }
     return saved!;
   });
+}
+
+/**
+ * Handles the admin-consent redirect. The state must be this analyst's, for an open draft past the stack step.
+ * Consent is stored only after a Graph call with it succeeds. Failures are audited too.
+ */
+export async function recordM365Consent(ctx: AccessContext, query: URLSearchParams, check: typeof verifyConsent = verifyConsent) {
+  assertAnalyst(ctx);
+  let draftId = "";
+  try {
+    const state = verifyState(query.get("state") ?? "", ctx.principal.userId);
+    draftId = state.draftId;
+    const row = await getDraft(ctx, draftId);
+    if (row.status === "complete" || ONBOARDING_STEPS.indexOf(row.step as OnboardingStep) < ONBOARDING_STEPS.indexOf("connect")) throw new OnboardingError("order");
+    const { azureTenantId } = parseCallback(query);
+    const consent = await check(azureTenantId);
+    return await adminDb().transaction(async (tx) => {
+      const [fresh] = await tx.select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId)).for("update");
+      const connect: ConnectDraft = { domains: [], agents: "later", ...fresh!.connect, azureTenantId: consent.azureTenantId, m365Consent: consent };
+      const [saved] = await tx.update(onboardingDrafts).set({ connect, updatedAt: new Date() }).where(eq(onboardingDrafts.id, draftId)).returning();
+      await audit(tx, { ...actor(ctx), tenantId: fresh!.tenantId, action: "onboarding.m365_consent", targetType: "onboarding_draft", targetId: draftId, detail: { azureTenantId: consent.azureTenantId, organisation: consent.organisation, skus: consent.skus.length } });
+      return saved!;
+    });
+  } catch (err) {
+    if (err instanceof AccessDenied || (err instanceof OnboardingError && err.code === "order")) throw err;
+    await adminDb().transaction((tx) =>
+      audit(tx, { ...actor(ctx), tenantId: null, action: "onboarding.m365_consent_failed", targetType: "onboarding_draft", targetId: draftId || undefined, detail: { reason: err instanceof Error ? err.message.slice(0, 200) : "failed" } }));
+    throw new OnboardingError("consent");
+  }
 }
 
 async function openPartnerTenant(ctx: AccessContext, partnerId: string, name: string, sectors: string[]) {
@@ -286,21 +328,32 @@ async function ensureSites(ctx: AccessContext, tenantId: string, locations: OrgL
   }
 }
 
-/** No Microsoft app registration ships here, so this records sample data rather than a live consent. */
-async function recordM365(tenantId: string, azureTenantId: string | null) {
+/**
+ * With admin consent, the integration is live and uses the connector app. The worker's 30-second poll
+ * reads it first, so a slow or failing Graph call never blocks setup.
+ * Without consent, sample data is recorded so the customer sees a first alert.
+ */
+async function recordM365(tenantId: string, connect: ConnectDraft) {
+  const consent = connect.m365Consent ?? null;
   let [row] = await adminDb().select().from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.provider, "entra")));
   if (!row) {
     const entra = connectorDef("entra");
+    const id = randomUUID();
     [row] = await adminDb().insert(integrations).values({
+      id,
       tenantId,
       category: "identity",
       provider: "entra",
       name: "Microsoft 365",
-      config: { azureTenantId: azureTenantId ?? randomUUID(), mode: "fixture", subscribedSkus: ["O365_BUSINESS_ESSENTIALS"] },
-      status: "healthy",
+      config: consent
+        ? { azureTenantId: consent.azureTenantId, mode: "live", subscribedSkus: consent.skus }
+        : { azureTenantId: connect.azureTenantId ?? randomUUID(), mode: "fixture", subscribedSkus: ["O365_BUSINESS_ESSENTIALS"] },
+      secretCiphertext: consent ? encryptSecret(JSON.stringify(connectorCredentials()), secretAad(id)) : null,
+      status: consent ? "unknown" : "healthy",
       permissions: entra?.remotePermissions ?? [],
     }).returning();
   }
+  if (consent) return;
   const { alerts: list } = await eventProvider(row!).getAlerts({ since: new Date(Date.now() - 7 * 24 * 3600_000) });
   for (const alert of list) await ingestAlert({ tenantId, integrationId: row!.id, source: "entra", alert, intel: null });
 }
@@ -322,8 +375,8 @@ async function ensurePlaybooks(ctx: AccessContext, tenantId: string) {
   for (const input of sources) await savePlaybook(ctx, input);
 }
 
-function connectedLine(identity: StackDraft["identity"]): string {
-  if (identity === "m365") return COPY.connectedM365;
+function connectedLine(identity: StackDraft["identity"], live = false): string {
+  if (identity === "m365") return live ? COPY.connectedM365Live : COPY.connectedM365;
   if (identity === "google") return COPY.connectedGoogle;
   return COPY.connectedOther;
 }
@@ -339,7 +392,7 @@ function welcomeContent(tenantName: string, stack: StackDraft, connect: ConnectD
     period: { start: now.toISOString(), end: now.toISOString() },
     ...(cobrand ? { cobrand } : {}),
     sections: [
-      { heading: COPY.reportConnected, basis: "observed", author: "system", body: connectedLine(stack.identity) },
+      { heading: COPY.reportConnected, basis: "observed", author: "system", body: connectedLine(stack.identity, !!connect.m365Consent) },
       { heading: COPY.reportWhy, basis: "observed", author: "system", body: COPY.reportWhyBody },
       { heading: COPY.reportDomains, basis: "observed", author: "system", body: domainLine(connect.domains) },
       { heading: COPY.reportRules, basis: "observed", author: "system", body: COPY.govLead },
@@ -402,7 +455,7 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
   }
   const wide = withTenant(ctx, tenant);
   await ensureSites(wide, tenant.id, row.org.locations);
-  if (row.stack.identity === "m365") await recordM365(tenant.id, row.connect.azureTenantId);
+  if (row.stack.identity === "m365") await recordM365(tenant.id, row.connect);
   await setTenantPlan(wide, tenant.id, { tier: row.plan.tier, nonprofit: row.plan.nonprofit });
   await ensurePlaybooks(wide, tenant.id);
 
@@ -427,7 +480,7 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
     }).returning();
   }
 
-  const summary = [connectedLine(row.stack.identity), COPY.reportWhyBody, domainLine(row.connect.domains), COPY.govLead, COPY.agents].join(" ");
+  const summary = [connectedLine(row.stack.identity, !!row.connect.m365Consent), COPY.reportWhyBody, domainLine(row.connect.domains), COPY.govLead, COPY.agents].join(" ");
   const [alreadySent] = await adminDb()
     .select()
     .from(notificationDeliveries)
