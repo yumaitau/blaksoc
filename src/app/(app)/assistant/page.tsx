@@ -3,8 +3,8 @@ import Link from "next/link";
 import { EmptyState, PageHeader } from "@/components/soc/indicators";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
-import { aiProviderFor, conversationMessages, listConversations } from "@/lib/ai/assistant";
-import { checkAiPolicy } from "@/lib/ai/policy";
+import { aiProviderFor, conversationMessages, governedAiDecision, listConversations } from "@/lib/ai/assistant";
+import { governanceFor } from "@/lib/services/governance";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { env } from "@/lib/env";
@@ -57,9 +57,9 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
   const pick = (id?: string | null) => (id && aiTenants.some((t) => t.id === id) ? id : undefined);
   const tenantId = pick(subject?.tenantId) ?? pick(sp.tenant) ?? pick(ws.tenant?.id) ?? (aiTenants.find((t) => t.kind === "customer") ?? aiTenants[0]!).id;
 
-  const [conversations, tenantRows, provider] = await Promise.all([listConversations(ctx, tenantId), listTenants(ctx), aiProviderFor(tenantId)]);
+  const [conversations, tenantRows, provider, profile] = await Promise.all([listConversations(ctx, tenantId), listTenants(ctx), aiProviderFor(tenantId), governanceFor(tenantId)]);
   const settings = tenantRows.find((t) => t.id === tenantId)?.settings;
-  const decision = provider && settings ? checkAiPolicy(settings.ai, provider, env().AI_DATA_RESIDENCY) : null;
+  const decision = provider && settings ? governedAiDecision(settings.ai, profile, provider) : null;
   const conversation = sp.c ? conversations.find((c) => c.id === sp.c) : undefined;
   const rows = conversation ? await conversationMessages(ctx, tenantId, conversation.id) : [];
   const initial: ChatEntry[] = rows

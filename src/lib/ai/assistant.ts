@@ -1,12 +1,14 @@
 import { and, asc, eq, isNull, or } from "drizzle-orm";
 import { adminDb } from "@/db/client";
-import { aiConversations, aiInvocations, aiMessages, integrations, tenants, type Citation } from "@/db/schema";
+import { aiConversations, aiInvocations, aiMessages, integrations, tenants, type AiPolicy, type Citation, type GovernanceProfile } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { instantiate } from "@/lib/connectors/instances";
 import { env } from "@/lib/env";
-import { checkAiPolicy, redactPii } from "./policy";
+import { checkGovernedAi } from "@/lib/governance/policy";
+import { governanceProfile } from "@/lib/services/governance";
+import { checkAiPolicy, redactPii, type PolicyDecision } from "./policy";
 import { toolsFor, type ToolContext } from "./tools";
 import type { AIProvider, ChatMessage } from "./types";
 
@@ -33,6 +35,14 @@ export async function aiProviderFor(tenantId: string): Promise<AIProvider | null
   return inst.kind === "ai" ? inst.provider : null;
 }
 
+/** Tenant AI settings, platform residency, and the steward governance profile must all allow the call. */
+export function governedAiDecision(settings: AiPolicy, profile: GovernanceProfile, provider: AIProvider): PolicyDecision {
+  const base = checkAiPolicy(settings, provider, env().AI_DATA_RESIDENCY);
+  if (!base.allowed) return base;
+  const governed = checkGovernedAi(profile, "assistant", provider);
+  return governed.allowed ? base : governed;
+}
+
 export type AssistantReply = {
   conversationId: string;
   content: string;
@@ -50,7 +60,8 @@ export async function runAssistant(ctx: AccessContext, input: { tenantId: string
 
   const provider = await aiProviderFor(input.tenantId);
   if (!provider) throw new Error("No AI provider is configured. A platform administrator can add one under Integrations → AI.");
-  const decision = checkAiPolicy(tenant.settings.ai, provider, env().AI_DATA_RESIDENCY);
+  const profile = await withScope(scope, (tx) => governanceProfile(tx, input.tenantId));
+  const decision = governedAiDecision(tenant.settings.ai, profile, provider);
 
   let conversationId = input.conversationId;
   const history: ChatMessage[] = [];

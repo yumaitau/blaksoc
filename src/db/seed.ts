@@ -163,6 +163,7 @@ async function main() {
     ["auditor@demo.blaksoc.local", "Ken Park (Auditor)", "auditor", null],
     ["wattle.admin@demo.blaksoc.local", "Wattle Health IT Admin", "customer_admin", wattle!.id],
     ["murray.security@demo.blaksoc.local", "Murray Water Security", "customer_security", murray!.id],
+    ["wattle.steward@demo.blaksoc.local", "Wattle Health Data Steward", "data_steward", wattle!.id],
   ];
   const userIds: Record<string, string> = {};
   for (const [email, name, role, tenantId] of personas) {
@@ -171,6 +172,16 @@ async function main() {
     await assign(id, role, tenantId);
   }
   console.log(`Demo personas (password "${pw}"): ${personas.map(([e]) => e).join(", ")}`);
+
+  // Wattle's demo steward consented to anonymous sightings and the analyst assistant. Other demo tenants keep the most protective profile.
+  await db.insert(s.dataGovernance).values({
+    tenantId: wattle!.id,
+    profile: {
+      residencyLock: true,
+      sightings: { attribution: "anonymised", maxTlp: "TLP:AMBER", consentedBy: [userIds.data_steward!], consentedAt: new Date().toISOString() },
+      ai: { assistant: true, triage_summary: false },
+    },
+  }).onConflictDoNothing();
 
   // ---- integrations: shared demo "Wazuh" cluster + OpenCTI fixture, platform-owned
   const agents = tenantRows.flatMap((t, ti) =>

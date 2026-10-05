@@ -1,6 +1,7 @@
 import { and, eq, isNull, or } from "drizzle-orm";
 import type { DbOrTx } from "@/db/client";
-import { integrations } from "@/db/schema";
+import { dataGovernance, integrations, MOST_PROTECTIVE } from "@/db/schema";
+import { checkGovernedRegion } from "@/lib/governance/policy";
 import { decryptSecret } from "@/lib/crypto";
 import type { IntelProvider } from "@/lib/intel/types";
 import type { SecurityEventProvider } from "@/lib/providers/types";
@@ -25,7 +26,10 @@ export function eventProvider(row: IntegrationRow): SecurityEventProvider {
   return inst.provider;
 }
 
-/** The OpenCTI (or fixture) instance serving a tenant: tenant-owned first, then platform-owned. */
+/**
+ * The OpenCTI (or fixture) instance serving a tenant: tenant-owned first, then platform-owned.
+ * Under the tenant's residency lock, a connector declaring a region outside Australia is not used.
+ */
 export async function intelProviderFor(tx: DbOrTx, tenantId: string | null): Promise<{ row: IntegrationRow; provider: IntelProvider } | null> {
   const rows = await tx
     .select()
@@ -33,6 +37,10 @@ export async function intelProviderFor(tx: DbOrTx, tenantId: string | null): Pro
     .where(and(eq(integrations.category, "threat_intel"), eq(integrations.enabled, true), tenantId ? or(eq(integrations.tenantId, tenantId), isNull(integrations.tenantId)) : isNull(integrations.tenantId)));
   const row = rows.sort((a, b) => (a.tenantId ? -1 : 0) - (b.tenantId ? -1 : 0))[0];
   if (!row) return null;
+  if (tenantId) {
+    const [gov] = await tx.select({ profile: dataGovernance.profile }).from(dataGovernance).where(eq(dataGovernance.tenantId, tenantId));
+    if (!checkGovernedRegion(gov?.profile ?? MOST_PROTECTIVE, (row.config as Record<string, unknown>).region).allowed) return null;
+  }
   const inst = instantiate(row);
   return inst.kind === "intel" ? { row, provider: inst.provider } : null;
 }

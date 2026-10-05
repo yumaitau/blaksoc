@@ -2,10 +2,11 @@ import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
-import { assertCan, can, dbScope, type AccessContext } from "@/lib/auth/access";
+import { assertCan, can, dbScope, systemScope, type AccessContext } from "@/lib/auth/access";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { TrainingIsolationError } from "@/lib/training/isolation";
 import { actor, AccessDenied } from "./common";
+import { notifyStewards, STEWARD_ROLE, userHoldsPlatformRole } from "./governance";
 
 const platformOnly = (ctx: AccessContext, perm: "tenant:manage" | "user:manage" | "settings:manage" | "audit:read") => {
   if (!ctx.isPlatform || !can(ctx, perm)) throw new AccessDenied(`platform ${perm} required`);
@@ -83,8 +84,21 @@ export async function assignRole(ctx: AccessContext, input: { userId: string; ro
     if (!input.tenantId) throw new Error("tenant roles require a tenant");
     assertCan(ctx, "user:manage", input.tenantId);
   }
+  // Stewards speak for the organisation. Yuma IT staff must never approve their own access to it.
+  if (role.key === STEWARD_ROLE && (await userHoldsPlatformRole(input.userId))) throw new Error("platform staff cannot be data stewards");
+  if (role.scope === "platform" && (await db().select({ id: roleAssignments.id }).from(roleAssignments).where(and(eq(roleAssignments.userId, input.userId), eq(roleAssignments.roleKey, STEWARD_ROLE))).limit(1)).length) {
+    throw new Error("data stewards cannot hold platform roles");
+  }
   await db().insert(roleAssignments).values({ userId: input.userId, roleKey: input.roleKey, tenantId: input.tenantId, createdBy: ctx.principal.userId }).onConflictDoNothing();
   await withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: true }, (tx) => audit(tx, { ...actor(ctx), tenantId: input.tenantId, action: "rbac.assign", targetType: "user", targetId: input.userId, detail: input }));
+  if (role.key === STEWARD_ROLE && input.tenantId) await stewardRosterChanged(input.tenantId, input.userId, "added");
+}
+
+/** Stewards hear about every change to who can approve data rules, so a quiet addition cannot bypass the two-person rule. */
+async function stewardRosterChanged(tenantId: string, userId: string, change: "added" | "removed") {
+  const [person] = await db().select({ name: user.name }).from(user).where(eq(user.id, userId));
+  await withScope(systemScope(tenantId), (tx) =>
+    notifyStewards(tx, tenantId, { type: "user", id: userId }, "Data steward list changed", `${person?.name ?? "A user"} was ${change} as a data steward.`));
 }
 
 export async function revokeRole(ctx: AccessContext, assignmentId: string) {
@@ -95,6 +109,7 @@ export async function revokeRole(ctx: AccessContext, assignmentId: string) {
   if (a.userId === ctx.principal.userId && !a.tenantId) throw new Error("you cannot revoke your own platform role");
   await db().delete(roleAssignments).where(eq(roleAssignments.id, assignmentId));
   await withScope({ tenantIds: a.tenantId ? [a.tenantId] : [], platform: true }, (tx) => audit(tx, { ...actor(ctx), tenantId: a.tenantId, action: "rbac.revoke", targetType: "user", targetId: a.userId, detail: { roleKey: a.roleKey } }));
+  if (a.roleKey === STEWARD_ROLE && a.tenantId) await stewardRosterChanged(a.tenantId, a.userId, "removed");
 }
 
 export async function createCustomRole(ctx: AccessContext, input: { key: string; name: string; scope: "platform" | "tenant"; permissions: string[]; description?: string }) {

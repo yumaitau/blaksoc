@@ -48,9 +48,9 @@ export type ConnectDraft = {
   agents: "later";
 };
 
+/** Finish writes the most protective profile. Only data stewards can loosen it afterwards. */
 export type GovernanceDraft = {
   choice: "most_protective";
-  enforced: false;
 };
 
 export type PlanDraft = {

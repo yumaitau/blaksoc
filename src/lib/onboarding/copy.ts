@@ -72,7 +72,7 @@ export const COPY = {
   domains: "Domain names, one per line.",
   domainsHint: "We store the names. We do not register them yet.",
   agents: "Phone and PC sensors come later. We do not install them now.",
-  govLead: "We note the strongest data rules. They are not on yet. The advisory group has not signed them.",
+  govLead: "The strongest data rules are on. Your data stays in Australia. Nothing is shared. AI is off. Your data stewards can change this. The advisory group has not checked these rules yet.",
   govChoice: "Use the strongest rules.",
   planLead: "Pick a plan. Prices are not on this page.",
   planEssentials: "Essentials.",

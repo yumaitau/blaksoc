@@ -48,13 +48,43 @@ anyone who bypasses the triggers.
 
 - Tenant data reaches a model only after `checkAiPolicy`: AI enabled for the tenant, provider on the
   tenant allow-list (if set), and — under `AI_DATA_RESIDENCY=AU` — provider declares Australian processing.
+  The tenant's data governance profile must also allow the capability (see below).
 - Raw event payloads are stripped unless the tenant allows them; PII (emails, AU phone, TFN, Medicare) is redacted by default.
 - Tools run with the analyst's own permissions pinned to one tenant. Write tools are off by default.
 - Citations the model makes that no tool returned are flagged as unverified; every call is recorded in `ai_invocations`.
 
+## Data governance profile
+
+Each customer tenant has a data governance profile (`data_governance`). It narrows tenant settings and
+never widens them. A tenant with no row is governed by the most protective profile, and onboarding writes
+that profile explicitly.
+
+| Rule | Most protective (default) | Enforced in |
+| --- | --- | --- |
+| Residency lock | On | `checkGovernedAi` (assistant), `intelProviderFor` (intel lookups), EPSS refresh |
+| Sightings | None, no consent | `requestSighting` (service) and `createSighting` (worker) |
+| AI, per capability | Assistant off, alert summaries off | `runAssistant`, assistant page |
+
+- Storage, backups and log archives are pinned to `ap-southeast-2`/`ap-southeast-4` for every tenant by the
+  hosting profile, so the lock adds AI inference and intel lookups to that boundary.
+- Under the lock, an intel connector whose config declares a non-AU region is not used. EPSS scores for CVEs
+  held only by locked tenants come from the public bulk file, so their CVE list is never sent abroad.
+- A sighting needs both the tenant sharing setting and steward consent. The narrower attribution and the
+  lower TLP ceiling apply. Consent records which stewards approved it and when.
+- Only **data stewards** (`data_steward`, a tenant-scope role matched by key on a direct grant) can change
+  the profile. Platform staff cannot hold it, and a steward cannot be given a platform role.
+- With two or more stewards, a change needs two different stewards. The proposer cannot approve their own
+  change. Applying a change supersedes other open proposals.
+- Proposals, approvals, rejections, applied changes and steward list changes are audited, and every steward
+  is emailed. A missing email connector is recorded as a failed delivery, never skipped silently.
+
+**Status:** the requirements above follow issue #13. They have not yet been validated by the Indigenous
+advisory group (#1), and no decision-log entry exists to trace them to. Treat the defaults as interim until
+that review.
+
 ## Threat-intel sharing
 
-Sightings are created in OpenCTI only when the tenant's sharing policy allows it, attributed by default to
+Sightings are created in OpenCTI only when the tenant's sharing policy and data stewards allow it, attributed by default to
 an anonymised sector identity (e.g. "blakSOC AU healthcare sector"), never the customer's name unless the
 policy is explicitly `named`. Commercial feed intel is filtered per tenant entitlement before it is shown
 or scored.

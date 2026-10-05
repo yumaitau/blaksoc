@@ -5,7 +5,9 @@ import { withScope } from "@/db/scope";
 import { assertCan, can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { intelProviderFor } from "@/lib/connectors/instances";
+import { checkGovernedSighting } from "@/lib/governance/policy";
 import { actor, AccessDenied, scoped } from "./common";
+import { governanceProfile } from "./governance";
 
 /** Live search across OpenCTI (the CTI system of record) plus local sector tags. */
 export async function searchIntel(ctx: AccessContext, term: string, types?: string[]) {
@@ -91,6 +93,13 @@ export async function setFeedEntitlement(ctx: AccessContext, key: string, tenant
   });
 }
 
+export class SightingRefused extends Error {
+  constructor(reason: string) {
+    super(`sighting refused: ${reason}`);
+    this.name = "SightingRefused";
+  }
+}
+
 /** Sightings feedback loop state for the caller's tenants. */
 export async function sightingQueue(ctx: AccessContext) {
   return scoped(ctx, "intel:share", (tx, ids) =>
@@ -106,15 +115,24 @@ export async function sightingQueue(ctx: AccessContext) {
 
 /** Queue an anonymised OpenCTI sighting for a confirmed match, subject to the tenant's sharing policy. */
 export async function requestSighting(ctx: AccessContext, matchId: string) {
-  return scoped(ctx, "intel:share", async (tx, ids) => {
+  const out = await scoped(ctx, "intel:share", async (tx, ids): Promise<true | { refused: string }> => {
     const [m] = await tx.select({ id: intelMatches.id, tenantId: intelMatches.tenantId, status: intelMatches.sightingStatus }).from(intelMatches).where(and(eq(intelMatches.id, matchId), inArray(intelMatches.tenantId, ids)));
     if (!m) throw new AccessDenied("match not found");
     const [t] = await tx.select({ settings: tenants.settings }).from(tenants).where(eq(tenants.id, m.tenantId));
-    if (!t?.settings.sharing.createSightings) throw new Error("tenant sharing policy does not permit sightings");
+    if (!t) throw new AccessDenied("match not found");
+    const decision = checkGovernedSighting(await governanceProfile(tx, m.tenantId), t.settings.sharing);
+    if (!decision.allowed) {
+      // Commit the refusal record, then report it to the caller.
+      await tx.update(intelMatches).set({ sightingStatus: "blocked_by_policy" }).where(eq(intelMatches.id, matchId));
+      await audit(tx, { ...actor(ctx), tenantId: m.tenantId, action: "intel.sighting_refused", targetType: "intel_match", targetId: matchId, detail: { reason: decision.reason } });
+      return { refused: decision.reason };
+    }
     await tx.update(intelMatches).set({ sightingStatus: "queued" }).where(eq(intelMatches.id, matchId));
     await audit(tx, { ...actor(ctx), tenantId: m.tenantId, action: "intel.sighting_request", targetType: "intel_match", targetId: matchId });
     const { queue, QUEUES } = await import("@/lib/queue");
     await queue(QUEUES.intel).add("sighting", { tenantId: m.tenantId, matchId });
     return true;
   });
+  if (out !== true) throw new SightingRefused(out.refused);
+  return true;
 }
