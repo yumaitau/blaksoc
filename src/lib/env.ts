@@ -36,7 +36,8 @@ let cached: Env | undefined;
 export function env(): Env {
   if (!cached) {
     cached = schema.parse(process.env);
-    if (cached.NODE_ENV === "production") {
+    // `next build` evaluates route modules to collect page data. Secrets exist only at runtime.
+    if (cached.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
       for (const key of ["BETTER_AUTH_SECRET", "BLAKSOC_ENCRYPTION_KEY"] as const) {
         if (!process.env[key]) throw new Error(`${key} must be set in production`);
       }
