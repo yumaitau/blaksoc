@@ -13,7 +13,8 @@ export async function POST(req: Request) {
   const access = await currentAccess();
   if (!access) return go("/login");
   const ws = await currentWorkspace(access);
-  const tenant = ws.tenant ?? access.tenants.find((item) => item.kind === "customer");
+  // Same choice as the governance page: the workspace tenant only when it is a customer.
+  const tenant = access.tenants.find((item) => item.id === ws.tenant?.id && item.kind === "customer") ?? access.tenants.find((item) => item.kind === "customer");
   if (!tenant) return go("/portal/governance?error=denied");
   const form = await req.formData();
   const intent = String(form.get("intent") ?? "");

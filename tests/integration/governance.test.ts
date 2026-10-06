@@ -122,7 +122,8 @@ describe("data governance enforcement", () => {
     const [intel] = await adminDb().insert(integrations).values({
       tenantId, category: "threat_intel", provider: "opencti-fixture", name: "Overseas intel", config: { region: "us-east-1" }, status: "healthy",
     }).returning();
-    expect(await intelProviderFor(adminDb(), tenantId)).toBeNull();
+    // An allowed platform connector, if any, is used instead; never the overseas one.
+    expect((await intelProviderFor(adminDb(), tenantId))?.row.id).not.toBe(intel!.id);
     await adminDb().insert(dataGovernance).values({ tenantId, profile: { residencyLock: false, sightings: null, ai: { assistant: false, triage_summary: false } } });
     expect((await intelProviderFor(adminDb(), tenantId))?.row.id).toBe(intel!.id);
     await adminDb().delete(dataGovernance).where(eq(dataGovernance.tenantId, tenantId));
