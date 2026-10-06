@@ -1,11 +1,15 @@
+import { env } from "@/lib/env";
+import { clientIpFromForwarded, parseTrustedProxies } from "@/lib/net/client-ip";
 import { acceptSyslog, SyslogError } from "@/lib/services/syslog";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The sender's address for the source allowlist. Never the leftmost X-Forwarded-For entry, which
+ * the client controls. An empty result fails the allowlist check (sources without one are unaffected).
+ */
 function sourceIp(req: Request): string {
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip")?.trim() ?? "";
+  return clientIpFromForwarded(req.headers.get("x-forwarded-for"), parseTrustedProxies(env().TRUSTED_PROXY_CIDRS)) ?? "";
 }
 
 /** TLS syslog sink. Vector, or the firewall itself, posts lines with a per-tenant bearer token. */

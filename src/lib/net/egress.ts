@@ -1,6 +1,6 @@
 import { lookup as dnsLookup, type LookupAddress, type LookupOptions } from "node:dns";
 import net from "node:net";
-import { Agent, type Dispatcher } from "undici";
+import { Agent, fetch as undiciFetch, type Dispatcher } from "undici";
 
 /**
  * Where an admin-configured URL may point.
@@ -122,8 +122,25 @@ export function egressDispatcher(reach: Reach, tls: EgressTls = {}): Dispatcher 
 /**
  * fetch for admin-configured URLs. Redirects are refused: a redirect to a literal IP would skip
  * the lookup guard, and none of the integrations need one.
+ *
+ * Uses undici's own fetch with its own Agent. Node's global fetch bundles a different undici
+ * version, and passing it an Agent from the npm package fails every request with
+ * UND_ERR_INVALID_ARG ("invalid onRequestStart method") on Node 22.
  */
 export async function egressFetch(url: string | URL, init: RequestInit, reach: Reach, tls: EgressTls = {}): Promise<Response> {
   const u = assertEgressUrl(url, reach);
-  return fetch(u, { ...init, redirect: "error", dispatcher: egressDispatcher(reach, tls) } as RequestInit);
+  return transport(u, { ...init, redirect: "error", dispatcher: egressDispatcher(reach, tls) } as RequestInit);
+}
+
+export type EgressTransport = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+const undiciTransport: EgressTransport = async (input, init) => (await undiciFetch(input, init as Parameters<typeof undiciFetch>[1])) as unknown as Response;
+let transport: EgressTransport = undiciTransport;
+
+/**
+ * Tests only: replace the HTTP client egressFetch sends through (URL checks still run). Call with
+ * no argument to restore undici. Stubbing globalThis.fetch has no effect on egressFetch.
+ */
+export function setEgressTransport(fn?: EgressTransport): void {
+  transport = fn ?? undiciTransport;
 }

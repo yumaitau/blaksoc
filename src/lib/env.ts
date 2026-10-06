@@ -27,6 +27,12 @@ const schema = z.object({
   SSO_TRUSTED_ORIGINS: z.string().default(""),
   /** Break-glass accounts must also pass TOTP. Disable only for local dev. */
   BREAK_GLASS_REQUIRE_MFA: z.enum(["true", "false"]).default("true"),
+  /**
+   * CIDRs of the proxies in front of blakSOC (ingress controller, load balancer, VPC). With it set,
+   * client addresses are read from the right of X-Forwarded-For past these proxies; without it only
+   * a single-entry header is trusted. Used by sign-in rate limits and syslog source allowlists.
+   */
+  TRUSTED_PROXY_CIDRS: z.string().default(""),
   /** "AU" restricts AI inference to providers declaring Australian residency. */
   AI_DATA_RESIDENCY: z.enum(["AU", "ANY"]).default("AU"),
   DEMO_MODE: z.enum(["true", "false"]).default("false"),

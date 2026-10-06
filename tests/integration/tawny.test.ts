@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { setEgressTransport } from "@/lib/net/egress";
 import { adminDb } from "@/db/client";
 import { alerts, assetSources, assets, auditLog, detectionDeployments, incidents, incidentTimeline, integrations, integrationTenantLinks, playbookRuns, responseActions, tenants } from "@/db/schema";
 import type { AccessContext } from "@/lib/auth/access";
@@ -18,7 +19,6 @@ import { deployRule, saveRule, setRuleEnabled } from "@/lib/services/detections"
 
 const created: string[] = [];
 const TOKEN = "twny_integrationTestToken0123456789abcdef";
-const original = globalThis.fetch;
 
 function staff(tenantId: string): AccessContext {
   const permissions: Permission[] = ["detection:write", "detection:deploy", "integration:manage", "response:request", "response:approve", "playbook:write", "playbook:run", "playbook:read"];
@@ -62,7 +62,7 @@ async function timeline(incidentId: string) {
 }
 
 afterEach(() => {
-  globalThis.fetch = original;
+  setEgressTransport();
 });
 
 afterAll(async () => {
@@ -136,7 +136,7 @@ describe("tawny response path", () => {
     const tawnyAction = "9f8e7d6c-5b4a-4321-8765-0123456789ab";
     const posted: unknown[] = [];
     const polled: string[] = [];
-    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    setEgressTransport((async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/agents")) return Response.json([{ id: agentId, hostname: "chair-3", operating_system: "linux", os_version: "6.8", status: "online", last_heartbeat_at: new Date().toISOString() }]);
       if (init?.method === "POST") {
@@ -145,7 +145,7 @@ describe("tawny response path", () => {
       }
       polled.push(url);
       return Response.json({ id: tawnyAction, agent_id: agentId, action_type: "kill_process", status: "dispatched" });
-    }) as typeof fetch;
+    }) as typeof fetch);
 
     const { tenant, lead, row, incident } = await setup("live");
     const { assetId } = await assetFor(tenant.id, row);
@@ -213,14 +213,14 @@ describe("tawny response path", () => {
   it("deploys a Sigma rule to Tawny and surfaces Tawny's rejection", async () => {
     const yaml = (title: string) => `title: ${title}\nid: ${randomUUID()}\nlevel: high\nlogsource:\n  product: windows\n  category: process_creation\ndetection:\n  sel:\n    Image|endswith: powershell.exe\n  condition: sel\n`;
     const imported: unknown[] = [];
-    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    setEgressTransport((async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/alert-rules")) return Response.json([]);
       const body = JSON.parse(String(init?.body)) as { rule_yaml: string };
       imported.push(body);
       if (body.rule_yaml.includes("Broken")) return Response.json({ title: "Unsupported Sigma field modifier 're'.", status: 400 }, { status: 400 });
       return Response.json({ id: "4d1c1d1e-0000-4000-8000-00000000abcd", name: "PowerShell", format: "sigma" }, { status: 201 });
-    }) as typeof fetch;
+    }) as typeof fetch);
 
     const { tenant, lead, row } = await setup("live");
     const good = await saveRule(lead, { tenantId: tenant.id, yaml: yaml("PowerShell") });
@@ -240,9 +240,9 @@ describe("tawny response path", () => {
     const [shared] = await adminDb().insert(integrations).values({ tenantId: null, category: "siem", provider: "wazuh", name: `Shared ${tenant.slug}`, enabled: true }).returning();
     await adminDb().insert(integrationTenantLinks).values({ integrationId: shared!.id, tenantId: tenant.id, selector: {} });
     const rule = await saveRule(lead, { tenantId: tenant.id, yaml: `title: Shared\nid: ${randomUUID()}\nlogsource:\n  product: windows\ndetection:\n  sel:\n    Image|endswith: cmd.exe\n  condition: sel\n` });
-    globalThis.fetch = (() => {
+    setEgressTransport((() => {
       throw new Error("network");
-    }) as typeof fetch;
+    }) as typeof fetch);
     const res = await deployRule(lead, rule.id, [tenant.id]);
     expect(res.pushed).toEqual([]);
     const [dep] = await adminDb().select().from(detectionDeployments).where(eq(detectionDeployments.ruleId, rule.id));
@@ -255,7 +255,7 @@ describe("tawny response path", () => {
     const rules: Rule[] = [];
     const puts: { id: string; body: Record<string, unknown> }[] = [];
     let refuse = false;
-    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    setEgressTransport((async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
       if (method === "GET" && url.endsWith("/api/alert-rules")) return Response.json(rules);
@@ -275,7 +275,7 @@ describe("tawny response path", () => {
         return Response.json(rule);
       }
       return Response.json({ title: "Alert rule has alerts and cannot be deleted. Disable it instead.", status: 409 }, { status: 409 });
-    }) as typeof fetch;
+    }) as typeof fetch);
 
     const { tenant, lead } = await setup("live");
     const sigmaId = randomUUID();

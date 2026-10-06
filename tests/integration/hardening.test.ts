@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { adminDb, systemDb } from "@/db/client";
-import { approvals, auditLog, integrations, partnerConsents, playbookRuns, playbookRunSteps, playbooks, responseActions, roleAssignments, tenants, user } from "@/db/schema";
+import { approvals, auditLog, integrations, partnerConsents, playbookRuns, playbookRunSteps, playbooks, responseActions, roleAssignments, roles, tenants, user } from "@/db/schema";
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { withScope } from "@/db/scope";
 import { audit, verifyAuditChain } from "@/lib/audit";
@@ -257,6 +257,60 @@ describe("review of PR #112", () => {
     // Two executions racing: only the one that claims APPROVED → EXECUTING proceeds.
     const [first, second] = await Promise.all([executeResponseAction(other.id, action.id), executeResponseAction(other.id, action.id)]);
     expect([first, second].filter((r) => (r as { skipped?: boolean }).skipped)).toHaveLength(1);
+  });
+});
+
+describe("review of PR #113", () => {
+  const hoursAgo = (h: number) => new Date(Date.now() - h * 3600_000);
+
+  it("fails an approved action that was never executed within the recovery window", async () => {
+    const { action } = await withScope(systemScope(other.id), (tx) =>
+      requestResponseAction(tx, { tenantId: other.id, action: "scan_endpoint", target: { assetId: randomUUID() }, reason: "stale", requestedBy: null, requestedByKind: "user" }),
+    );
+    await adminDb().update(responseActions).set({ createdAt: hoursAgo(25) }).where(eq(responseActions.id, action.id));
+    await recoverStalledRuns();
+    const [act] = await adminDb().select({ status: responseActions.status }).from(responseActions).where(eq(responseActions.id, action.id));
+    expect(act!.status).toBe("FAILED");
+    const jobs = (await queue(QUEUES.response).getJobs(["waiting", "delayed"])).filter((j) => j.data.actionId === action.id);
+    expect(jobs).toHaveLength(0);
+    const audited = await adminDb().select({ id: auditLog.id }).from(auditLog).where(and(eq(auditLog.targetId, action.id), eq(auditLog.action, "response.stale_fail")));
+    expect(audited).toHaveLength(1);
+  });
+
+  it("cancels a run whose gate was settled long ago instead of resuming it", async () => {
+    const steps = [{ id: "gate", action: "approval.request", name: "Old gate" }];
+    const [pb] = await adminDb().insert(playbooks).values({ tenantId: other.id, name: `${stamp} old gate`, trigger: { event: "manual", conditions: [] }, steps, enabled: true }).returning();
+    const started = await evaluateTriggers(other.id, "manual", {});
+    const runId = (await adminDb().select({ id: playbookRuns.id }).from(playbookRuns).where(and(inArray(playbookRuns.id, started), eq(playbookRuns.playbookId, pb!.id))))[0]!.id;
+    await advanceRun(other.id, runId);
+    const [step] = await adminDb().select({ approvalId: playbookRunSteps.approvalId }).from(playbookRunSteps).where(eq(playbookRunSteps.runId, runId));
+    await adminDb().update(approvals).set({ status: "APPROVED", decidedAt: hoursAgo(30) }).where(eq(approvals.id, step!.approvalId!));
+    await recoverStalledRuns();
+    const [run] = await adminDb().select({ status: playbookRuns.status }).from(playbookRuns).where(eq(playbookRuns.id, runId));
+    expect(run!.status).toBe("CANCELLED");
+    const jobs = (await queue(QUEUES.playbook).getJobs(["waiting", "delayed"])).filter((j) => j.name === "resume" && j.data.runId === runId);
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("fails an execution interrupted after it was claimed", async () => {
+    const { action } = await withScope(systemScope(other.id), (tx) =>
+      requestResponseAction(tx, { tenantId: other.id, action: "scan_endpoint", target: { assetId: randomUUID() }, reason: "interrupted", requestedBy: null, requestedByKind: "user" }),
+    );
+    await adminDb().update(responseActions).set({ status: "EXECUTING", claimedAt: hoursAgo(1) }).where(eq(responseActions.id, action.id));
+    await recoverStalledRuns();
+    const [act] = await adminDb().select({ status: responseActions.status, result: responseActions.result }).from(responseActions).where(eq(responseActions.id, action.id));
+    expect(act!.status).toBe("FAILED");
+    expect(JSON.stringify(act!.result)).toMatch(/interrupted/);
+  });
+
+  it("refuses, without auditing, a settings change RLS does not let the caller make", async () => {
+    await adminDb().insert(roles).values({ key: `custom_${stamp}`, name: "Settings only", scope: "tenant", permissions: ["settings:manage", "portal:read"], builtin: false }).onConflictDoNothing();
+    const caller = await addUser(`custom_${stamp}`, customer.id);
+    await expect(updateTenantSettings(caller, customer.id, { slaMinutes: { critical: 5 } as never })).rejects.toThrow(/cannot be changed from this role/);
+    const audited = await adminDb().select({ id: auditLog.id }).from(auditLog).where(and(eq(auditLog.actorId, caller.principal.userId), eq(auditLog.action, "tenant.settings")));
+    expect(audited).toHaveLength(0);
+    await adminDb().delete(roleAssignments).where(eq(roleAssignments.roleKey, `custom_${stamp}`));
+    await adminDb().delete(roles).where(eq(roles.key, `custom_${stamp}`));
   });
 });
 

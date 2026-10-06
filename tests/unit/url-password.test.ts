@@ -12,10 +12,13 @@ describe("database URL password check", () => {
     expect(urlPasswordMismatch("DATABASE_SYSTEM_URL", "postgres://blaksoc_system:p#ss@db:5432/blaksoc", "blaksoc_system", "p#ss")).toMatch(/percent-encode/);
   });
 
-  it("accepts what postgres.js accepts: multiple hosts, and user or password left to PGUSER/PGPASSWORD", () => {
+  it("accepts multiple hosts, as postgres.js does", () => {
     expect(urlPasswordMismatch("DATABASE_URL", "postgres://blaksoc_app:pw@h1:5432,h2:5432/blaksoc", "blaksoc_app", "pw")).toBeNull();
-    expect(urlPasswordMismatch("DATABASE_URL", "postgres://blaksoc_app@db/blaksoc", "blaksoc_app", "pw")).toBeNull();
-    expect(urlPasswordMismatch("DATABASE_URL", "postgres://db/blaksoc", "blaksoc_app", "pw")).toBeNull();
+  });
+
+  it("requires the user and password in the URL", () => {
+    expect(urlPasswordMismatch("DATABASE_URL", "postgres://blaksoc_app@db/blaksoc", "blaksoc_app", "pw")).toMatch(/must include the blaksoc_app password/);
+    expect(urlPasswordMismatch("DATABASE_URL", "postgres://db/blaksoc", "blaksoc_app", "pw")).toMatch(/must connect as blaksoc_app/);
   });
 
   it("returns a message, not a thrown error, for a malformed escape", () => {

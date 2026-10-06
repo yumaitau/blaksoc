@@ -33,6 +33,12 @@ separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-
 
    The pre-upgrade hooks sync the secret, then run migrations and the reference-data seed.
 
+### Client addresses
+
+Set `config.TRUSTED_PROXY_CIDRS` in `values-yumait-prod.yaml` to the VPC CIDR. The ALB appends the client
+address to `X-Forwarded-For`; without the VPC listed as a trusted proxy, sign-in rate limits fall back to one
+shared bucket for multi-hop requests and syslog source allowlists reject them.
+
 ### Required runtime keys
 
 `blaksoc-eks-runtime` must hold `DATABASE_URL`, `DATABASE_SYSTEM_URL`, `DATABASE_ADMIN_URL`,

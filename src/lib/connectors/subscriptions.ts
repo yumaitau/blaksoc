@@ -50,6 +50,7 @@ const CACHE_MS = 60_000;
 const VERSION_CHECK_MS = 5_000;
 const VERSION_KEY = "blaksoc:subscriptions:version";
 let cached: { at: number; checkedAt: number; version: string; types: Set<string> } | null = null;
+let refreshing: Promise<Set<string>> | null = null;
 
 /**
  * Call after creating, changing, enabling or disabling a webhook, Teams or Slack integration.
@@ -66,6 +67,14 @@ export async function subscriptionsChanged(): Promise<void> {
  */
 export async function subscribedEventTypes(now = Date.now()): Promise<Set<string>> {
   if (cached && now - cached.checkedAt < VERSION_CHECK_MS && now - cached.at < CACHE_MS) return cached.types;
+  // Events arriving together after the interval share one refresh instead of each reading Redis and Postgres.
+  refreshing ??= refreshSubscribedTypes(now).finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
+async function refreshSubscribedTypes(now: number): Promise<Set<string>> {
   const version = (await redis().get(VERSION_KEY)) ?? "0";
   if (cached && cached.version === version && now - cached.at < CACHE_MS) {
     cached.checkedAt = now;

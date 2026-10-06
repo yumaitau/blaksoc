@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { setEgressTransport } from "@/lib/net/egress";
 import { connectorDef } from "@/lib/connectors/registry";
 import { clearFixtureActions } from "@/lib/providers/fixture-action";
 import type { SecurityEventProvider } from "@/lib/providers/types";
@@ -16,14 +17,13 @@ function provider(name: string, config: Record<string, unknown>, secrets: Record
 }
 
 async function withNoFetch<T>(run: () => Promise<T>): Promise<T> {
-  const original = globalThis.fetch;
-  globalThis.fetch = (() => {
+  setEgressTransport((() => {
     throw new Error("network");
-  }) as typeof fetch;
+  }) as typeof fetch);
   try {
     return await run();
   } finally {
-    globalThis.fetch = original;
+    setEgressTransport();
   }
 }
 

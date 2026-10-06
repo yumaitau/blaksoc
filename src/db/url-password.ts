@@ -13,8 +13,9 @@ function driverCredentials(url: string): { username: string; password: string } 
 /**
  * Why a connection URL will not authenticate as `role` with `password`, or null when it will.
  * A password with URL delimiters (#, /, ?, %) must be percent-encoded inside the URL; a raw one is
- * cut short, and the migration would set a password the app can never send. A URL without a user
- * or password leaves them to PGUSER / PGPASSWORD, which this check cannot see, so it passes.
+ * cut short, and the migration would set a password the app can never send. The user and password
+ * must both be in the URL: the migration sets the role passwords, so it has to know what the app
+ * will send, and PGUSER / PGPASSWORD fallbacks are invisible to it.
  */
 export function urlPasswordMismatch(name: string, url: string, role: string, password: string): string | null {
   let creds: { username: string; password: string };
@@ -23,7 +24,8 @@ export function urlPasswordMismatch(name: string, url: string, role: string, pas
   } catch {
     return `${name} is not a valid connection URL (percent-encode a password containing #, /, ? or %)`;
   }
-  if (creds.username && creds.username !== role) return `${name} must connect as ${role}`;
-  if (creds.password && creds.password !== password) return `${name} password does not match the role password; percent-encode it in the URL (encodeURIComponent) or use a URL-safe password such as openssl rand -hex 32`;
+  if (creds.username !== role) return `${name} must connect as ${role}`;
+  if (!creds.password) return `${name} must include the ${role} password; PGPASSWORD is not supported for this role`;
+  if (creds.password !== password) return `${name} password does not match the role password; percent-encode it in the URL (encodeURIComponent) or use a URL-safe password such as openssl rand -hex 32`;
   return null;
 }
