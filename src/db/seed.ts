@@ -121,10 +121,13 @@ async function main() {
   await db.insert(s.tenants).values({ slug: "yuma-it", name: "Yuma IT", kind: "mssp", sectors: ["AUSTRALIA", "INDIGENOUS_BUSINESS"] }).onConflictDoUpdate({ target: s.tenants.slug, set: { name: "Yuma IT" } });
   const bgEmail = process.env.BREAK_GLASS_EMAIL ?? "breakglass@blaksoc.local";
   const [bgExisting] = await db.select().from(s.user).where(eq(s.user.email, bgEmail));
-  const bgPassword = bgExisting ? undefined : (process.env.BREAK_GLASS_PASSWORD ?? randomBytes(18).toString("base64url"));
+  const supplied = process.env.BREAK_GLASS_PASSWORD;
+  const bgPassword = bgExisting ? undefined : (supplied ?? randomBytes(18).toString("base64url"));
   const bgId = await upsertUser(bgEmail, "Break-glass Administrator", { password: bgPassword, breakGlass: true });
   await assign(bgId, "platform_admin", null);
-  if (bgPassword) console.log(`\nBreak-glass admin: ${bgEmail}\nPassword: ${bgPassword}\n(Enrol TOTP on first sign-in; store in the sealed break-glass envelope.)\n`);
+  // A supplied password already lives in the secret store. Never copy it into job logs.
+  if (bgPassword && !supplied) console.log(`\nBreak-glass admin: ${bgEmail}\nPassword: ${bgPassword}\n(Enrol TOTP on first sign-in; store in the sealed break-glass envelope.)\n`);
+  else if (bgPassword) console.log(`Break-glass admin ${bgEmail} created with the supplied password.`);
 
   if (!demo) {
     console.log("seed complete (reference data only; set DEMO_MODE=true for demo tenants)");
