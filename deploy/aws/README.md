@@ -33,6 +33,19 @@ separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-
 
    The pre-upgrade hooks sync the secret, then run migrations and the reference-data seed.
 
+### Required runtime keys
+
+`blaksoc-eks-runtime` must hold `DATABASE_URL`, `DATABASE_SYSTEM_URL`, `DATABASE_ADMIN_URL`,
+`BLAKSOC_APP_DB_PASSWORD`, `BLAKSOC_SYSTEM_DB_PASSWORD`, `REDIS_URL`, `BETTER_AUTH_SECRET` and
+`BLAKSOC_ENCRYPTION_KEY`. Only the migration job receives the whole secret; web and worker get the keys in
+`runtimeSecretKeys`, so they never hold `DATABASE_ADMIN_URL`.
+
+`DATABASE_SYSTEM_URL` and `BLAKSOC_SYSTEM_DB_PASSWORD` were added with the `blaksoc_system` role. Before the
+first upgrade that includes them, generate a password, store it in `blaksoc-eks-bootstrap`, and add both keys
+to `blaksoc-eks-runtime` (the URL is `postgres://blaksoc_system:<password>@<rds-endpoint>:5432/blaksoc`).
+The migration job sets the role's password from `BLAKSOC_SYSTEM_DB_PASSWORD`. Web and worker refuse to start
+in production without `DATABASE_SYSTEM_URL`.
+
 ## Data plane hosts
 
 The scripts run as root through SSM Run Command and can be re-run:
@@ -59,7 +72,8 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 
 ## Known gaps
 
-- The worker needs internet egress (Microsoft Graph, Kelpie, CISA KEV, FIRST EPSS, ABR). The chart's
-  network policies assume cluster-only egress and are disabled here because the cluster does not enforce
-  them. Add an egress proxy or allow-list before turning enforcement on.
+- Network policies are disabled here because the cluster does not enforce them. The chart now allows public
+  HTTPS egress with private and metadata ranges excluded (`networkPolicy.publicHttps`). Before turning
+  enforcement on, add the VPC range to `networkPolicy.egressCidrs` for RDS, ElastiCache, Wazuh and OpenCTI,
+  and replace the ingress-nginx namespace rule with one that admits the ALB.
 - One RDS instance, single AZ, and one Redis node, the same as the other apps on this cluster.

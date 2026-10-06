@@ -58,14 +58,13 @@ ingress:
   tls: []
 
 # Not enforced on this cluster: Auto Mode node classes are DefaultAllow and the
-# network policy controller is off, so these objects would do nothing. The chart's
-# rules also assume ingress-nginx and cluster-only worker egress, while the worker
-# needs Microsoft Graph, Kelpie, CISA KEV and FIRST EPSS. Revisit with an egress
-# proxy or allow-list before turning enforcement on.
+# network policy controller is off, so these objects would do nothing. Before
+# enabling, add the VPC range to egressCidrs (RDS, ElastiCache, Wazuh, OpenCTI) and
+# admit the ALB instead of the ingress-nginx namespace. See deploy/aws/README.md.
 networkPolicy:
   enabled: false
 
-# Images are amd64. The image user is a name, so pin its numeric id for runAsNonRoot.
+# Images are amd64. The image user is 100:101 (the base chart pins the same ids).
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 100
