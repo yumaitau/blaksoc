@@ -1,4 +1,7 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- if and (not .Values.networkPolicy.dataStoresInCluster) (empty .Values.networkPolicy.egressCidrs) }}
+{{- fail "networkPolicy.dataStoresInCluster is false: list the Postgres and Redis CIDRs in networkPolicy.egressCidrs, or web and worker cannot reach them" }}
+{{- end }}
 # Web accepts traffic only from the ingress controller; nothing may reach the worker.
 # External scans run only on the worker (queue `surface`, job `scan`).
 # Per tenant: 1 scan at a time, 6 hosts per minute (src/lib/asm/scan.ts SCAN_LIMITS).

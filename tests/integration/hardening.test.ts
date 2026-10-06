@@ -6,15 +6,16 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { adminDb, systemDb } from "@/db/client";
-import { approvals, auditLog, partnerConsents, playbookRuns, playbooks, responseActions, roleAssignments, tenants, user } from "@/db/schema";
+import { approvals, auditLog, integrations, partnerConsents, playbookRuns, playbookRunSteps, playbooks, responseActions, roleAssignments, tenants, user } from "@/db/schema";
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { withScope } from "@/db/scope";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { resolveAccess, systemScope, type AccessContext } from "@/lib/auth/access";
 import { queue, QUEUES } from "@/lib/queue";
-import { assignRole, updateTenantSettings } from "@/lib/services/admin";
+import { deliveryJobId, fanOutEvent, subscribedEventTypes, subscriptionsChanged } from "@/lib/connectors/subscriptions";
+import { assignRole, revokeRole, updateTenantSettings } from "@/lib/services/admin";
 import { advanceRun, evaluateTriggers, resumeRun } from "@/lib/soar/engine";
-import { expireDueApprovals, requestResponseAction } from "@/lib/soar/response";
+import { decideApproval, expireDueApprovals, recoverStalledRuns, requestResponseAction } from "@/lib/soar/response";
 
 const stamp = `hd${randomUUID().slice(0, 8)}`;
 const tenantIds: string[] = [];
@@ -60,6 +61,18 @@ describe("D1 role grant ceiling", () => {
     await assignRole(admin, { userId: colleague.principal.userId, roleKey: "customer_security", tenantId: customer.id });
     const rows = await adminDb().select({ roleKey: roleAssignments.roleKey }).from(roleAssignments).where(eq(roleAssignments.userId, colleague.principal.userId));
     expect(rows.map((r) => r.roleKey).sort()).toEqual(["customer_readonly", "customer_security"]);
+  });
+});
+
+describe("D1 revocation", () => {
+  it("lets a partner admin remove a partner analyst it could add", async () => {
+    const admin = await addUser("partner_admin", partner.id);
+    const analyst = await addUser("customer_readonly", child.id);
+    await assignRole(admin, { userId: analyst.principal.userId, roleKey: "partner_analyst", tenantId: partner.id });
+    const [row] = await adminDb().select({ id: roleAssignments.id }).from(roleAssignments).where(and(eq(roleAssignments.userId, analyst.principal.userId), eq(roleAssignments.roleKey, "partner_analyst")));
+    await revokeRole(admin, row!.id);
+    const left = await adminDb().select({ id: roleAssignments.id }).from(roleAssignments).where(eq(roleAssignments.id, row!.id));
+    expect(left).toHaveLength(0);
   });
 });
 
@@ -149,6 +162,64 @@ describe("D7 and D8 playbook runs", () => {
     expect(run).toEqual({ status: "CANCELLED", error: "approval expired" });
     const audited = await adminDb().select({ id: auditLog.id }).from(auditLog).where(and(eq(auditLog.tenantId, other.id), eq(auditLog.action, "approval.expired")));
     expect(audited.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("approval follow-ups (review of PR #111)", () => {
+  it("refuses a human decision on an approval the worker already expired", async () => {
+    const approver = await addUser("customer_admin", customer.id);
+    const { action, approvalId } = await withScope(systemScope(customer.id), (tx) =>
+      requestResponseAction(tx, { tenantId: customer.id, action: "isolate_endpoint", target: { assetId: randomUUID() }, reason: "race test", requestedBy: null, requestedByKind: "user" }),
+    );
+    await adminDb().update(approvals).set({ expiresAt: new Date(Date.now() - 60_000) }).where(eq(approvals.id, approvalId!));
+    await expireDueApprovals(new Date());
+    await expect(decideApproval(approver, approvalId!, "APPROVED", "too late")).rejects.toThrow(/already EXPIRED/);
+    const [act] = await adminDb().select({ status: responseActions.status }).from(responseActions).where(eq(responseActions.id, action.id));
+    expect(act!.status).toBe("REJECTED");
+  });
+
+  it("re-queues the resume for a run left waiting on a settled gate", async () => {
+    const steps = [{ id: "gate", action: "approval.request", name: "Gate" }];
+    const [pb] = await adminDb().insert(playbooks).values({ tenantId: customer.id, name: `${stamp} stalled`, trigger: { event: "manual", conditions: [] }, steps, enabled: true }).returning();
+    const started = await evaluateTriggers(customer.id, "manual", {});
+    const runId = (await adminDb().select({ id: playbookRuns.id }).from(playbookRuns).where(and(inArray(playbookRuns.id, started), eq(playbookRuns.playbookId, pb!.id))))[0]!.id;
+    await advanceRun(customer.id, runId);
+    const [step] = await adminDb().select({ approvalId: playbookRunSteps.approvalId }).from(playbookRunSteps).where(eq(playbookRunSteps.runId, runId));
+    // A decision committed but its resume job never reached Redis.
+    await adminDb().update(approvals).set({ status: "APPROVED", decidedAt: new Date() }).where(eq(approvals.id, step!.approvalId!));
+    expect(await recoverStalledRuns()).toBeGreaterThanOrEqual(1);
+    expect(await recoverStalledRuns()).toBeGreaterThanOrEqual(1);
+    const jobs = (await queue(QUEUES.playbook).getJobs(["waiting", "delayed"])).filter((j) => j.name === "resume" && j.data.runId === runId);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.data).toMatchObject({ decision: "APPROVED", approvalId: step!.approvalId });
+    await resumeRun(customer.id, runId, step!.approvalId!, "APPROVED");
+    await jobs[0]!.remove();
+    const [run] = await adminDb().select({ status: playbookRuns.status }).from(playbookRuns).where(eq(playbookRuns.id, runId));
+    expect(run!.status).toBe("RUNNING");
+  });
+});
+
+describe("event delivery (review of PR #111)", () => {
+  it("queues one delivery per event and integration across fan-out retries", async () => {
+    const [hook] = await adminDb().insert(integrations).values({ tenantId: customer.id, category: "ticketing", provider: "webhook", name: `${stamp} hook`, config: { url: "https://hooks.example.com/x", events: ["incident.created"] }, permissions: [], enabled: true }).returning();
+    const event = { type: "incident.created" as const, tenantId: customer.id, id: randomUUID(), title: "Fan-out", severity: "high" };
+    const eventId = randomUUID();
+    expect(await fanOutEvent(event, eventId)).toEqual({ queued: 1 });
+    await fanOutEvent(event, eventId);
+    const job = await queue(QUEUES.notify).getJob(deliveryJobId(eventId, hook!.id));
+    const all = (await queue(QUEUES.notify).getJobs(["waiting", "delayed"])).filter((j) => j.name === "deliver" && j.data.integrationId === hook!.id);
+    expect(job).toBeDefined();
+    expect(all).toHaveLength(1);
+    for (const j of all) await j.remove();
+  });
+
+  it("refreshes cached subscriptions as soon as an integration changes", async () => {
+    await subscribedEventTypes();
+    await adminDb().insert(integrations).values({ tenantId: customer.id, category: "collaboration", provider: "slack", name: `${stamp} slack`, config: { events: ["response.updated"] }, permissions: [], enabled: true });
+    // Still the cached answer until the change is announced.
+    expect((await subscribedEventTypes()).has("response.updated")).toBe(false);
+    await subscriptionsChanged();
+    expect((await subscribedEventTypes()).has("response.updated")).toBe(true);
   });
 });
 

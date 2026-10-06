@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { can, type AccessContext } from "./auth/access";
 import { queue, QUEUES } from "./queue";
 import { newRedis, redis } from "./redis";
@@ -21,7 +22,10 @@ export async function publish(event: SocEvent): Promise<void> {
   await redis().publish(CHANNEL, JSON.stringify(event));
   try {
     const { subscribedEventTypes } = await import("./connectors/subscriptions");
-    if ((await subscribedEventTypes()).has(event.type)) await queue(QUEUES.notify).add("event", event);
+    if ((await subscribedEventTypes()).has(event.type)) {
+      const eventId = randomUUID();
+      await queue(QUEUES.notify).add("event", { event, eventId }, { jobId: `event-${eventId}` });
+    }
   } catch (err) {
     console.warn(`[events] could not queue ${event.type} for subscribers: ${err instanceof Error ? err.message : err}`);
   }

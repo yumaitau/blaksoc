@@ -168,7 +168,8 @@ export function entraSignInToAuthentication(raw: Record<string, unknown>, p: Pro
   const upn = str(raw.userPrincipalName);
   const userId = str(raw.userId);
   const at = str(raw.createdDateTime);
-  if ((!upn && !userId) || !at) return null;
+  const time = at ? Date.parse(at) : NaN;
+  if ((!upn && !userId) || !Number.isFinite(time)) return null;
   const errorCode = Number((raw.status as { errorCode?: number } | undefined)?.errorCode ?? 0);
   const failureReason = str((raw.status as { failureReason?: string } | undefined)?.failureReason);
   const location = raw.location as { countryOrRegion?: string; city?: string; state?: string } | undefined;
@@ -184,7 +185,7 @@ export function entraSignInToAuthentication(raw: Record<string, unknown>, p: Pro
     class_uid: 3002,
     severity_id: sev,
     severity: SEVERITY_NAME[sev],
-    time: Date.parse(at),
+    time,
     status_id: failed ? STATUS_ID.failure : STATUS_ID.success,
     ...(failed && failureReason ? { status_detail: failureReason } : {}),
     metadata: ocsfMetadata(p, PRODUCTS.entra),

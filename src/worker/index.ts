@@ -69,7 +69,10 @@ const handlers: Record<QueueName, Handler> = {
     if (job.name === "board") return runDueBoardSummaries();
   },
   [QUEUES.notify]: async (job) => {
-    if (job.name === "event") return fanOutEvent(job.data as SocEvent);
+    if (job.name === "event") {
+      const { event, eventId } = job.data as { event: SocEvent; eventId: string };
+      return fanOutEvent(event, eventId);
+    }
     if (job.name === "deliver") {
       const { integrationId, notification } = job.data as { integrationId: string; notification: Notification };
       return deliverToIntegration(integrationId, notification);

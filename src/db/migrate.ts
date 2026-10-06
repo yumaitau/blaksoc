@@ -4,9 +4,18 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { env } from "@/lib/env";
+import { urlPasswordMismatch } from "./url-password";
 
 async function main() {
-  const client = postgres(env().DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} });
+  // Fail before touching roles if web or worker could not log in with what we are about to set.
+  const e = env();
+  const problems = [
+    urlPasswordMismatch("DATABASE_URL", e.DATABASE_URL, "blaksoc_app", e.BLAKSOC_APP_DB_PASSWORD),
+    urlPasswordMismatch("DATABASE_SYSTEM_URL", e.DATABASE_SYSTEM_URL, "blaksoc_system", e.BLAKSOC_SYSTEM_DB_PASSWORD),
+  ].filter(Boolean);
+  if (problems.length) throw new Error(problems.join("\n"));
+
+  const client = postgres(e.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} });
   await migrate(drizzle(client), { migrationsFolder: path.join(process.cwd(), "drizzle") });
 
   const dir = path.join(process.cwd(), "src/db/sql");

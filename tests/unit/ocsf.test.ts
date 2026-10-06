@@ -86,6 +86,11 @@ describe("OCSF source events", () => {
     expect(denied).toMatchObject({ status_id: 2, is_mfa: true, severity_id: 2 });
   });
 
+  it("skips a sign-in whose time cannot be parsed", () => {
+    const { signIns } = demoRecords(Date.now());
+    expect(entraSignInToAuthentication({ ...signIns[0]!, createdDateTime: "not a date" }, prov("entra", "x"))).toBeNull();
+  });
+
   it("stores a legacy-auth alert as a finding plus its Authentication record", () => {
     const { signIns } = demoRecords(Date.now());
     const { alert } = normaliseSignIn(signIns[0]!, emptyCheckpoint(new Date(Date.now() - 24 * 3600_000)));

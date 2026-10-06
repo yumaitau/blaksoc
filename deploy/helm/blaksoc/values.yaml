@@ -88,6 +88,10 @@ networkPolicy:
   # region-pinned: which tenant data may reach them is enforced in the app by the data
   # governance profile. Set false for an air-gapped install and list exact CIDRs below instead.
   publicHttps: true
+  # Postgres and Redis run as pods in this cluster. Set false when they are outside it (RDS,
+  # ElastiCache, a VM): the chart then refuses to render until their CIDRs are in egressCidrs,
+  # because both web and worker would otherwise lose their database.
+  dataStoresInCluster: true
   # Extra egress CIDRs (any port), e.g. the VPC range of a managed Postgres or Redis outside the
   # cluster. 0.0.0.0/0 and ::/0 fail the hosting profile check.
   egressCidrs: []
