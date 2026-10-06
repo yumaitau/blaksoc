@@ -20,6 +20,9 @@ export type OrgDraft = {
   abn: string;
   abnName: string | null;
   abnFound: boolean;
+  /** Absent on drafts saved before the register lookup. */
+  abnSource?: "abr" | "example" | "unavailable";
+  abnStatus?: string | null;
   oricIcn: string | null;
   orgType: OrgType;
   sectors: string[];
@@ -42,8 +45,17 @@ export type StackDraft = {
   itProvider: string;
 };
 
+/** Admin consent to the blakSOC connector app, checked with a Graph call. */
+export type M365Consent = {
+  azureTenantId: string;
+  organisation: string | null;
+  grantedAt: string;
+  skus: string[];
+};
+
 export type ConnectDraft = {
   azureTenantId: string | null;
+  m365Consent?: M365Consent | null;
   domains: string[];
   agents: "later";
 };

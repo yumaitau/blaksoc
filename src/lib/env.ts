@@ -15,6 +15,11 @@ const schema = z.object({
   ENTRA_TENANT_ID: z.string().optional(),
   ENTRA_CLIENT_ID: z.string().optional(),
   ENTRA_CLIENT_SECRET: z.string().optional(),
+  /** Australian Business Register web services GUID. Unset: setup checks the ATO example ABN only. */
+  ABR_GUID: z.string().optional(),
+  /** Multi-tenant Entra app that customers' admins consent to for Graph reads. Separate from the staff sign-in app. */
+  M365_CONNECTOR_CLIENT_ID: z.string().optional(),
+  M365_CONNECTOR_CLIENT_SECRET: z.string().optional(),
   /** Comma-separated OIDC issuer origins allowed for SSO discovery (Entra endpoints are preconfigured). */
   SSO_TRUSTED_ORIGINS: z.string().default(""),
   /** Break-glass accounts must also pass TOTP. Disable only for local dev. */

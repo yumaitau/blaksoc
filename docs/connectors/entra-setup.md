@@ -4,6 +4,23 @@ This guide is for the person who runs Microsoft 365 for your organisation. You d
 
 blakSOC never asks you to paste a global admin password into this product. You create an app registration in Microsoft Entra, grant the permissions below, and paste the tenant id, application id, and client secret into the integration form. The secret is write-only. blakSOC does not show it again after you save.
 
+## Quicker way: agree during setup
+
+If Yuma IT runs your setup and the blakSOC connector app is configured, you do not need to register your own app. On the **Connect** step, a Microsoft 365 Global Administrator presses **Ask a Microsoft 365 admin to agree**, signs in, and accepts the permissions listed in step 3. blakSOC checks the consent by reading your organisation name and licences, then starts reading sign-ins within a minute of finishing setup.
+
+To withdraw it later, delete the **blakSOC** enterprise application in Entra.
+
+The rest of this guide is for organisations that want their own app registration instead.
+
+### For Yuma IT operators: the connector app
+
+1. Register one **multi-tenant** app (Accounts in any organizational directory). Keep it separate from the staff sign-in app (`ENTRA_CLIENT_ID`).
+2. Add the redirect URI `${APP_URL}/onboarding/m365/callback` (Web platform).
+3. Add the application permissions from step 3 below. Do not grant them in the Yuma IT tenant unless Yuma IT is a customer.
+4. Create a client secret and set `M365_CONNECTOR_CLIENT_ID` and `M365_CONNECTOR_CLIENT_SECRET`. Each customer integration stores an encrypted copy, so a rotated secret must be updated on those integrations too.
+
+Without these variables, setup records sample Microsoft 365 data instead.
+
 ## What you need
 
 - A work account that can register apps and grant admin consent in Entra (Application Administrator or Global Administrator).
