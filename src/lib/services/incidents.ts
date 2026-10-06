@@ -7,7 +7,9 @@ import {
 import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { publish } from "@/lib/events";
+import { queue, QUEUES } from "@/lib/queue";
 import { actor, AccessDenied, inTenant, scoped } from "./common";
+import { assertNotKelpieManaged, kelpieIntegration, kelpieLink } from "./kelpie";
 
 export const INCIDENT_STATUSES = ["OPEN", "INVESTIGATING", "CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"] as const;
 export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
@@ -72,8 +74,10 @@ export async function getIncident(ctx: AccessContext, id: string) {
       tx.select().from(approvals).where(and(eq(approvals.tenantId, row.incident.tenantId), eq(approvals.status, "PENDING"))),
     ]);
     const actionIds = new Set(actions.map((a) => a.approvalId));
+    const managed = !!(await kelpieIntegration(tx, row.incident.tenantId));
     return {
       ...row,
+      kelpie: { managed, link: managed ? await kelpieLink(tx, id) : null },
       alerts: alertRows,
       links,
       timeline: soc ? timeline : timeline.filter((t) => t.origin !== "ai"),
@@ -127,6 +131,8 @@ export async function createIncidentFromAlerts(
   };
   const incident = txOverride ? await run(txOverride) : ctx ? await inTenant(ctx, "incident:write", input.tenantId, run) : (() => { throw new Error("system callers must pass a transaction"); })();
   await publish({ type: "incident.created", tenantId: input.tenantId, id: incident.id, title: incident.title, severity: incident.severity });
+  // Push to Kelpie now rather than on the next minute tick. The job id collapses bursts into one run.
+  await queue(QUEUES.sync).add("kelpie", {}, { jobId: `kelpie-${Math.floor(Date.now() / 5000)}` }).catch(() => {});
   return incident;
 }
 
@@ -178,6 +184,7 @@ export async function updateIncident(ctx: AccessContext, id: string, patch: Inci
   const inc = await getIncidentHead(ctx, id);
   const perm = patch.status === "CLOSED" ? "incident:close" : "incident:write";
   return inTenant(ctx, perm, inc.tenantId, async (tx) => {
+    await assertNotKelpieManaged(tx, inc.tenantId, id);
     const now = new Date();
     await tx
       .update(incidents)
@@ -203,6 +210,8 @@ export async function updateIncident(ctx: AccessContext, id: string, patch: Inci
 export async function addNote(ctx: AccessContext, incidentId: string, body: string, visibility: "internal" | "customer", aiGenerated = false) {
   const inc = await getIncidentHead(ctx, incidentId);
   return inTenant(ctx, "incident:write", inc.tenantId, async (tx) => {
+    // Customer notes feed the portal and stay in blakSOC. Internal case notes belong in Kelpie.
+    if (visibility === "internal") await assertNotKelpieManaged(tx, inc.tenantId, incidentId);
     const [n] = await tx.insert(incidentNotes).values({ tenantId: inc.tenantId, incidentId, authorId: ctx.principal.userId, body, visibility, aiGenerated }).returning();
     await audit(tx, { ...actor(ctx), tenantId: inc.tenantId, action: "incident.note", targetType: "incident", targetId: incidentId, detail: { noteId: n!.id, visibility, aiGenerated } });
     return n!;
@@ -212,6 +221,7 @@ export async function addNote(ctx: AccessContext, incidentId: string, body: stri
 export async function addAnalystTimelineEvent(ctx: AccessContext, incidentId: string, e: { occurredAt: Date; title: string; detail?: string }) {
   const inc = await getIncidentHead(ctx, incidentId);
   return inTenant(ctx, "incident:write", inc.tenantId, async (tx) => {
+    await assertNotKelpieManaged(tx, inc.tenantId, incidentId);
     await addTimeline(tx, { tenantId: inc.tenantId, incidentId, occurredAt: e.occurredAt, origin: "analyst", category: "analyst", title: e.title, detail: e.detail ?? null, actorId: ctx.principal.userId });
     await audit(tx, { ...actor(ctx), tenantId: inc.tenantId, action: "incident.timeline_add", targetType: "incident", targetId: incidentId, detail: e });
   });
@@ -244,11 +254,16 @@ export async function acknowledgeIncident(ctx: AccessContext, incidentId: string
 
 export async function addTask(ctx: AccessContext, incidentId: string, title: string) {
   const inc = await getIncidentHead(ctx, incidentId);
-  return inTenant(ctx, "incident:write", inc.tenantId, (tx) => tx.insert(incidentTasks).values({ tenantId: inc.tenantId, incidentId, title }).returning());
+  return inTenant(ctx, "incident:write", inc.tenantId, async (tx) => {
+    await assertNotKelpieManaged(tx, inc.tenantId, incidentId);
+    return tx.insert(incidentTasks).values({ tenantId: inc.tenantId, incidentId, title }).returning();
+  });
 }
 
 export async function toggleTask(ctx: AccessContext, taskId: string, done: boolean) {
   return scoped(ctx, "incident:write", async (tx, tenantIds) => {
+    const [found] = await tx.select({ tenantId: incidentTasks.tenantId, incidentId: incidentTasks.incidentId }).from(incidentTasks).where(and(eq(incidentTasks.id, taskId), inArray(incidentTasks.tenantId, tenantIds)));
+    if (found) await assertNotKelpieManaged(tx, found.tenantId, found.incidentId);
     const [t] = await tx.update(incidentTasks).set({ done }).where(and(eq(incidentTasks.id, taskId), inArray(incidentTasks.tenantId, tenantIds))).returning();
     if (!t) throw new AccessDenied("task not found");
     return t;

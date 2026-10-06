@@ -14,6 +14,7 @@ import { WazuhProvider } from "@/lib/providers/wazuh";
 import { veeamConfig } from "@/lib/backup/status";
 import { BedrockProvider, OpenAICompatibleProvider } from "@/lib/ai/providers";
 import type { AIProvider } from "@/lib/ai/types";
+import { KelpieClient } from "@/lib/kelpie/client";
 import { EmailNotifier, SmsNotifier, VoiceNotifier } from "./au-notify";
 import { WebhookNotifier, type Notifier } from "./notify";
 
@@ -24,14 +25,15 @@ import { WebhookNotifier, type Notifier } from "./notify";
  */
 
 export type ConnectorCategory = "ai" | "siem" | "endpoint" | "identity" | "network" | "cloud" | "collaboration" | "ticketing" | "threat_intel" | "backup";
-export type Capability = "inference" | "events" | "assets" | "vulnerabilities" | "response" | "intel" | "notify" | "ticket" | "identity_response";
+export type Capability = "cases" | "inference" | "events" | "assets" | "vulnerabilities" | "response" | "intel" | "notify" | "ticket" | "identity_response";
 
 export type ConnectorInstance =
   | { kind: "events"; provider: SecurityEventProvider }
   | { kind: "intel"; provider: IntelProvider }
   | { kind: "notify"; provider: Notifier }
   | { kind: "ai"; provider: AIProvider }
-  | { kind: "backup"; provider: { health(): Promise<ProviderHealth> } };
+  | { kind: "backup"; provider: { health(): Promise<ProviderHealth> } }
+  | { kind: "cases"; provider: KelpieClient };
 
 export type ConnectorDefinition = {
   provider: string;
@@ -139,6 +141,22 @@ export const CONNECTORS: ConnectorDefinition[] = [
     config: z.object({}),
     secrets: z.object({}),
     create: () => ({ kind: "intel", provider: new FixtureIntelProvider() }),
+  },
+  {
+    provider: "kelpie",
+    name: "Kelpie",
+    category: "ticketing",
+    description: "Yuma IT Kelpie case management. Incidents become Kelpie cases in the customer's own Kelpie organisation; status comes back to blakSOC.",
+    status: "available",
+    capabilities: ["cases"],
+    remotePermissions: ["Kelpie API token (klp_) for the customer's organisation with cases:write, cases:read, comments:write, observables:write"],
+    config: z.object({
+      baseUrl: z.string().url(),
+      /** Where the Kelpie deployment stores case data. */
+      region: z.enum(["ap-southeast-2", "ap-southeast-4"]),
+    }),
+    secrets: z.object({ token: z.string().regex(/^klp_/, "Kelpie tokens start with klp_") }),
+    create: (c, s) => ({ kind: "cases", provider: new KelpieClient(c.baseUrl as string, s.token!) }),
   },
   {
     provider: "webhook",

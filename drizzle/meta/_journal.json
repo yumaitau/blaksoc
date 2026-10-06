@@ -148,6 +148,13 @@
       "when": 1790613000000,
       "tag": "0020_governance",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790614000000,
+      "tag": "0021_kelpie",
+      "breakpoints": true
     }
   ]
 }

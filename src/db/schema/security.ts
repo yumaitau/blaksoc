@@ -308,6 +308,8 @@ export const incidentTasks = pgTable("incident_tasks", {
   assigneeId: text("assignee_id").references(() => user.id),
   dueAt: timestamp("due_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Set once a playbook task is forwarded to the Kelpie case as a comment. */
+  kelpieCommentId: text("kelpie_comment_id"),
 });
 
 export const evidence = pgTable("evidence", {
