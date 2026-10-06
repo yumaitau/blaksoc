@@ -34,6 +34,23 @@ describe("sigma", () => {
     expect(matches(ssh, { full_log: "Accepted publickey" })).toBe(false);
   });
 
+  it("keywords match values, not field names, and see paths unescaped", () => {
+    const rule = parseSigma(`title: Keyword test
+id: 0b5b1c7e-6a0e-4d43-9e86-2f1a3c4d5e6f
+status: experimental
+logsource: { product: windows }
+detection:
+  keywords:
+    - 'C:\\Windows\\Temp\\evil'
+    - 'mimikatz'
+  condition: keywords
+level: high`);
+    expect(matches(rule, { cmd: "run C:\\Windows\\Temp\\evil.exe now" })).toBe(true);
+    expect(matches(rule, { tool: { name: "Mimikatz" } })).toBe(true);
+    // A field named after the keyword is not a match.
+    expect(matches(rule, { mimikatz: false })).toBe(false);
+  });
+
   it("runTests reports pass/fail", () => {
     const r = runTests(ssh, [{ name: "hit", event: { full_log: "Failed password for x" }, expect: true }, { name: "wrong", event: { full_log: "ok" }, expect: true }]);
     expect(r.passed).toBe(false);

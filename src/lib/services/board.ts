@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { adminDb, type Tx } from "@/db/client";
+import { systemDb, type Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { boardBriefs, integrations, notificationDeliveries, onboardingDrafts, tenants } from "@/db/schema";
 import { systemScope, type AccessContext } from "@/lib/auth/access";
@@ -41,7 +41,7 @@ export async function setBoardBrief(
 }
 
 async function boardContact(tenantId: string): Promise<string | null> {
-  const [draft] = await adminDb()
+  const [draft] = await systemDb()
     .select({ contacts: onboardingDrafts.contacts })
     .from(onboardingDrafts)
     .where(and(eq(onboardingDrafts.tenantId, tenantId), eq(onboardingDrafts.status, "complete")))
@@ -73,10 +73,10 @@ async function sendBoard(tx: Tx, tenantId: string, note: Notification) {
 export async function deliverBoardSummary(tenantId: string, now = new Date()) {
   const contact = await boardContact(tenantId);
   if (!contact) return { sent: false as const, reason: "no-board-email" as const };
-  const [brief] = await adminDb().select({ span: boardBriefs.span }).from(boardBriefs).where(eq(boardBriefs.tenantId, tenantId));
+  const [brief] = await systemDb().select({ span: boardBriefs.span }).from(boardBriefs).where(eq(boardBriefs.tenantId, tenantId));
   const span: BoardSpan = brief?.span === "quarter" ? "quarter" : "month";
   const period = boardPeriodKey(now, span);
-  const [already] = await adminDb()
+  const [already] = await systemDb()
     .select({ id: notificationDeliveries.id })
     .from(notificationDeliveries)
     .where(and(
@@ -130,7 +130,7 @@ export async function deliverBoardSummary(tenantId: string, now = new Date()) {
 
 /** Worker sweep. Tests call deliverBoardSummary for one tenant instead. */
 export async function runDueBoardSummaries(now = new Date()) {
-  const rows = await adminDb().select({ id: tenants.id }).from(tenants).where(eq(tenants.kind, "customer"));
+  const rows = await systemDb().select({ id: tenants.id }).from(tenants).where(eq(tenants.kind, "customer"));
   const out: { tenantId: string; result: string }[] = [];
   for (const row of rows) {
     try {

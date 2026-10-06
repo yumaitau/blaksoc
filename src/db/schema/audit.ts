@@ -1,4 +1,4 @@
-import { bigserial, index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigserial, index, jsonb, pgTable, smallint, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 /**
  * Append-only, hash-chained audit trail. prev_hash/hash are set by a DB trigger and
@@ -19,6 +19,8 @@ export const auditLog = pgTable(
     detail: jsonb("detail"),
     prevHash: text("prev_hash"),
     hash: text("hash"),
+    /** 1: hash without ip (rows before 0022). 2: hash covers ip and this version. */
+    hashVersion: smallint("hash_version").notNull().default(1),
   },
   (t) => [index("audit_tenant_at").on(t.tenantId, t.at)],
 );

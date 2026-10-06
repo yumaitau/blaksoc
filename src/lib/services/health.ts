@@ -1,5 +1,5 @@
 import { and, arrayContains, eq, inArray, notInArray, or } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import type { Tx } from "@/db/client";
 import { alerts, assets, detectionDeployments, dmarcReports, healthBaselines, integrations, monitoredDomains, sigmaRules, sites, tenants, type HealthPolicy } from "@/db/schema";
 import { assertCan, systemScope, type AccessContext } from "@/lib/auth/access";
@@ -227,6 +227,6 @@ export async function runHealthForTenant(tenantId: string, now = new Date()) {
 
 /** Worker hook. Runs after connector probes. */
 export async function runDueHealth(now = new Date()) {
-  const rows = await adminDb().select({ id: tenants.id }).from(tenants).where(eq(tenants.kind, "customer"));
+  const rows = await systemDb().select({ id: tenants.id }).from(tenants).where(eq(tenants.kind, "customer"));
   for (const row of rows) await runHealthForTenant(row.id, now);
 }

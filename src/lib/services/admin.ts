@@ -1,8 +1,8 @@
 import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
-import { db } from "@/db/client";
+import { db, systemDb } from "@/db/client";
 import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
-import { assertCan, can, dbScope, systemScope, type AccessContext } from "@/lib/auth/access";
+import { assertCan, can, dbScope, systemScope, tenantRoleGrantDenial, type AccessContext } from "@/lib/auth/access";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { TrainingIsolationError } from "@/lib/training/isolation";
 import { actor, AccessDenied } from "./common";
@@ -30,18 +30,21 @@ export async function updateTenantSettings(ctx: AccessContext, tenantId: string,
   assertCan(ctx, "settings:manage", tenantId);
   // Auto-containment is a platform decision: it lets playbooks isolate endpoints without a human gate.
   if (patch.autoContainment !== undefined && !(ctx.isPlatform && can(ctx, "tenant:manage"))) throw new AccessDenied("only platform administrators may change auto-containment");
-  return withScope({ tenantIds: [tenantId], platform: true }, async (tx) => {
+  if (patch.training === true) {
+    // Shared platform integrations are invisible to tenant scope, so read the links as the system role.
+    const owned = await systemDb().select({ provider: integrations.provider }).from(integrations).where(eq(integrations.tenantId, tenantId));
+    const linked = await systemDb()
+      .select({ provider: integrations.provider })
+      .from(integrationTenantLinks)
+      .innerJoin(integrations, eq(integrations.id, integrationTenantLinks.integrationId))
+      .where(eq(integrationTenantLinks.tenantId, tenantId));
+    if ([...owned, ...linked].some((row) => row.provider !== "demo")) throw new TrainingIsolationError("real");
+  }
+  // The caller's own scope. Platform staff write through platform_write; a partner admin writes its
+  // own tenancy or a consented customer through the partner update policies (005_rls.sql).
+  return withScope(dbScope(ctx, [tenantId], ctx.isPlatform && can(ctx, "settings:manage")), async (tx) => {
     const [t] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
     if (!t) throw new AccessDenied();
-    if (patch.training === true) {
-      const owned = await tx.select({ provider: integrations.provider }).from(integrations).where(eq(integrations.tenantId, tenantId));
-      const linked = await tx
-        .select({ provider: integrations.provider })
-        .from(integrationTenantLinks)
-        .innerJoin(integrations, eq(integrations.id, integrationTenantLinks.integrationId))
-        .where(eq(integrationTenantLinks.tenantId, tenantId));
-      if ([...owned, ...linked].some((row) => row.provider !== "demo")) throw new TrainingIsolationError("real");
-    }
     const settings = { ...t.settings, ...patch, sharing: { ...t.settings.sharing, ...patch.sharing }, ai: { ...t.settings.ai, ...patch.ai }, slaMinutes: { ...t.settings.slaMinutes, ...patch.slaMinutes } };
     await tx.update(tenants).set({ settings }).where(eq(tenants.id, tenantId));
     await audit(tx, { ...actor(ctx), tenantId, action: "tenant.settings", targetType: "tenant", targetId: tenantId, detail: { before: t.settings, after: settings } });
@@ -82,7 +85,7 @@ export async function assignRole(ctx: AccessContext, input: { userId: string; ro
     if (input.tenantId) throw new Error("platform roles are not tenant-bound");
   } else {
     if (!input.tenantId) throw new Error("tenant roles require a tenant");
-    assertCan(ctx, "user:manage", input.tenantId);
+    await assertTenantRoleGrant(ctx, role, input.tenantId);
   }
   // Stewards speak for the organisation. Yuma IT staff must never approve their own access to it.
   if (role.key === STEWARD_ROLE && (await userHoldsPlatformRole(input.userId))) throw new Error("platform staff cannot be data stewards");
@@ -92,6 +95,15 @@ export async function assignRole(ctx: AccessContext, input: { userId: string; ro
   await db().insert(roleAssignments).values({ userId: input.userId, roleKey: input.roleKey, tenantId: input.tenantId, createdBy: ctx.principal.userId }).onConflictDoNothing();
   await withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: true }, (tx) => audit(tx, { ...actor(ctx), tenantId: input.tenantId, action: "rbac.assign", targetType: "user", targetId: input.userId, detail: input }));
   if (role.key === STEWARD_ROLE && input.tenantId) await stewardRosterChanged(input.tenantId, input.userId, "added");
+}
+
+async function assertTenantRoleGrant(ctx: AccessContext, role: { key: string; permissions: readonly string[] }, tenantId: string, opts: { revoking?: boolean } = {}) {
+  assertCan(ctx, "user:manage", tenantId);
+  const [tenant] = await withScope(dbScope(ctx, [tenantId]), (tx) => tx.select({ id: tenants.id, kind: tenants.kind }).from(tenants).where(eq(tenants.id, tenantId)));
+  if (!tenant) throw new AccessDenied("tenant not in scope");
+  // A role held on the wrong kind of tenant can always be removed; only granting it is refused.
+  const denial = tenantRoleGrantDenial(ctx, opts.revoking ? { ...role, key: "" } : role, tenant);
+  if (denial) throw new AccessDenied(denial);
 }
 
 /** Stewards hear about every change to who can approve data rules, so a quiet addition cannot bypass the two-person rule. */
@@ -104,8 +116,10 @@ async function stewardRosterChanged(tenantId: string, userId: string, change: "a
 export async function revokeRole(ctx: AccessContext, assignmentId: string) {
   const [a] = await db().select().from(roleAssignments).where(eq(roleAssignments.id, assignmentId));
   if (!a) return;
-  if (a.tenantId) assertCan(ctx, "user:manage", a.tenantId);
-  else platformOnly(ctx, "user:manage");
+  if (a.tenantId) {
+    const [role] = await db().select().from(roles).where(eq(roles.key, a.roleKey));
+    await assertTenantRoleGrant(ctx, { key: a.roleKey, permissions: role?.permissions ?? [] }, a.tenantId, { revoking: true });
+  } else platformOnly(ctx, "user:manage");
   if (a.userId === ctx.principal.userId && !a.tenantId) throw new Error("you cannot revoke your own platform role");
   await db().delete(roleAssignments).where(eq(roleAssignments.id, assignmentId));
   await withScope({ tenantIds: a.tenantId ? [a.tenantId] : [], platform: true }, (tx) => audit(tx, { ...actor(ctx), tenantId: a.tenantId, action: "rbac.revoke", targetType: "user", targetId: a.userId, detail: { roleKey: a.roleKey } }));

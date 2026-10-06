@@ -4,7 +4,7 @@ import { redis } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
-/** Liveness + dependency readiness. Reveals no tenant data. */
+/** Readiness: Postgres and Redis reachable. Reveals no tenant data. Liveness is /api/health/live. */
 export async function GET() {
   const checks: Record<string, boolean> = {};
   try {

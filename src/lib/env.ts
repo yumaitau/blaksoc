@@ -5,9 +5,12 @@ const schema = z.object({
   APP_URL: z.string().url().default("http://localhost:3000"),
   /** App role connection — RLS enforced. */
   DATABASE_URL: z.string().default("postgres://blaksoc_app:blaksoc_app@localhost:5432/blaksoc"),
+  /** System role connection — worker jobs and pre-scope web paths. Not the owner. */
+  DATABASE_SYSTEM_URL: z.string().default("postgres://blaksoc_system:blaksoc_system@localhost:5432/blaksoc"),
   /** Owner connection — migrations and seed only. */
   DATABASE_ADMIN_URL: z.string().default("postgres://blaksoc:blaksoc@localhost:5432/blaksoc"),
   BLAKSOC_APP_DB_PASSWORD: z.string().default("blaksoc_app"),
+  BLAKSOC_SYSTEM_DB_PASSWORD: z.string().default("blaksoc_system"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   BETTER_AUTH_SECRET: z.string().min(32).default("dev-only-secret-change-me-dev-only-secret"),
   /** 32-byte key, base64. Encrypts integration secrets at rest. */
@@ -38,7 +41,8 @@ export function env(): Env {
     cached = schema.parse(process.env);
     // `next build` evaluates route modules to collect page data. Secrets exist only at runtime.
     if (cached.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
-      for (const key of ["BETTER_AUTH_SECRET", "BLAKSOC_ENCRYPTION_KEY"] as const) {
+      // Development defaults for these would connect production to the wrong database or key.
+      for (const key of ["BETTER_AUTH_SECRET", "BLAKSOC_ENCRYPTION_KEY", "DATABASE_URL", "DATABASE_SYSTEM_URL", "REDIS_URL"] as const) {
         if (!process.env[key]) throw new Error(`${key} must be set in production`);
       }
     }

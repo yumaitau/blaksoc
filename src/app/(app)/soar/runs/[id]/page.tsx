@@ -31,7 +31,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const gate = new Map(run.approvals.map((a) => [a.id, a]));
   const sameVersion = run.playbookVersion === run.currentVersion;
   const done = new Set(run.steps.map((s) => s.stepId));
-  const remaining = sameVersion ? run.playbookSteps.filter((s) => !done.has(s.id)) : [];
+  const remaining = run.stepsPinned || sameVersion ? run.playbookSteps.filter((s) => !done.has(s.id)) : [];
 
   return (
     <div className="space-y-5">

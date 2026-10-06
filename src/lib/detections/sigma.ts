@@ -144,9 +144,25 @@ function matchMap(event: Record<string, unknown>, map: Record<string, unknown>):
   });
 }
 
+/** Every scalar value in the event, at any depth. Field names are not searchable text. */
+function leafValues(value: unknown, out: string[] = []): string[] {
+  if (value == null) return out;
+  if (Array.isArray(value)) value.forEach((v) => leafValues(v, out));
+  else if (typeof value === "object") Object.values(value).forEach((v) => leafValues(v, out));
+  else out.push(String(value));
+  return out;
+}
+
+/**
+ * Keyword search: a word matches when it appears in any value. Matching values one by one,
+ * instead of the JSON text, keeps field names out and keeps backslashes in paths unescaped.
+ */
 function matchKeywords(event: Record<string, unknown>, words: unknown[]): boolean {
-  const hay = JSON.stringify(event).toLowerCase();
-  return words.some((w) => wildcardToRegex(`*${String(w).toLowerCase()}*`).test(hay));
+  const values = leafValues(event);
+  return words.some((w) => {
+    const rx = wildcardToRegex(`*${String(w)}*`);
+    return values.some((v) => rx.test(v));
+  });
 }
 
 function matchSearch(event: Record<string, unknown>, def: unknown): boolean {

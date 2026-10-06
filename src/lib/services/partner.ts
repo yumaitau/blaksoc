@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { DEFAULT_TENANT_SETTINGS, partnerConsents, partnerEscalations, tenants } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { can, dbScope, type AccessContext } from "@/lib/auth/access";
@@ -50,14 +50,14 @@ export function revenueShareCents(exGstCents: number, shareBps = PARTNER_REVENUE
 }
 
 export async function cobrandLabel(tenantId: string): Promise<string | null> {
-  const [row] = await adminDb()
+  const [row] = await systemDb()
     .select({ parentId: tenants.parentId, name: tenants.name, brandName: tenants.brandName, kind: tenants.kind })
     .from(tenants)
     .where(eq(tenants.id, tenantId));
   if (!row) return null;
   if (row.kind === "partner") return cobrandLine(row.name, row.brandName);
   if (!row.parentId) return null;
-  const [parent] = await adminDb()
+  const [parent] = await systemDb()
     .select({ name: tenants.name, brandName: tenants.brandName, kind: tenants.kind })
     .from(tenants)
     .where(eq(tenants.id, row.parentId));

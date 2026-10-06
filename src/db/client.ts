@@ -7,7 +7,7 @@ export type Database = PostgresJsDatabase<typeof schema>;
 export type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 export type DbOrTx = Database | Tx;
 
-const globalForDb = globalThis as unknown as { __blaksocDb?: Database; __blaksocAdminDb?: Database };
+const globalForDb = globalThis as unknown as { __blaksocDb?: Database; __blaksocSystemDb?: Database; __blaksocAdminDb?: Database };
 
 /** RLS-enforced connection (role blaksoc_app). Use via withScope() for tenant data. */
 export function db(): Database {
@@ -17,7 +17,19 @@ export function db(): Database {
   return globalForDb.__blaksocDb;
 }
 
-/** Owner connection. Migrations, seed and verified system jobs only — bypasses RLS. */
+/**
+ * System connection (role blaksoc_system): worker jobs and web paths that act before a tenant
+ * scope exists. Sees every tenant's rows through the system_access policies, but owns nothing,
+ * so it cannot change schema, policies or triggers. Filter by tenant explicitly.
+ */
+export function systemDb(): Database {
+  if (!globalForDb.__blaksocSystemDb) {
+    globalForDb.__blaksocSystemDb = drizzle(postgres(env().DATABASE_SYSTEM_URL, { max: 10, prepare: false }), { schema });
+  }
+  return globalForDb.__blaksocSystemDb;
+}
+
+/** Owner connection. Migrations, seed and ATT&CK import only. Never used by web or worker. */
 export function adminDb(): Database {
   if (!globalForDb.__blaksocAdminDb) {
     globalForDb.__blaksocAdminDb = drizzle(postgres(env().DATABASE_ADMIN_URL, { max: 4, prepare: false }), { schema });

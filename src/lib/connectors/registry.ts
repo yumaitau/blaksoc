@@ -17,6 +17,7 @@ import type { AIProvider } from "@/lib/ai/types";
 import { KelpieClient } from "@/lib/kelpie/client";
 import { EmailNotifier, SmsNotifier, VoiceNotifier } from "./au-notify";
 import { WebhookNotifier, type Notifier } from "./notify";
+import { velociraptorHealth } from "@/lib/dfir/fixture";
 
 /**
  * Connector SDK. A connector declares its config (non-secret, shown in UI) and secrets
@@ -33,6 +34,7 @@ export type ConnectorInstance =
   | { kind: "notify"; provider: Notifier }
   | { kind: "ai"; provider: AIProvider }
   | { kind: "backup"; provider: { health(): Promise<ProviderHealth> } }
+  | { kind: "dfir"; provider: { health(): Promise<ProviderHealth> } }
   | { kind: "cases"; provider: KelpieClient };
 
 export type ConnectorDefinition = {
@@ -117,6 +119,8 @@ export const CONNECTORS: ConnectorDefinition[] = [
     remotePermissions: ["Velociraptor API client for one org"],
     config: z.object({ mode: z.enum(["fixture", "live"]).default("fixture"), org: z.string().optional() }),
     secrets: z.object({}),
+    // Collections run through src/lib/services/dfir.ts; this instance only answers health checks.
+    create: (c) => ({ kind: "dfir", provider: { health: async () => velociraptorHealth(c.mode) } }),
   },
   {
     provider: "opencti",

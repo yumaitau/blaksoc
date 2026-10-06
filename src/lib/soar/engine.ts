@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, or } from "drizzle-orm";
-import { adminDb, type Tx } from "@/db/client";
+import { systemDb, type Tx } from "@/db/client";
 import {
   alerts, approvals, assets, incidentTasks, integrations, playbookRuns, playbookRunSteps, playbooks, tenants, type PlaybookStep, type PlaybookTrigger,
 } from "@/db/schema";
@@ -26,7 +26,7 @@ export const STEP_ACTIONS: Record<string, { label: string; handler: StepHandler 
   "intel.enrich": {
     label: "Query OpenCTI",
     handler: async (_tx, _s, run, ctx) => {
-      const intel = await intelProviderFor(adminDb(), run.tenantId);
+      const intel = await intelProviderFor(systemDb(), run.tenantId);
       if (!intel) return { status: "SKIPPED", output: "no threat intel integration" };
       const obs = ((ctx.alert as { intel?: { matches?: { observable: { type: string; value: string } }[] } } | undefined)?.intel?.matches ?? []).map((m) => m.observable);
       const { matches } = await lookupWithCache(intel.provider, obs as never);
@@ -73,13 +73,14 @@ export const STEP_ACTIONS: Record<string, { label: string; handler: StepHandler 
   notify: {
     label: "Notify analyst",
     handler: async (tx, s, run, ctx) => {
-      const rows = await adminDb()
+      const rows = await systemDb()
         .select()
         .from(integrations)
         .where(and(inArray(integrations.category, ["collaboration", "ticketing"]), eq(integrations.enabled, true), or(eq(integrations.tenantId, run.tenantId), isNull(integrations.tenantId))));
       const [t] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, run.tenantId));
       const alert = ctx.alert as { title?: string; severity?: string } | undefined;
       let sent = 0;
+      const failed: { integration: string; error: string }[] = [];
       for (const row of rows) {
         const n = notifier(row);
         if (!n) continue;
@@ -90,9 +91,11 @@ export const STEP_ACTIONS: Record<string, { label: string; handler: StepHandler 
           severity: alert?.severity,
           url: `${env().APP_URL}/soc/${ctx.incidentId ? `incidents/${ctx.incidentId}` : `alerts/${ctx.alertId}`}`,
           summary: (s.params?.message as string) ?? "Playbook requires analyst attention.",
-        }).then(() => sent++).catch(() => undefined);
+        }).then(() => sent++).catch((err: unknown) => failed.push({ integration: row.name, error: err instanceof Error ? err.message : String(err) }));
       }
-      return { status: "SUCCEEDED", output: { channels: sent } };
+      // Partial delivery succeeds with the failures recorded; nothing delivered fails the step.
+      if (failed.length && !sent) return { status: "FAILED", output: { channels: 0, failed }, error: `notification failed: ${failed.map((f) => `${f.integration}: ${f.error}`).join("; ")}` };
+      return { status: "SUCCEEDED", output: { channels: sent, failed } };
     },
   },
   "approval.request": {
@@ -170,7 +173,7 @@ export async function evaluateTriggers(tenantId: string, event: PlaybookTrigger[
       if (pb.trigger.event !== event || !allHold(pb.trigger.conditions, ctx)) continue;
       const [run] = await tx
         .insert(playbookRuns)
-        .values({ tenantId, playbookId: pb.id, playbookVersion: pb.version, trigger: { event, ...payload }, context: ctx, alertId: payload.alertId ?? null, incidentId: ctx.incidentId ?? null })
+        .values({ tenantId, playbookId: pb.id, playbookVersion: pb.version, steps: pb.steps, trigger: { event, ...payload }, context: ctx, alertId: payload.alertId ?? null, incidentId: ctx.incidentId ?? null })
         .returning({ id: playbookRuns.id });
       await audit(tx, { actorId: null, actorKind: "playbook", tenantId, action: "playbook.start", targetType: "playbook_run", targetId: run!.id, detail: { playbook: pb.name, event } });
       started.push(run!.id);
@@ -186,10 +189,12 @@ export async function advanceRun(tenantId: string, runId: string) {
     const [run] = await tx.select().from(playbookRuns).where(eq(playbookRuns.id, runId)).for("update");
     if (!run || run.status !== "RUNNING") return run?.status;
     const [pb] = await tx.select().from(playbooks).where(eq(playbooks.id, run.playbookId));
+    // Run the steps this run started with, not whatever the playbook says after a later edit.
+    const steps = run.steps ?? pb!.steps;
     const ctx = run.context as RunCtx;
     let idx = run.stepIndex;
-    for (; idx < pb!.steps.length; idx++) {
-      const step = pb!.steps[idx]!;
+    for (; idx < steps.length; idx++) {
+      const step = steps[idx]!;
       if (step.when && !evaluate(step.when, ctx)) {
         await tx.insert(playbookRunSteps).values({ tenantId, runId, stepId: step.id, action: step.action, status: "SKIPPED", output: { reason: `condition ${step.when.field} ${step.when.op} ${JSON.stringify(step.when.value)} not met` }, finishedAt: new Date() });
         continue;
@@ -222,13 +227,13 @@ export async function advanceRun(tenantId: string, runId: string) {
 }
 
 /** Called after a human decides on a gate for this run. */
-export async function resumeRun(tenantId: string, runId: string, approvalId: string, decision: "APPROVED" | "REJECTED") {
+export async function resumeRun(tenantId: string, runId: string, approvalId: string, decision: "APPROVED" | "REJECTED", reason = "approval rejected") {
   const next = await withScope(systemScope(tenantId), async (tx) => {
     const [run] = await tx.select().from(playbookRuns).where(eq(playbookRuns.id, runId)).for("update");
     if (!run || run.status !== "WAITING_APPROVAL") return null;
     await tx.update(playbookRunSteps).set({ status: decision === "APPROVED" ? "SUCCEEDED" : "REJECTED", finishedAt: new Date() }).where(and(eq(playbookRunSteps.runId, runId), eq(playbookRunSteps.approvalId, approvalId)));
     if (decision === "REJECTED") {
-      await tx.update(playbookRuns).set({ status: "CANCELLED", error: "approval rejected", finishedAt: new Date() }).where(eq(playbookRuns.id, runId));
+      await tx.update(playbookRuns).set({ status: "CANCELLED", error: reason, finishedAt: new Date() }).where(eq(playbookRuns.id, runId));
       return null;
     }
     await tx.update(playbookRuns).set({ status: "RUNNING", stepIndex: run.stepIndex + 1 }).where(eq(playbookRuns.id, runId));

@@ -4,7 +4,7 @@ import { redisConnectionOptions } from "@/lib/redis";
 import { runDueEscalations } from "@/lib/services/escalation";
 import { runDueObligationReminders } from "@/lib/services/obligations";
 import { advanceRun, resumeRun } from "@/lib/soar/engine";
-import { executeResponseAction, pollPendingResponseActions } from "@/lib/soar/response";
+import { executeResponseAction, expireDueApprovals, pollPendingResponseActions } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
 import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
 import { runDueBoardSummaries } from "@/lib/services/board";
@@ -14,6 +14,9 @@ import { runDueHealth } from "@/lib/services/health";
 import { syncKelpie } from "@/lib/services/kelpie";
 import { runDueSurface } from "@/lib/services/surface";
 import { assertHostingEnv } from "@/lib/hosting/profile";
+import { deliverToIntegration, fanOutEvent } from "@/lib/connectors/subscriptions";
+import type { Notification } from "@/lib/connectors/notify";
+import type { SocEvent } from "@/lib/events";
 
 const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOString()}] [${scope}] ${m}`);
 
@@ -37,13 +40,14 @@ const handlers: Record<QueueName, Handler> = {
   [QUEUES.playbook]: async (job) => {
     const { tenantId, runId } = job.data as { tenantId: string; runId: string };
     if (job.name === "resume") {
-      const { approvalId, decision } = job.data as { approvalId: string; decision: "APPROVED" | "REJECTED" };
-      return resumeRun(tenantId, runId, approvalId, decision);
+      const { approvalId, decision, reason } = job.data as { approvalId: string; decision: "APPROVED" | "REJECTED"; reason?: string };
+      return resumeRun(tenantId, runId, approvalId, decision, reason);
     }
     return advanceRun(tenantId, runId);
   },
   [QUEUES.response]: async (job) => {
     if (job.name === "poll-pending") return pollPendingResponseActions(new Date(), log("response"));
+    if (job.name === "expire-approvals") return expireDueApprovals(new Date());
     const { tenantId, actionId } = job.data as { tenantId: string; actionId: string };
     return executeResponseAction(tenantId, actionId);
   },
@@ -64,7 +68,12 @@ const handlers: Record<QueueName, Handler> = {
   [QUEUES.report]: async (job) => {
     if (job.name === "board") return runDueBoardSummaries();
   },
-  [QUEUES.notify]: async () => {
+  [QUEUES.notify]: async (job) => {
+    if (job.name === "event") return fanOutEvent(job.data as SocEvent);
+    if (job.name === "deliver") {
+      const { integrationId, notification } = job.data as { integrationId: string; notification: Notification };
+      return deliverToIntegration(integrationId, notification);
+    }
     const escalations = await runDueEscalations();
     const obligations = await runDueObligationReminders();
     return { escalations, obligations };
@@ -77,6 +86,7 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.ingest, name: "poll", every: 30_000 },
   { queue: QUEUES.ingest, name: "syslog-retain", every: 60 * 60_000 },
   { queue: QUEUES.response, name: "poll-pending", every: 30_000 },
+  { queue: QUEUES.response, name: "expire-approvals", every: 5 * 60_000 },
   { queue: QUEUES.sync, name: "assets", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
   { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },

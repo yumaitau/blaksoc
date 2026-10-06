@@ -35,8 +35,10 @@ jobs:
     env:
       APP_URL: http://localhost:3107
       DATABASE_URL: postgres://blaksoc_app:change-me@localhost:55471/blaksoc
+      DATABASE_SYSTEM_URL: postgres://blaksoc_system:change-me-too@localhost:55471/blaksoc
       DATABASE_ADMIN_URL: postgres://blaksoc:blaksoc@localhost:55471/blaksoc
       BLAKSOC_APP_DB_PASSWORD: change-me
+      BLAKSOC_SYSTEM_DB_PASSWORD: change-me-too
       REDIS_URL: redis://localhost:56471
       BETTER_AUTH_SECRET: ci-only-secret-change-me-ci-only-secret
       BLAKSOC_ENCRYPTION_KEY: ZGV2LW9ubHkta2V5LWNoYW5nZS1tZS0zMi1ieXRlcyE=

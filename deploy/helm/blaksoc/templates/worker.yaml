@@ -24,9 +24,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             {{- include "blaksoc.env" . | nindent 12 }}
-          envFrom:
-            - secretRef:
-                name: {{ .Values.existingSecret }}
+            {{- include "blaksoc.secretEnv" . | trim | nindent 12 }}
           resources: {{- toYaml .Values.worker.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts: [{ name: tmp, mountPath: /tmp }]

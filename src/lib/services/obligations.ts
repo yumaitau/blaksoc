@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { adminDb, type Tx } from "@/db/client";
+import { systemDb, type Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { escalationPolicies, incidentTimeline, incidents, integrations, notificationDeliveries, obligationCases, obligationDrafts, tenants } from "@/db/schema";
 import { AccessDenied, can, systemScope, type AccessContext } from "@/lib/auth/access";
@@ -319,7 +319,7 @@ async function remindOne(tx: Tx, row: OpenCase, now: number): Promise<{ incident
 }
 
 export async function runDueObligationReminders(now = Date.now()) {
-  const open = await adminDb().select({
+  const open = await systemDb().select({
     incidentId: obligationCases.incidentId,
     tenantId: obligationCases.tenantId,
     startedAt: obligationCases.startedAt,

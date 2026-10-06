@@ -8,6 +8,9 @@ import { systemScope } from "@/lib/auth/access";
 import { publish } from "@/lib/events";
 import { filterByEntitlement, lookupWithCache, summariseIntel } from "@/lib/intel/enrich";
 import { extractObservables, type Observable } from "@/lib/intel/observables";
+import { ocsfForAlert } from "@/lib/ocsf/map";
+import { NORMALIZATION_VERSION } from "@/lib/ocsf/schema";
+import { validateOcsf } from "@/lib/ocsf/validate";
 import type { IntelProvider } from "@/lib/intel/types";
 import type { NormalisedAlert } from "@/lib/providers/types";
 import { scoreAlert } from "@/lib/risk/engine";
@@ -85,6 +88,9 @@ export async function ingestAlert(opts: {
       openIncidentOnAsset,
     });
 
+    const ingestedAt = new Date();
+    const ocsf = normaliseOcsf(alert, { source: opts.source, sourceEventId: alert.externalId, tenantId, ingestedAt }, obs, score);
+
     const [row] = await tx
       .insert(alerts)
       .values({
@@ -106,7 +112,11 @@ export async function ingestAlert(opts: {
         intel,
         intelVerdict: intel?.verdict ?? "unchecked",
         raw: alert.raw,
+        ocsf: ocsf?.finding ?? null,
+        ocsfSourceEvent: ocsf?.sourceEvent ?? null,
+        normalizationVersion: ocsf ? NORMALIZATION_VERSION : null,
         occurredAt: alert.occurredAt,
+        ingestedAt,
       })
       .returning({ id: alerts.id });
     const alertId = row!.id;
@@ -134,6 +144,27 @@ export async function ingestAlert(opts: {
     await publish({ type: "alert.created", tenantId, id: result.alertId, title: alert.title, severity: alert.severity, riskScore: result.riskScore });
   }
   return result;
+}
+
+/**
+ * OCSF records for the alert, validated before they are stored. A record that fails validation
+ * is dropped (and logged) rather than stored half-formed; the alert itself is never blocked.
+ */
+function normaliseOcsf(alert: NormalisedAlert, provenance: Parameters<typeof ocsfForAlert>[1], obs: Observable[], riskScore: number) {
+  try {
+    const { finding, sourceEvent } = ocsfForAlert(alert, provenance, { observables: obs, riskScore });
+    const checked = validateOcsf(finding);
+    if (!checked.ok) {
+      console.warn(`[ocsf] ${provenance.source} ${alert.externalId}: detection finding invalid: ${checked.errors.join("; ")}`);
+      return null;
+    }
+    const sourceChecked = sourceEvent ? validateOcsf(sourceEvent) : null;
+    if (sourceChecked && !sourceChecked.ok) console.warn(`[ocsf] ${provenance.source} ${alert.externalId}: source event invalid: ${sourceChecked.errors.join("; ")}`);
+    return { finding, sourceEvent: sourceChecked?.ok ? sourceEvent : null };
+  } catch (err) {
+    console.warn(`[ocsf] ${provenance.source} ${alert.externalId}: mapping failed: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
 }
 
 async function resolveAsset(tx: Tx, tenantId: string, integrationId: string | null, alert: NormalisedAlert) {

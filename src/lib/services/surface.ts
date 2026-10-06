@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
-import { adminDb, type DbOrTx } from "@/db/client";
+import { systemDb, type DbOrTx } from "@/db/client";
 import {
   alerts, assets, auditLog, credentialExposures, dmarcReports, emailPostureChecks, intelFeeds, monitoredDomains, vulnerabilities,
   type IntelMatch,
@@ -163,7 +163,7 @@ export function observationsFor(domain: string, now: Date): ScanObservation[] {
 }
 
 export async function applyScanSystem(tenantId: string, domainId: string, observations: ScanObservation[], now = new Date()) {
-  const [mark] = await adminDb().select({ id: auditLog.id, createdAt: auditLog.at }).from(auditLog).where(and(
+  const [mark] = await systemDb().select({ id: auditLog.id, createdAt: auditLog.at }).from(auditLog).where(and(
     eq(auditLog.tenantId, tenantId), eq(auditLog.action, "asm.attest"), eq(auditLog.targetId, domainId),
   )).limit(1);
   if (!mark) throw new SurfaceError("unattested");
@@ -229,7 +229,7 @@ export async function applyScanSystem(tenantId: string, domainId: string, observ
 }
 
 export async function runDueSurface(now = Date.now()) {
-  const domains = await adminDb().select().from(monitoredDomains).where(isNotNull(monitoredDomains.attestedAt));
+  const domains = await systemDb().select().from(monitoredDomains).where(isNotNull(monitoredDomains.attestedAt));
   let ran = 0;
   let skipped = 0;
   for (const domain of domains) {

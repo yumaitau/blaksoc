@@ -8,6 +8,8 @@ import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import * as schema from "@/db/schema";
 import { env } from "@/lib/env";
+import { redis } from "@/lib/redis";
+import { sharedRateLimitStore } from "./rate-limit";
 
 const e = env();
 
@@ -51,7 +53,8 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: true, disableSignUp: true, minPasswordLength: 16 },
   socialProviders: microsoft,
   session: { expiresIn: 60 * 60 * 12, updateAge: 60 * 60 },
-  rateLimit: { enabled: true, window: 60, max: 30 },
+  // Counted in Redis so the limit holds across web replicas (see rate-limit.ts).
+  rateLimit: { enabled: true, window: 60, max: 30, customStorage: sharedRateLimitStore(redis, (err) => console.warn(`[auth] rate limit fell back to per-process counting: ${err instanceof Error ? err.message : err}`)) },
   advanced: { useSecureCookies: e.NODE_ENV === "production" },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {

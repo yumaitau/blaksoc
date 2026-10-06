@@ -14,8 +14,10 @@ async function main() {
     await client.unsafe(readFileSync(path.join(dir, file), "utf8"));
     console.log(`applied ${file}`);
   }
-  // Password comes from the environment, never from committed SQL.
-  await client.unsafe(`ALTER ROLE blaksoc_app PASSWORD '${env().BLAKSOC_APP_DB_PASSWORD.replaceAll("'", "''")}'`);
+  // Passwords come from the environment, never from committed SQL.
+  const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+  await client.unsafe(`ALTER ROLE blaksoc_app PASSWORD ${quote(env().BLAKSOC_APP_DB_PASSWORD)}`);
+  await client.unsafe(`ALTER ROLE blaksoc_system PASSWORD ${quote(env().BLAKSOC_SYSTEM_DB_PASSWORD)}`);
   await client.end();
   console.log("migrations complete");
 }

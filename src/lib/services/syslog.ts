@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, lt } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { integrations, syslogArchive, syslogEvents, syslogSources } from "@/db/schema";
 import { audit } from "@/lib/audit";
@@ -69,7 +69,7 @@ const MAX_LINE = 8000;
 /** Store lines for the tenant that owns the token. Unknown shapes are counted and dropped. */
 export async function acceptSyslog(input: { token: string; sourceIp: string; body: string; now?: Date }): Promise<{ accepted: number; rejected: number }> {
   const now = input.now ?? new Date();
-  const [source] = await adminDb().select().from(syslogSources).where(eq(syslogSources.tokenHash, hashToken(input.token)));
+  const [source] = await systemDb().select().from(syslogSources).where(eq(syslogSources.tokenHash, hashToken(input.token)));
   if (!source) throw new SyslogError("token");
   if (source.allowIps.length && !source.allowIps.includes(input.sourceIp)) throw new SyslogError("source-ip");
   const all = input.body.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -102,7 +102,7 @@ export async function acceptSyslog(input: { token: string; sourceIp: string; bod
 }
 
 async function regionFor(tenantId: string): Promise<string> {
-  const [row] = await adminDb().select({ config: integrations.config }).from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.provider, "syslog")));
+  const [row] = await systemDb().select({ config: integrations.config }).from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.provider, "syslog")));
   const region = row?.config.region;
   return typeof region === "string" ? region : "ap-southeast-2";
 }
@@ -153,7 +153,7 @@ export async function restoreArchive(tenantId: string, eventId: string, store: A
 /** Worker sweep. Tests call archiveColdForTenant for one tenant instead. */
 export async function archiveDueSyslog(now = new Date()): Promise<{ archived: number; failed: number }> {
   const cutoff = new Date(now.getTime() - SYSLOG_HOT_MS);
-  const rows = await adminDb()
+  const rows = await systemDb()
     .select({ tenantId: syslogEvents.tenantId })
     .from(syslogEvents)
     .where(and(eq(syslogEvents.tier, "hot"), lt(syslogEvents.ingestedAt, cutoff)))

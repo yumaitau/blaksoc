@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, lte } from "drizzle-orm";
 import type { Tx } from "@/db/client";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { approvals, assets, dfirCollections, dfirHunts, evidence, incidents, integrations } from "@/db/schema";
 import { audit } from "@/lib/audit";
@@ -184,6 +184,14 @@ export async function requestCollection(
   });
 }
 
+/** Called when the collection's approval lapsed with no decision. Nothing is collected. */
+export async function expireDfirApproval(tx: Tx, collectionId: string) {
+  const [col] = await tx.update(dfirCollections).set({ status: "rejected" }).where(and(eq(dfirCollections.id, collectionId), eq(dfirCollections.status, "pending_approval"))).returning();
+  if (!col) return null;
+  await addTimeline(tx, { tenantId: col.tenantId, incidentId: col.incidentId, origin: "machine", category: "response", title: "Collection approval expired without a decision", refType: "dfir_collection", refId: col.id });
+  return col;
+}
+
 /** Called from the approval decision, inside that transaction. */
 export async function settleDfirApproval(tx: Tx, collectionId: string, decision: "APPROVED" | "REJECTED", who: { userId: string; name: string }, now: Date) {
   const [col] = await tx.select().from(dfirCollections).where(eq(dfirCollections.id, collectionId));
@@ -238,7 +246,7 @@ export async function releaseScheduledCollection(tenantId: string, now = new Dat
 
 /** Worker sweep. One tenant at a time so a failure does not stop the others. */
 export async function releaseDueCollections(now = new Date()) {
-  const due = await adminDb()
+  const due = await systemDb()
     .selectDistinct({ tenantId: dfirCollections.tenantId })
     .from(dfirCollections)
     .where(and(eq(dfirCollections.status, "scheduled"), lte(dfirCollections.notBefore, now)));

@@ -141,7 +141,7 @@ export const TOOLS: Tool[] = [
     run: async (a, t) => {
       if (!isResponseAction(String(a.action))) return { data: `unknown action ${a.action}`, citations: [] };
       if (!can(t.ctx, "response:request", t.tenantId)) return { data: "analyst lacks response:request", citations: [] };
-      // Recorded as AI-originated: destructive actions always wait for a human decision.
+      // Recorded as AI-originated: every AI proposal waits for a human decision (responseNeedsApproval).
       const r = await requestFromUser(t.ctx, { tenantId: t.tenantId, action: a.action as never, target: { assetId: a.assetId as string, identity: a.identity as string, observable: a.observable as string }, reason: `[AI proposal] ${a.reason}`, incidentId: (a.incidentId as string) ?? null }, "ai");
       return { data: { actionId: r.action.id, status: r.needsApproval ? "awaiting human approval" : "queued" }, citations: [] };
     },

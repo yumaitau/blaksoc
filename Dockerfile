@@ -24,23 +24,26 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install
 FROM node:${NODE_VERSION} AS web
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
-RUN addgroup -S blaksoc && adduser -S blaksoc -G blaksoc
-COPY --from=build --chown=blaksoc:blaksoc /app/.next/standalone ./
-COPY --from=build --chown=blaksoc:blaksoc /app/.next/static ./.next/static
-USER blaksoc
+# Numeric ids so Kubernetes can verify runAsNonRoot (the chart pins the same ids).
+RUN addgroup -S -g 101 blaksoc && adduser -S -u 100 -G blaksoc blaksoc
+COPY --from=build --chown=100:101 /app/.next/standalone ./
+COPY --from=build --chown=100:101 /app/.next/static ./.next/static
+# Standalone output does not include public/ (service worker, PWA icons).
+COPY --from=build --chown=100:101 /app/public ./public
+USER 100:101
 EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/api/health/live || exit 1
 CMD ["node", "server.js"]
 
 FROM node:${NODE_VERSION} AS worker
 WORKDIR /app
 ENV NODE_ENV=production
-RUN addgroup -S blaksoc && adduser -S blaksoc -G blaksoc
+RUN addgroup -S -g 101 blaksoc && adduser -S -u 100 -G blaksoc blaksoc
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/src/db/sql ./src/db/sql
 COPY package.json ./
-USER blaksoc
+USER 100:101
 # Override with ["node","dist/db/migrate.mjs"] for the migration job.
 CMD ["node", "dist/worker/index.mjs"]

@@ -1,5 +1,17 @@
 -- Hash chain: each row commits to the previous row's hash, so any edit or deletion
 -- (e.g. by a DBA bypassing the triggers) is detectable by verifyAuditChain().
+-- Version 1 rows (before 0022) do not cover ip. Version 2 covers ip and the version itself,
+-- so a row cannot be downgraded to drop its ip from the hash.
+CREATE OR REPLACE FUNCTION audit_log_row_hash(prev text, r audit_log) RETURNS text
+LANGUAGE sql IMMUTABLE SET search_path = public AS $$
+  SELECT encode(digest(
+    prev || '|' || r.id::text || '|' || to_char(r.at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || '|' ||
+    coalesce(r.actor_id, '') || '|' || r.actor_kind || '|' || coalesce(r.tenant_id::text, '') || '|' ||
+    r.action || '|' || coalesce(r.target_type, '') || '|' || coalesce(r.target_id, '') || '|' ||
+    coalesce(r.detail::text, '') ||
+    CASE WHEN r.hash_version >= 2 THEN '|v' || r.hash_version::text || '|' || coalesce(r.ip, '') ELSE '' END,
+    'sha256'), 'hex')
+$$;
 CREATE OR REPLACE FUNCTION audit_log_chain() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
@@ -8,11 +20,8 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('audit_log_chain'));
   SELECT hash INTO prev FROM audit_log ORDER BY id DESC LIMIT 1;
   NEW.prev_hash := coalesce(prev, 'GENESIS');
-  NEW.hash := encode(digest(
-    NEW.prev_hash || '|' || NEW.id::text || '|' || to_char(NEW.at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || '|' ||
-    coalesce(NEW.actor_id, '') || '|' || NEW.actor_kind || '|' || coalesce(NEW.tenant_id::text, '') || '|' ||
-    NEW.action || '|' || coalesce(NEW.target_type, '') || '|' || coalesce(NEW.target_id, '') || '|' ||
-    coalesce(NEW.detail::text, ''), 'sha256'), 'hex');
+  NEW.hash_version := 2;
+  NEW.hash := audit_log_row_hash(NEW.prev_hash, NEW);
   RETURN NEW;
 END $$;
 
@@ -32,18 +41,14 @@ CREATE TRIGGER audit_log_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON audit_
 CREATE OR REPLACE FUNCTION audit_log_verify() RETURNS TABLE (ok boolean, checked bigint, first_bad_id bigint)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
-  r record;
+  r audit_log;
   prev text := 'GENESIS';
   expected text;
   n bigint := 0;
 BEGIN
   FOR r IN SELECT * FROM audit_log ORDER BY id LOOP
     n := n + 1;
-    expected := encode(digest(
-      prev || '|' || r.id::text || '|' || to_char(r.at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || '|' ||
-      coalesce(r.actor_id, '') || '|' || r.actor_kind || '|' || coalesce(r.tenant_id::text, '') || '|' ||
-      r.action || '|' || coalesce(r.target_type, '') || '|' || coalesce(r.target_id, '') || '|' ||
-      coalesce(r.detail::text, ''), 'sha256'), 'hex');
+    expected := audit_log_row_hash(prev, r);
     IF r.prev_hash IS DISTINCT FROM prev OR r.hash IS DISTINCT FROM expected THEN
       RETURN QUERY SELECT false, n, r.id; RETURN;
     END IF;
@@ -51,4 +56,4 @@ BEGIN
   END LOOP;
   RETURN QUERY SELECT true, n, NULL::bigint;
 END $$;
-GRANT EXECUTE ON FUNCTION audit_log_verify() TO blaksoc_app;
+GRANT EXECUTE ON FUNCTION audit_log_verify() TO blaksoc_app, blaksoc_system;

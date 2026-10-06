@@ -1,6 +1,6 @@
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
-import { adminDb, type Tx } from "@/db/client";
+import { systemDb, type Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { escalationPolicies, incidentTimeline, incidents, integrations, notificationDeliveries, responseActions, tenants } from "@/db/schema";
 import { systemScope, type AccessContext } from "@/lib/auth/access";
@@ -139,7 +139,7 @@ async function advanceInTx(
 }
 
 export async function runDueEscalations(now = Date.now()) {
-  const open = await adminDb()
+  const open = await systemDb()
     .select({ incidentId: incidents.id, tenantId: incidents.tenantId })
     .from(incidents)
     .innerJoin(escalationPolicies, eq(escalationPolicies.tenantId, incidents.tenantId))

@@ -1,5 +1,6 @@
 import { BedrockRuntimeClient, ConverseCommand, type ContentBlock, type Message, type Tool } from "@aws-sdk/client-bedrock-runtime";
 import { BaseProvider, type ChatMessage, type ChatResult, type Residency, type ToolSpec } from "./types";
+import { egressFetch } from "@/lib/net/egress";
 
 /**
  * OpenAI-compatible Chat Completions. Covers OpenAI, Azure OpenAI (deployment + api-version),
@@ -39,7 +40,8 @@ export class OpenAICompatibleProvider extends BaseProvider {
       ),
       ...(opts.tools?.length ? { tools: opts.tools.map((t) => ({ type: "function", function: t })), tool_choice: "auto" } : {}),
     };
-    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) });
+    // Ollama, vLLM and other OpenAI-compatible servers are often self-hosted; Azure OpenAI is SaaS.
+    const res = await egressFetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) }, azure ? "public" : "internal");
     if (!res.ok) throw new Error(`${this.id}: ${res.status} ${(await res.text()).slice(0, 300)}`);
     const data = (await res.json()) as {
       choices: { message: { content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] } }[];

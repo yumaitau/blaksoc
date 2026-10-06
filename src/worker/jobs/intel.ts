@@ -1,6 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { and, eq, sql } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { advisories, assets, cveIntel, dataGovernance, intelFeeds, intelMatches, tenants, vulnerabilities } from "@/db/schema";
 import { checkGovernedSighting } from "@/lib/governance/policy";
 import { governanceProfile } from "@/lib/services/governance";
@@ -28,7 +28,7 @@ export function parseEpssCsv(csv: string, wanted: ReadonlySet<string>): Map<stri
 }
 
 /** CVEs present only in tenants whose governance profile locks data to Australia. No profile row means locked. */
-async function lockedOnlyCves(db: ReturnType<typeof adminDb>, cves: string[]): Promise<Set<string>> {
+async function lockedOnlyCves(db: ReturnType<typeof systemDb>, cves: string[]): Promise<Set<string>> {
   const rows = await db
     .select({ cve: vulnerabilities.cve, locked: sql<boolean>`coalesce((${dataGovernance.profile}->>'residencyLock')::boolean, true)` })
     .from(vulnerabilities)
@@ -39,7 +39,7 @@ async function lockedOnlyCves(db: ReturnType<typeof adminDb>, cves: string[]): P
 
 /** Refresh CISA KEV + FIRST EPSS + OpenCTI context for every CVE present in any tenant. */
 export async function refreshCveIntel(log: (m: string) => void) {
-  const db = adminDb();
+  const db = systemDb();
   const cves = (await db.selectDistinct({ cve: vulnerabilities.cve }).from(vulnerabilities)).map((r) => r.cve).filter((c) => /^CVE-\d{4}-\d+$/.test(c));
   if (!cves.length) return;
 
@@ -193,7 +193,7 @@ export function advisoryFields(feedKey: string, title: string, description: stri
 
 /** Pull public advisory feeds (ACSC / CISA / CERTs) configured as intel_feeds of category "advisory". */
 export async function ingestAdvisories(log: (m: string) => void) {
-  const db = adminDb();
+  const db = systemDb();
   const feeds = await db.select().from(intelFeeds).where(and(eq(intelFeeds.category, "advisory"), eq(intelFeeds.enabled, true)));
   const intel = await intelProviderFor(db, null);
   for (const f of feeds) {
@@ -228,7 +228,7 @@ export async function ingestAdvisories(log: (m: string) => void) {
 
 /** Feedback loop: publish a sighting to OpenCTI under the tenant's sharing policy. Never names the customer unless allowed. */
 export async function createSighting(tenantId: string, matchId: string) {
-  const intel = await intelProviderFor(adminDb(), tenantId);
+  const intel = await intelProviderFor(systemDb(), tenantId);
   await withScope(systemScope(tenantId), async (tx) => {
     const [m] = await tx.select().from(intelMatches).where(eq(intelMatches.id, matchId));
     const [t] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));

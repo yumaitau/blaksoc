@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { and, eq, notInArray } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { assets, assetSources, coverageTasks, enrolmentTokens, integrations, sites, tenants } from "@/db/schema";
 import { type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -68,9 +68,9 @@ export async function setSiteLink(ctx: AccessContext, tenantId: string, siteId: 
 
 /** Registration check. A revoked or expired token does not join a group. */
 export async function claimEnrolment(rawToken: string, now = Date.now()) {
-  const [row] = await adminDb().select().from(enrolmentTokens).where(eq(enrolmentTokens.tokenHash, sha256(rawToken)));
+  const [row] = await systemDb().select().from(enrolmentTokens).where(eq(enrolmentTokens.tokenHash, sha256(rawToken)));
   if (!row || row.revokedAt || row.expiresAt.getTime() <= now) return null;
-  const [tenant] = await adminDb().select().from(tenants).where(eq(tenants.id, row.tenantId));
+  const [tenant] = await systemDb().select().from(tenants).where(eq(tenants.id, row.tenantId));
   if (!tenant) return null;
   return { tenantId: row.tenantId, siteId: row.siteId, group: agentGroup(tenant.slug) };
 }
@@ -102,7 +102,7 @@ export async function serveInstaller(ctx: AccessContext, token: string, now = Da
 }
 
 async function enrolmentTenant(id: string): Promise<string | null> {
-  const [row] = await adminDb().select({ tenantId: enrolmentTokens.tenantId }).from(enrolmentTokens).where(eq(enrolmentTokens.id, id));
+  const [row] = await systemDb().select({ tenantId: enrolmentTokens.tenantId }).from(enrolmentTokens).where(eq(enrolmentTokens.id, id));
   return row?.tenantId ?? null;
 }
 

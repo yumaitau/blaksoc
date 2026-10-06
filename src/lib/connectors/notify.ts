@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { egressFetch } from "@/lib/net/egress";
 
 export type Notification = {
   event: string;
@@ -53,7 +54,8 @@ export class WebhookNotifier implements Notifier {
       headers["x-blaksoc-timestamp"] = ts;
       headers["x-blaksoc-signature"] = `sha256=${createHmac("sha256", this.secret).update(`${ts}.${payload}`).digest("hex")}`;
     }
-    const res = await fetch(this.url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(10_000) });
+    // Webhooks, Teams and Slack are SaaS endpoints: private and metadata addresses are refused.
+    const res = await egressFetch(this.url, { method: "POST", headers, body: payload, signal: AbortSignal.timeout(10_000) }, "public");
     if (!res.ok) throw new Error(`webhook ${res.status}`);
   }
 
