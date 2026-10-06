@@ -93,7 +93,7 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
           <ShieldOff className="mt-0.5 size-4 shrink-0 text-danger" />
           <div>
             <div className="font-medium text-danger">Blocked by AI policy</div>
-            <div className="text-muted">{decision.reason}. Change the customer&apos;s AI policy under Administration, or register an approved provider.</div>
+            <div className="text-muted">{decision.reason}. {/data stewards|residency lock/.test(decision.reason) ? "Only the customer's data stewards can change this, under Data rules in the portal." : "Change the customer's AI policy under Administration, or register an approved provider."}</div>
           </div>
         </div>
       ) : (

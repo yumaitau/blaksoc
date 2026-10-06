@@ -35,12 +35,16 @@ export async function intelProviderFor(tx: DbOrTx, tenantId: string | null): Pro
     .select()
     .from(integrations)
     .where(and(eq(integrations.category, "threat_intel"), eq(integrations.enabled, true), tenantId ? or(eq(integrations.tenantId, tenantId), isNull(integrations.tenantId)) : isNull(integrations.tenantId)));
-  const row = rows.sort((a, b) => (a.tenantId ? -1 : 0) - (b.tenantId ? -1 : 0))[0];
-  if (!row) return null;
+  const ordered = rows.sort((a, b) => (a.tenantId ? -1 : 0) - (b.tenantId ? -1 : 0));
+  let allowed = ordered;
   if (tenantId) {
     const [gov] = await tx.select({ profile: dataGovernance.profile }).from(dataGovernance).where(eq(dataGovernance.tenantId, tenantId));
-    if (!checkGovernedRegion(gov?.profile ?? MOST_PROTECTIVE, (row.config as Record<string, unknown>).region).allowed) return null;
+    const profile = gov?.profile ?? MOST_PROTECTIVE;
+    // A rejected tenant connector falls through to an allowed platform connector.
+    allowed = ordered.filter((r) => checkGovernedRegion(profile, (r.config as Record<string, unknown>).region).allowed);
   }
+  const row = allowed[0];
+  if (!row) return null;
   const inst = instantiate(row);
   return inst.kind === "intel" ? { row, provider: inst.provider } : null;
 }
