@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { connectorDef } from "@/lib/connectors/registry";
 import { FileArchiveStore } from "@/lib/hosting/store";
 import { openctiIndicatorRequest, searchBulkBody } from "@/lib/hosting/plane-load";
-import { assertDataPlaneStoresInAustralia, assertHostingEnv, assertSearchNodeInAustralia, componentsOutsideAustralia, egressOpensTheWorld, firstSearchNodeAttributes, helmBlockScalar, helmScalar, HOSTING_COMPONENT_NAMES, hostingComponents, type DataPlaneRegions } from "@/lib/hosting/profile";
+import { assertDataPlaneStoresInAustralia, assertHostingEnv, assertSearchNodeInAustralia, componentsOutsideAustralia, egressOpensTheWorld, egressReachesPublicInternet, firstSearchNodeAttributes, helmBlockScalar, helmScalar, HOSTING_COMPONENT_NAMES, hostingComponents, type DataPlaneRegions } from "@/lib/hosting/profile";
 import { assertAuRegion } from "@/lib/syslog/retain";
 
 const roots: string[] = [];
@@ -47,10 +47,15 @@ describe("hosting profile", () => {
     expect(helmBlockScalar(k3s, "web", "replicas")).toBe("1");
     expect(helmBlockScalar(k3s, "worker", "replicas")).toBe("1");
     expect(k3s).toContain("enabled: false");
-    const chart = parse(base) as { networkPolicy: { egressCidrs: string[] }; dataPlane: DataPlaneRegions };
+    const chart = parse(base) as { networkPolicy: { egressCidrs: string[]; publicHttps: boolean }; dataPlane: DataPlaneRegions };
     const k3sChart = parse(k3s) as { networkPolicy?: { egressCidrs?: string[] } };
     expect(chart.networkPolicy.egressCidrs).toEqual([]);
     expect(egressOpensTheWorld(chart.networkPolicy.egressCidrs)).toBe(false);
+    // The shipped chart reaches the public internet on TCP 443 only; this is deliberate and documented.
+    expect(chart.networkPolicy.publicHttps).toBe(true);
+    expect(egressReachesPublicInternet(chart.networkPolicy)).toBe(true);
+    expect(egressReachesPublicInternet({ egressCidrs: [], publicHttps: false })).toBe(false);
+    expect(egressReachesPublicInternet({ egressCidrs: ["0.0.0.0/0"], publicHttps: false })).toBe(true);
     expect(egressOpensTheWorld(k3sChart.networkPolicy?.egressCidrs ?? [])).toBe(false);
     expect(egressOpensTheWorld(["0.0.0.0/0"])).toBe(true);
     expect(egressOpensTheWorld(["::/0"])).toBe(true);

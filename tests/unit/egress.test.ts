@@ -1,3 +1,5 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { assertEgressUrl, egressDenial, egressFetch, guardedLookup } from "@/lib/net/egress";
 
@@ -48,6 +50,24 @@ describe("egress guard", () => {
     expect(err?.message).toMatch(/egress refused/);
     const ok = await new Promise<Error | null>((resolve) => guardedLookup("internal")("localhost", {}, (e) => resolve(e)));
     expect(ok).toBeNull();
+  });
+
+  it("completes a real request through the guarded dispatcher", async () => {
+    // Guards against pairing the npm undici Agent with Node's global fetch, which fails every call.
+    const server = createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ method: req.method, url: req.url }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const res = await egressFetch(`http://localhost:${port}/health`, { method: "POST", body: "{}" }, "internal");
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ method: "POST", url: "/health" });
+      await expect(egressFetch(`http://localhost:${port}/`, {}, "public")).rejects.toThrow();
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it("fails a public fetch to a private host before any request is sent", async () => {

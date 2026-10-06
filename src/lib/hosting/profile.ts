@@ -79,6 +79,16 @@ export function egressOpensTheWorld(cidrs: readonly string[]): boolean {
   return cidrs.some((cidr) => WORLD_EGRESS.has(cidr.trim()));
 }
 
+/**
+ * True when web or worker can reach the public internet at all: any-port world CIDRs, or the
+ * chart's public HTTPS rule (TCP 443 to public addresses). Public HTTPS is the default because
+ * Entra sign-in, Microsoft Graph and the public intel feeds need it; it is not region-pinned,
+ * so which tenant data may leave is enforced in the app by the data governance profile.
+ */
+export function egressReachesPublicInternet(policy: { egressCidrs?: readonly string[]; publicHttps?: boolean }): boolean {
+  return egressOpensTheWorld(policy.egressCidrs ?? []) || policy.publicHttps !== false;
+}
+
 export function componentsOutsideAustralia(rows: { region: string }[]): string[] {
   return rows.filter((row) => regionStoresOutsideAustralia(row.region)).map((row) => row.region);
 }

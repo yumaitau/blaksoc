@@ -176,6 +176,13 @@
       "when": 1790617000000,
       "tag": "0024_alert_ocsf",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790618000000,
+      "tag": "0025_response_claimed_at",
+      "breakpoints": true
     }
   ]
 }

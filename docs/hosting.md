@@ -101,7 +101,7 @@ RPO for the cold object is one `syslog-retain` interval: 1 hour after the line i
 
 RTO for one line is the time `restoreArchive` takes to read the object and mark the event hot. `tests/integration/hosting.test.ts` is the restore drill. A cluster failover time was not measured.
 
-Worker network policy egress is cluster-internal. The shipped chart sets `networkPolicy.egressCidrs` to an empty list, so the worker does not allow `0.0.0.0/0` or `::/0`.
+Web and worker egress is cluster-internal plus public TCP 443 (`networkPolicy.publicHttps`, on by default), with private, link-local (cloud metadata), CGNAT and loopback ranges excluded. Entra sign-in, Microsoft Graph, CISA KEV, FIRST EPSS, ACSC advisories, Kelpie, ABR and hosted AI providers need it. That egress is not region-pinned: which tenant data may reach those services is enforced in the app by the data governance profile, and `egressReachesPublicInternet` reports it. `networkPolicy.egressCidrs` is empty, so no any-port world CIDR is allowed. Anything private or on another port (self-hosted Ollama or vLLM, the Wazuh API on 55000, SMTP relays, managed Postgres and Redis) needs its CIDR in `networkPolicy.egressCidrs`. Set `publicHttps: false` for an air-gapped install.
 
 ## Regions
 
@@ -113,4 +113,4 @@ The OpenCTI compose profile sets OpenSearch `node.attr.region` from `OPENSEARCH_
 
 `minio/minio` is not publicly pullable. The compose file uses `chainguard/minio:latest`, which still runs `minio server`. MinIO does not advertise a storage region. The OpenCTI service carries `BLAKSOC_REGION` from `OPENCTI_REGION`.
 
-A world-open egress CIDR fails `egressOpensTheWorld`. The data-plane section records the region read back from the live OpenSearch and Wazuh indexer APIs, and the OpenCTI indicator stored on that host.
+A world-open egress CIDR fails `egressOpensTheWorld`; public HTTPS is reported separately by `egressReachesPublicInternet`. The data-plane section records the region read back from the live OpenSearch and Wazuh indexer APIs, and the OpenCTI indicator stored on that host.

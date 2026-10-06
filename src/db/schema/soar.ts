@@ -112,6 +112,8 @@ export const responseActions = pgTable(
     integrationId: uuid("integration_id"),
     result: jsonb("result"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** When a worker moved the action from APPROVED to EXECUTING. */
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
     executedAt: timestamp("executed_at", { withTimezone: true }),
   },
   (t) => [index("response_actions_tenant").on(t.tenantId, t.createdAt)],

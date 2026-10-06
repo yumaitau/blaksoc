@@ -204,7 +204,8 @@ async function queueOnce(name: QueueName, jobName: string, data: Record<string, 
   const recoveries = Number(existing.data?.recoveries ?? 0);
   if (recoveries >= MAX_RECOVERIES) return onGiveUp();
   await existing.updateData({ ...existing.data, recoveries: recoveries + 1 });
-  await existing.retry();
+  // A failed job has used all its BullMQ attempts; give each recovery a full set again.
+  await existing.retry("failed", { resetAttemptsMade: true, resetAttemptsStarted: true });
 }
 
 /** Queue execution of an APPROVED response action. Safe to call more than once. */
@@ -233,25 +234,73 @@ async function afterExpiry(e: ExpiredApproval) {
   await publish({ type: "response.updated", tenantId: e.tenantId, id: e.refId, status: "EXPIRED" });
 }
 
+/** Follow-up work decided longer ago than this is closed, not run late: a stale isolate or disable is worse than none. */
+export const RECOVERY_WINDOW_MS = 24 * 3600_000;
+/** An action EXECUTING this long with no pending provider reference was interrupted (worker killed, write failed). */
+export const EXECUTION_STALE_MS = 30 * 60_000;
+
 /**
  * Work whose follow-up job may never have been queued (e.g. Redis was down after the commit):
  * runs still WAITING_APPROVAL on a settled gate, and APPROVED response actions that never started.
- * Queueing is idempotent per job id, so work already queued or done is not repeated.
+ * Queueing is idempotent per job id, so work already queued or done is not repeated. Anything
+ * decided more than RECOVERY_WINDOW_MS ago is closed with an audit row instead of run late.
  */
-export async function recoverStalledRuns() {
+export async function recoverStalledRuns(now = new Date()) {
+  const cutoff = new Date(now.getTime() - RECOVERY_WINDOW_MS);
   const stalled = await systemDb()
-    .select({ tenantId: playbookRuns.tenantId, runId: playbookRuns.id, approvalId: approvals.id, status: approvals.status })
+    .select({ tenantId: playbookRuns.tenantId, runId: playbookRuns.id, approvalId: approvals.id, status: approvals.status, decidedAt: approvals.decidedAt })
     .from(playbookRuns)
     .innerJoin(playbookRunSteps, and(eq(playbookRunSteps.runId, playbookRuns.id), eq(playbookRunSteps.status, "WAITING_APPROVAL")))
     .innerJoin(approvals, eq(approvals.id, playbookRunSteps.approvalId))
     .where(and(eq(playbookRuns.status, "WAITING_APPROVAL"), inArray(approvals.status, ["APPROVED", "REJECTED", "EXPIRED"])))
     .limit(500);
   for (const row of stalled) {
+    if (!row.decidedAt || row.decidedAt < cutoff) {
+      await withScope(systemScope(row.tenantId), async (tx) => {
+        const [run] = await tx.update(playbookRuns).set({ status: "CANCELLED", error: "gate settled over 24 hours ago without resuming; not continued", finishedAt: now }).where(and(eq(playbookRuns.id, row.runId), eq(playbookRuns.status, "WAITING_APPROVAL"))).returning({ id: playbookRuns.id });
+        if (run) await audit(tx, { actorId: null, actorKind: "system", tenantId: row.tenantId, action: "playbook.stale_cancel", targetType: "playbook_run", targetId: row.runId, detail: { approvalId: row.approvalId, decision: row.status } });
+      });
+      continue;
+    }
     await queueResume(row.tenantId, row.runId, row.approvalId, row.status === "APPROVED" ? "APPROVED" : "REJECTED", row.status === "EXPIRED" ? "approval expired" : undefined);
   }
-  const approved = await systemDb().select({ tenantId: responseActions.tenantId, id: responseActions.id }).from(responseActions).where(eq(responseActions.status, "APPROVED")).limit(500);
-  for (const row of approved) await queueExecute(row.tenantId, row.id);
-  return stalled.length + approved.length;
+
+  const approved = await systemDb()
+    .select({ tenantId: responseActions.tenantId, id: responseActions.id, incidentId: responseActions.incidentId, action: responseActions.action, createdAt: responseActions.createdAt, decidedAt: approvals.decidedAt })
+    .from(responseActions)
+    .leftJoin(approvals, eq(approvals.id, responseActions.approvalId))
+    .where(eq(responseActions.status, "APPROVED"))
+    .limit(500);
+  for (const row of approved) {
+    // Approved by a human (decidedAt) or approved on creation (no gate: createdAt).
+    const approvedAt = row.decidedAt ?? row.createdAt;
+    if (approvedAt < cutoff) {
+      await withScope(systemScope(row.tenantId), async (tx) => {
+        const [act] = await tx.update(responseActions).set({ status: "FAILED", result: { message: "approved over 24 hours ago and never executed; request it again if still needed" } }).where(and(eq(responseActions.id, row.id), eq(responseActions.status, "APPROVED"))).returning({ id: responseActions.id });
+        if (!act) return;
+        if (row.incidentId) await addTimeline(tx, { tenantId: row.tenantId, incidentId: row.incidentId, origin: "machine", category: "response", title: `${actionLabel(row.action)} not executed: approval is stale`, refType: "response_action", refId: row.id });
+        await audit(tx, { actorId: null, actorKind: "system", tenantId: row.tenantId, action: "response.stale_fail", targetType: "response_action", targetId: row.id, detail: { approvedAt: approvedAt.toISOString() } });
+      });
+      continue;
+    }
+    await queueExecute(row.tenantId, row.id);
+  }
+
+  // Interrupted executions: claimed long ago, never settled, and not waiting on a provider (those have their own timeout).
+  const staleBefore = new Date(now.getTime() - EXECUTION_STALE_MS);
+  const interrupted = await systemDb()
+    .select({ tenantId: responseActions.tenantId, id: responseActions.id, incidentId: responseActions.incidentId, action: responseActions.action })
+    .from(responseActions)
+    .where(and(
+      eq(responseActions.status, "EXECUTING"),
+      sql`coalesce(${responseActions.result}->>'pending', 'false') <> 'true'`,
+      or(lt(responseActions.claimedAt, staleBefore), and(isNull(responseActions.claimedAt), lt(responseActions.createdAt, staleBefore))),
+    ))
+    .limit(500);
+  for (const row of interrupted) {
+    await settleResponseAction(row.tenantId, row.id, row.incidentId, row.action, { ok: false, message: "execution was interrupted before blakSOC recorded a result; check the target system before requesting it again" });
+  }
+  return stalled.length + approved.length + interrupted.length;
 }
 
 /** Worker: expire every approval past its deadline, then repair runs left waiting on a settled gate. */
@@ -297,7 +346,7 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
   if (!act) throw new Error("action not found");
   if (act.status !== "APPROVED") return { skipped: true, status: act.status };
   // Claim the action: only one job moves it from APPROVED to EXECUTING, so a duplicate never runs it twice.
-  const claimed = await withScope(scope, (tx) => tx.update(responseActions).set({ status: "EXECUTING" }).where(and(eq(responseActions.id, actionId), eq(responseActions.status, "APPROVED"))).returning({ id: responseActions.id }));
+  const claimed = await withScope(scope, (tx) => tx.update(responseActions).set({ status: "EXECUTING", claimedAt: new Date() }).where(and(eq(responseActions.id, actionId), eq(responseActions.status, "APPROVED"))).returning({ id: responseActions.id }));
   if (!claimed.length) return { skipped: true, status: "EXECUTING" };
   let ok = false;
   let message = "";

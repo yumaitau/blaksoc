@@ -46,7 +46,9 @@ export async function updateTenantSettings(ctx: AccessContext, tenantId: string,
     const [t] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
     if (!t) throw new AccessDenied();
     const settings = { ...t.settings, ...patch, sharing: { ...t.settings.sharing, ...patch.sharing }, ai: { ...t.settings.ai, ...patch.ai }, slaMinutes: { ...t.settings.slaMinutes, ...patch.slaMinutes } };
-    await tx.update(tenants).set({ settings }).where(eq(tenants.id, tenantId));
+    // RLS decides whether this caller may write the row; zero rows means it may not, so do not audit a change that did not happen.
+    const updated = await tx.update(tenants).set({ settings }).where(eq(tenants.id, tenantId)).returning({ id: tenants.id });
+    if (!updated.length) throw new AccessDenied("tenant settings cannot be changed from this role; ask a platform administrator");
     await audit(tx, { ...actor(ctx), tenantId, action: "tenant.settings", targetType: "tenant", targetId: tenantId, detail: { before: t.settings, after: settings } });
     return settings;
   });

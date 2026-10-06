@@ -23,6 +23,7 @@ runtimeSecretKeys:
     - M365_CONNECTOR_CLIENT_SECRET
     - SSO_TRUSTED_ORIGINS
     - BLAKSOC_SUPPLIER_ABN
+    - WAZUH_MANAGER
 
 # Optional: build existingSecret from AWS Secrets Manager (or another store) via External Secrets.
 externalSecret:
@@ -33,6 +34,10 @@ externalSecret:
 
 config:
   AI_DATA_RESIDENCY: AU
+  # CIDRs of the proxies in front of blakSOC (ingress controller, load balancer, VPC). Client IPs for
+  # sign-in rate limits and syslog allowlists are read from X-Forwarded-For past these. Empty trusts
+  # only a single-entry header.
+  TRUSTED_PROXY_CIDRS: ""
   OPENSEARCH_REGION: ap-southeast-2
   WAZUH_INDEXER_REGION: ap-southeast-2
   OPENCTI_REGION: ap-southeast-2
@@ -87,6 +92,8 @@ networkPolicy:
   # FIRST EPSS, ACSC advisories, Kelpie, ABR and hosted AI providers. These services are not
   # region-pinned: which tenant data may reach them is enforced in the app by the data
   # governance profile. Set false for an air-gapped install and list exact CIDRs below instead.
+  # Private or non-443 endpoints (self-hosted Ollama/vLLM, Wazuh API on 55000, SMTP relays) are
+  # blocked unless their CIDRs are in egressCidrs.
   publicHttps: true
   # Postgres and Redis run as pods in this cluster. Set false when they are outside it (RDS,
   # ElastiCache, a VM): the chart then refuses to render until their CIDRs are in egressCidrs,

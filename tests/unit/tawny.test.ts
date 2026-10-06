@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { setEgressTransport } from "@/lib/net/egress";
 import { collectionAllowed } from "@/lib/billing/catalogue";
 import { connectorDef } from "@/lib/connectors/registry";
 import { exampleConfig, secretFields } from "@/lib/integrations/form-spec";
@@ -51,14 +52,13 @@ const agent: TawnyAgent = {
 };
 
 type Call = { url: string; method: string; headers: Record<string, string>; body: unknown };
-const original = globalThis.fetch;
 afterEach(() => {
-  globalThis.fetch = original;
+  setEgressTransport();
 });
 
 function stubFetch(handler: (call: Call) => { status?: number; body: unknown }): Call[] {
   const calls: Call[] = [];
-  globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+  setEgressTransport((async (input: string | URL, init?: RequestInit) => {
     const call: Call = {
       url: String(input),
       method: init?.method ?? "GET",
@@ -69,7 +69,7 @@ function stubFetch(handler: (call: Call) => { status?: number; body: unknown }):
     const res = handler(call);
     const status = res.status ?? 200;
     return new Response(JSON.stringify(res.body), { status, statusText: status === 200 ? "OK" : status === 201 ? "Created" : "Error" });
-  }) as typeof fetch;
+  }) as typeof fetch);
   return calls;
 }
 
@@ -186,9 +186,9 @@ describe("tawny normalisation", () => {
 
 describe("tawny fixture mode", () => {
   it("never calls the network", async () => {
-    globalThis.fetch = (() => {
+    setEgressTransport((() => {
       throw new Error("network");
-    }) as typeof fetch;
+    }) as typeof fetch);
     const p = provider({ ...LIVE, mode: "fixture" });
     expect((await p.health()).ok).toBe(true);
 
