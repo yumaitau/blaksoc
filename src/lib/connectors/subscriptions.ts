@@ -46,32 +46,50 @@ export function eventNotification(e: SocEvent, tenantName: string, appUrl: strin
 }
 
 const CACHE_MS = 60_000;
+/** How often a process reads the shared version. Bounds both Redis reads on the publish path and refresh delay. */
+const VERSION_CHECK_MS = 5_000;
 const VERSION_KEY = "blaksoc:subscriptions:version";
-let cached: { at: number; version: string; types: Set<string> } | null = null;
+let cached: { at: number; checkedAt: number; version: string; types: Set<string> } | null = null;
 
 /**
  * Call after creating, changing, enabling or disabling a webhook, Teams or Slack integration.
- * Every process's subscribedEventTypes() cache refreshes on its next publish.
+ * Every process's subscribedEventTypes() cache refreshes within VERSION_CHECK_MS.
  */
 export async function subscriptionsChanged(): Promise<void> {
   await redis().incr(VERSION_KEY);
 }
 
 /**
- * Event types any enabled subscriber wants. Cached so publish() does not query Postgres per alert;
- * the cache refreshes when subscriptionsChanged() bumps the shared version, or after CACHE_MS.
+ * Event types any enabled subscriber wants. Cached so publish() does not query Postgres per alert.
+ * The shared version is read at most every VERSION_CHECK_MS; Postgres is read again when the
+ * version changed or after CACHE_MS.
  */
 export async function subscribedEventTypes(now = Date.now()): Promise<Set<string>> {
+  if (cached && now - cached.checkedAt < VERSION_CHECK_MS && now - cached.at < CACHE_MS) return cached.types;
   const version = (await redis().get(VERSION_KEY)) ?? "0";
-  if (cached && cached.version === version && now - cached.at < CACHE_MS) return cached.types;
+  if (cached && cached.version === version && now - cached.at < CACHE_MS) {
+    cached.checkedAt = now;
+    return cached.types;
+  }
   const rows = await systemDb().select({ config: integrations.config }).from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, SUBSCRIBER_CATEGORIES)));
   const types = new Set<string>();
   for (const row of rows) {
     const events = (row.config as { events?: unknown }).events;
     if (Array.isArray(events)) events.forEach((t) => typeof t === "string" && types.add(t));
   }
-  cached = { at: now, version, types };
+  cached = { at: now, checkedAt: now, version, types };
   return types;
+}
+
+/**
+ * The event carried by a notify `event` job, whichever release queued it: a bare SocEvent (before
+ * event ids), `{ event, eventId }` (PR #112), or `{ ...event, eventId }` (current). Jobs without an
+ * id use the BullMQ job id, which is stable across that job's retries.
+ */
+export function eventJobPayload(data: Record<string, unknown>, jobId: string): { event: SocEvent; eventId: string } {
+  const { eventId, event: nested, ...flat } = data;
+  const event = (nested && typeof nested === "object" ? nested : flat) as SocEvent;
+  return { event, eventId: typeof eventId === "string" && eventId ? eventId : jobId };
 }
 
 /**

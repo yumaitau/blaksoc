@@ -15,7 +15,7 @@ import { queue, QUEUES } from "@/lib/queue";
 import { deliveryJobId, fanOutEvent, subscribedEventTypes, subscriptionsChanged } from "@/lib/connectors/subscriptions";
 import { assignRole, revokeRole, updateTenantSettings } from "@/lib/services/admin";
 import { advanceRun, evaluateTriggers, resumeRun } from "@/lib/soar/engine";
-import { decideApproval, expireDueApprovals, recoverStalledRuns, requestResponseAction } from "@/lib/soar/response";
+import { decideApproval, executeResponseAction, expireDueApprovals, recoverStalledRuns, requestResponseAction } from "@/lib/soar/response";
 
 const stamp = `hd${randomUUID().slice(0, 8)}`;
 const tenantIds: string[] = [];
@@ -213,13 +213,50 @@ describe("event delivery (review of PR #111)", () => {
     for (const j of all) await j.remove();
   });
 
-  it("refreshes cached subscriptions as soon as an integration changes", async () => {
-    await subscribedEventTypes();
-    await adminDb().insert(integrations).values({ tenantId: customer.id, category: "collaboration", provider: "slack", name: `${stamp} slack`, config: { events: ["response.updated"] }, permissions: [], enabled: true });
-    // Still the cached answer until the change is announced.
-    expect((await subscribedEventTypes()).has("response.updated")).toBe(false);
+  it("refreshes cached subscriptions soon after an integration changes", async () => {
+    // A marker only this test subscribes to, and explicit clock values, so other tests cannot change the outcome.
+    const marker = `test.${stamp}`;
+    const t0 = Date.now();
+    await subscribedEventTypes(t0);
+    await adminDb().insert(integrations).values({ tenantId: customer.id, category: "collaboration", provider: "slack", name: `${stamp} slack`, config: { events: [marker] }, permissions: [], enabled: true });
+    expect((await subscribedEventTypes(t0 + 1_000)).has(marker)).toBe(false);
     await subscriptionsChanged();
-    expect((await subscribedEventTypes()).has("response.updated")).toBe(true);
+    expect((await subscribedEventTypes(t0 + 6_000)).has(marker)).toBe(true);
+  });
+});
+
+describe("review of PR #112", () => {
+  it("ignores a late resume for an earlier gate once the run waits on a later one", async () => {
+    const steps = [
+      { id: "a", action: "approval.request", name: "Gate A" },
+      { id: "b", action: "approval.request", name: "Gate B" },
+    ];
+    const [pb] = await adminDb().insert(playbooks).values({ tenantId: other.id, name: `${stamp} two gates`, trigger: { event: "manual", conditions: [] }, steps, enabled: true }).returning();
+    const started = await evaluateTriggers(other.id, "manual", {});
+    const runId = (await adminDb().select({ id: playbookRuns.id }).from(playbookRuns).where(and(inArray(playbookRuns.id, started), eq(playbookRuns.playbookId, pb!.id))))[0]!.id;
+    await advanceRun(other.id, runId);
+    const [gateA] = await adminDb().select({ approvalId: playbookRunSteps.approvalId }).from(playbookRunSteps).where(eq(playbookRunSteps.runId, runId));
+    await resumeRun(other.id, runId, gateA!.approvalId!, "APPROVED");
+    expect(await advanceRun(other.id, runId)).toBe("WAITING_APPROVAL");
+    // The same resume delivered again must not carry the run past gate B.
+    await resumeRun(other.id, runId, gateA!.approvalId!, "APPROVED");
+    const [run] = await adminDb().select({ status: playbookRuns.status, stepIndex: playbookRuns.stepIndex }).from(playbookRuns).where(eq(playbookRuns.id, runId));
+    expect(run).toEqual({ status: "WAITING_APPROVAL", stepIndex: 1 });
+  });
+
+  it("queues execution for an approved action whose job was lost, and runs it only once", async () => {
+    const { action } = await withScope(systemScope(other.id), (tx) =>
+      requestResponseAction(tx, { tenantId: other.id, action: "scan_endpoint", target: { assetId: randomUUID() }, reason: "lost job", requestedBy: null, requestedByKind: "user" }),
+    );
+    expect(action.status).toBe("APPROVED");
+    await recoverStalledRuns();
+    await recoverStalledRuns();
+    const jobs = (await queue(QUEUES.response).getJobs(["waiting", "delayed"])).filter((j) => j.name === "execute" && j.data.actionId === action.id);
+    expect(jobs).toHaveLength(1);
+    for (const j of jobs) await j.remove();
+    // Two executions racing: only the one that claims APPROVED → EXECUTING proceeds.
+    const [first, second] = await Promise.all([executeResponseAction(other.id, action.id), executeResponseAction(other.id, action.id)]);
+    expect([first, second].filter((r) => (r as { skipped?: boolean }).skipped)).toHaveLength(1);
   });
 });
 

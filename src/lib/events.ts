@@ -24,7 +24,8 @@ export async function publish(event: SocEvent): Promise<void> {
     const { subscribedEventTypes } = await import("./connectors/subscriptions");
     if ((await subscribedEventTypes()).has(event.type)) {
       const eventId = randomUUID();
-      await queue(QUEUES.notify).add("event", { event, eventId }, { jobId: `event-${eventId}` });
+      // Flat payload: a worker from before event ids reads it as a plain SocEvent during a rolling deploy.
+      await queue(QUEUES.notify).add("event", { ...event, eventId }, { jobId: `event-${eventId}` });
     }
   } catch (err) {
     console.warn(`[events] could not queue ${event.type} for subscribers: ${err instanceof Error ? err.message : err}`);

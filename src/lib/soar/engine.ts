@@ -15,7 +15,7 @@ import { addTimeline, createIncidentFromAlerts } from "@/lib/services/incidents"
 import { isResponseAction, RESPONSE_ACTIONS } from "./actions";
 import { allHold, evaluate, getPath } from "./conditions";
 import { responseHintOf, type ResponseHint } from "./hint";
-import { requestResponseAction } from "./response";
+import { queueExecute, requestResponseAction } from "./response";
 
 type RunCtx = Record<string, unknown> & { tenantId: string; alertId?: string; incidentId?: string };
 type StepResult = { status: "SUCCEEDED" | "SKIPPED" | "WAITING_APPROVAL" | "FAILED"; output?: unknown; approvalId?: string; error?: string };
@@ -148,7 +148,7 @@ async function responseStep(tx: Tx, step: PlaybookStep, run: { id: string; tenan
     alertId: ctx.alertId ?? null, incidentId: ctx.incidentId ?? null, playbookRunId: run.id,
   });
   if (res.needsApproval) return { status: "WAITING_APPROVAL", approvalId: res.approvalId!, output: { actionId: res.action.id } };
-  await queue(QUEUES.response).add("execute", { tenantId: run.tenantId, actionId: res.action.id });
+  await queueExecute(run.tenantId, res.action.id);
   return { status: "SUCCEEDED", output: { actionId: res.action.id, autoContainment: true } };
 }
 
@@ -226,12 +226,21 @@ export async function advanceRun(tenantId: string, runId: string) {
   });
 }
 
-/** Called after a human decides on a gate for this run. */
+/**
+ * Called after a human decides on a gate for this run. Acts only when the run is waiting on this
+ * exact gate: a late or repeated resume for an earlier gate must never carry the run past a later one.
+ */
 export async function resumeRun(tenantId: string, runId: string, approvalId: string, decision: "APPROVED" | "REJECTED", reason = "approval rejected") {
   const next = await withScope(systemScope(tenantId), async (tx) => {
     const [run] = await tx.select().from(playbookRuns).where(eq(playbookRuns.id, runId)).for("update");
     if (!run || run.status !== "WAITING_APPROVAL") return null;
-    await tx.update(playbookRunSteps).set({ status: decision === "APPROVED" ? "SUCCEEDED" : "REJECTED", finishedAt: new Date() }).where(and(eq(playbookRunSteps.runId, runId), eq(playbookRunSteps.approvalId, approvalId)));
+    const [gate] = await tx
+      .select({ id: playbookRunSteps.id })
+      .from(playbookRunSteps)
+      .where(and(eq(playbookRunSteps.runId, runId), eq(playbookRunSteps.approvalId, approvalId), eq(playbookRunSteps.status, "WAITING_APPROVAL")))
+      .limit(1);
+    if (!gate) return null;
+    await tx.update(playbookRunSteps).set({ status: decision === "APPROVED" ? "SUCCEEDED" : "REJECTED", finishedAt: new Date() }).where(eq(playbookRunSteps.id, gate.id));
     if (decision === "REJECTED") {
       await tx.update(playbookRuns).set({ status: "CANCELLED", error: reason, finishedAt: new Date() }).where(eq(playbookRuns.id, runId));
       return null;

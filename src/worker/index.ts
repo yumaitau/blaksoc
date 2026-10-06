@@ -14,9 +14,8 @@ import { runDueHealth } from "@/lib/services/health";
 import { syncKelpie } from "@/lib/services/kelpie";
 import { runDueSurface } from "@/lib/services/surface";
 import { assertHostingEnv } from "@/lib/hosting/profile";
-import { deliverToIntegration, fanOutEvent } from "@/lib/connectors/subscriptions";
+import { deliverToIntegration, eventJobPayload, fanOutEvent } from "@/lib/connectors/subscriptions";
 import type { Notification } from "@/lib/connectors/notify";
-import type { SocEvent } from "@/lib/events";
 
 const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOString()}] [${scope}] ${m}`);
 
@@ -70,7 +69,7 @@ const handlers: Record<QueueName, Handler> = {
   },
   [QUEUES.notify]: async (job) => {
     if (job.name === "event") {
-      const { event, eventId } = job.data as { event: SocEvent; eventId: string };
+      const { event, eventId } = eventJobPayload(job.data as Record<string, unknown>, String(job.id));
       return fanOutEvent(event, eventId);
     }
     if (job.name === "deliver") {

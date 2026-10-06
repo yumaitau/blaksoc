@@ -55,6 +55,15 @@ describe("tenant role grant ceiling", () => {
     expect(tenantRoleGrantDenial(platform, role("partner_admin"), partner)).toBeNull();
   });
 
+  it("keeps the ceiling when revoking, but honours delegation", () => {
+    const junior = ctx([{ roleKey: "custom_users", tenantId: "c", permissions: new Set<Permission>(["user:manage", "portal:read"]) }]);
+    expect(tenantRoleGrantDenial(junior, role("customer_admin"), customer, { revoking: true })).toMatch(/cannot revoke/);
+    expect(tenantRoleGrantDenial(junior, role("data_steward"), customer, { revoking: true })).toMatch(/cannot revoke/);
+    expect(tenantRoleGrantDenial(ctx([grant("partner_admin", "p")]), role("partner_analyst"), partner, { revoking: true })).toBeNull();
+    // A partner role left on a customer tenant can be removed by someone who outranks it.
+    expect(tenantRoleGrantDenial(ctx([grant("platform_admin", null)]), role("partner_admin"), customer, { revoking: true })).toBeNull();
+  });
+
   it("refuses callers without user:manage on the tenant", () => {
     expect(tenantRoleGrantDenial(ctx([grant("soc_manager", null)]), role("customer_readonly"), customer)).toBe("missing user:manage");
   });
