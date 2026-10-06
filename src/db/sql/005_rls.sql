@@ -144,7 +144,9 @@ DECLARE
     'ir_plans',
     'ir_exercises',
     'awareness_campaigns',
-    'awareness_clicks'
+    'awareness_clicks',
+    'data_governance',
+    'governance_changes'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];

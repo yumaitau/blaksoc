@@ -1,6 +1,9 @@
+import { gunzipSync } from "node:zlib";
 import { and, eq, sql } from "drizzle-orm";
 import { adminDb } from "@/db/client";
-import { advisories, assets, cveIntel, intelFeeds, intelMatches, tenants, vulnerabilities } from "@/db/schema";
+import { advisories, assets, cveIntel, dataGovernance, intelFeeds, intelMatches, tenants, vulnerabilities } from "@/db/schema";
+import { checkGovernedSighting } from "@/lib/governance/policy";
+import { governanceProfile } from "@/lib/services/governance";
 import { extractAdvisoryTechniques } from "@/lib/detections/advisory-coverage";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
@@ -10,6 +13,29 @@ import { scoreVulnerability } from "@/lib/risk/engine";
 
 const KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
 const EPSS_URL = "https://api.first.org/data/v1/epss";
+/** Whole-dataset download. Fetching it discloses nothing about which CVEs a tenant has. */
+const EPSS_BULK_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz";
+
+/** Rows of the EPSS bulk CSV for the wanted CVEs. Comment lines start with #. */
+export function parseEpssCsv(csv: string, wanted: ReadonlySet<string>): Map<string, { epss: number; percentile: number }> {
+  const out = new Map<string, { epss: number; percentile: number }>();
+  for (const line of csv.split("\n")) {
+    if (!line.startsWith("CVE-")) continue;
+    const [cve, score, percentile] = line.trim().split(",");
+    if (cve && wanted.has(cve)) out.set(cve, { epss: Number(score), percentile: Number(percentile) });
+  }
+  return out;
+}
+
+/** CVEs present only in tenants whose governance profile locks data to Australia. No profile row means locked. */
+async function lockedOnlyCves(db: ReturnType<typeof adminDb>, cves: string[]): Promise<Set<string>> {
+  const rows = await db
+    .select({ cve: vulnerabilities.cve, locked: sql<boolean>`coalesce((${dataGovernance.profile}->>'residencyLock')::boolean, true)` })
+    .from(vulnerabilities)
+    .leftJoin(dataGovernance, eq(dataGovernance.tenantId, vulnerabilities.tenantId));
+  const open = new Set(rows.filter((r) => !r.locked).map((r) => r.cve));
+  return new Set(cves.filter((c) => !open.has(c)));
+}
 
 /** Refresh CISA KEV + FIRST EPSS + OpenCTI context for every CVE present in any tenant. */
 export async function refreshCveIntel(log: (m: string) => void) {
@@ -27,14 +53,26 @@ export async function refreshCveIntel(log: (m: string) => void) {
     log(`KEV fetch failed: ${(e as Error).message}`);
   }
 
+  // CVEs held only by residency-locked tenants are never sent abroad. They are read from the public bulk file instead.
+  const locked = await lockedOnlyCves(db, cves);
   const epss = new Map<string, { epss: number; percentile: number }>();
-  for (let i = 0; i < cves.length; i += 100) {
+  const queryable = cves.filter((c) => !locked.has(c));
+  for (let i = 0; i < queryable.length; i += 100) {
     try {
-      const batch = cves.slice(i, i + 100);
+      const batch = queryable.slice(i, i + 100);
       const data = (await (await fetch(`${EPSS_URL}?cve=${batch.join(",")}`, { signal: AbortSignal.timeout(30_000) })).json()) as { data: { cve: string; epss: string; percentile: string }[] };
       for (const d of data.data) epss.set(d.cve, { epss: Number(d.epss), percentile: Number(d.percentile) });
     } catch (e) {
       log(`EPSS fetch failed: ${(e as Error).message}`);
+    }
+  }
+  if (locked.size) {
+    try {
+      const res = await fetch(EPSS_BULK_URL, { signal: AbortSignal.timeout(120_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      for (const [cve, score] of parseEpssCsv(gunzipSync(Buffer.from(await res.arrayBuffer())).toString("utf8"), locked)) epss.set(cve, score);
+    } catch (e) {
+      log(`EPSS bulk fetch failed: ${(e as Error).message}`);
     }
   }
 
@@ -195,14 +233,17 @@ export async function createSighting(tenantId: string, matchId: string) {
     const [m] = await tx.select().from(intelMatches).where(eq(intelMatches.id, matchId));
     const [t] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
     if (!m || !t) return;
-    const policy = t.settings.sharing;
-    if (!policy.createSightings || policy.attribution === "none" || !intel) {
+    const decision = checkGovernedSighting(await governanceProfile(tx, tenantId), t.settings.sharing);
+    if (!decision.allowed || !intel) {
       await tx.update(intelMatches).set({ sightingStatus: "blocked_by_policy" }).where(eq(intelMatches.id, matchId));
+      await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "intel.sighting_refused", targetType: "intel_match", targetId: matchId, detail: { reason: decision.allowed ? "no intel connector in an allowed region" : decision.reason } });
       return;
     }
+    // The narrower of the tenant setting and steward consent applies.
+    const { attribution, maxTlp } = decision;
     const sector = t.sectors.find((s) => s !== "AUSTRALIA") ?? "SMB";
-    const identityName = policy.attribution === "named" ? t.name : `blakSOC AU ${sector.replaceAll("_", " ").toLowerCase()} sector`;
-    const identityId = await intel.provider.ensureIdentity(identityName, policy.attribution === "anonymised" ? sector : undefined);
+    const identityName = attribution === "named" ? t.name : `blakSOC AU ${sector.replaceAll("_", " ").toLowerCase()} sector`;
+    const identityId = await intel.provider.ensureIdentity(identityName, attribution === "anonymised" ? sector : undefined);
     const s = await intel.provider.createSighting({
       openctiId: m.openctiId,
       firstSeen: m.matchedAt,
@@ -210,9 +251,9 @@ export async function createSighting(tenantId: string, matchId: string) {
       count: 1,
       whereSightedIdentityId: identityId,
       markingDefinitionIds: [],
-      description: `Observed by blakSOC (${policy.maxTlp}).${policy.attribution === "anonymised" ? " Customer identity withheld per sharing policy." : ""}`,
+      description: `Observed by blakSOC (${maxTlp}).${attribution === "anonymised" ? " Customer identity withheld per sharing policy." : ""}`,
     });
     await tx.update(intelMatches).set({ sightingStatus: "shared", sightingId: s.id }).where(eq(intelMatches.id, matchId));
-    await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "intel.sighting_created", targetType: "intel_match", targetId: matchId, detail: { attribution: policy.attribution, identityName } });
+    await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "intel.sighting_created", targetType: "intel_match", targetId: matchId, detail: { attribution, maxTlp, identityName } });
   });
 }

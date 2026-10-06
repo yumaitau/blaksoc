@@ -27,6 +27,7 @@ import { cobrandLine } from "@/lib/tenancy/brand";
 import { actor, AccessDenied } from "./common";
 import { createSite, createTenant } from "./admin";
 import { setTenantPlan } from "./billing";
+import { initialiseGovernance } from "./governance";
 import { grantPartnerCustomer, partnerHome } from "./partner";
 import { savePlaybook } from "./playbooks";
 
@@ -161,7 +162,7 @@ function parseConnect(raw: Record<string, unknown>): ConnectDraft {
 
 function parseGovernance(raw: Record<string, unknown>): GovernanceDraft {
   if (text(raw, "choice", 40) !== "most_protective") throw new OnboardingError("missing");
-  return { choice: "most_protective", enforced: false };
+  return { choice: "most_protective" };
 }
 
 function parsePlan(raw: Record<string, unknown>): PlanDraft {
@@ -453,7 +454,8 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
     const who = actor(ctx);
     await rememberDomains(tx, who, tenant.id, row.connect!.domains, "onboarding");
     await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.roles", targetType: "tenant", targetId: tenant.id, detail: { keys: [...ROLE_KEYS] } });
-    await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.governance", targetType: "tenant", targetId: tenant.id, detail: { choice: "most_protective", enforced: false } });
+    await initialiseGovernance(tx, tenant.id, who);
+    await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.governance", targetType: "tenant", targetId: tenant.id, detail: { choice: "most_protective", enforced: true } });
     await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.summary", targetType: "report", targetId: report!.id, detail: { reportId: report!.id, providerRef: receipt.providerRef } });
     await audit(tx, { ...who, tenantId: tenant.id, action: "onboarding.finish", targetType: "tenant", targetId: tenant.id, detail: { draftId: row.id } });
     await tx.update(onboardingDrafts).set({ status: "complete", step: "plan", tenantId: tenant.id, updatedAt: new Date() }).where(eq(onboardingDrafts.id, row.id));

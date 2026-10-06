@@ -109,6 +109,13 @@ export const BUILTIN_ROLES: readonly BuiltinRole[] = [
     permissions: ["portal:read", "incident:read", "vuln:read", "report:read"],
   },
   {
+    key: "data_steward",
+    name: "Data Steward",
+    scope: "tenant",
+    description: "Approves changes to the organisation's data rules. Matched by role key; platform staff cannot hold it.",
+    permissions: ["portal:read", "report:read"],
+  },
+  {
     key: "partner_admin",
     name: "Partner Administrator",
     scope: "tenant",

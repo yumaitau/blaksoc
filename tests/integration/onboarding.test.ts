@@ -5,7 +5,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
-import { alerts, auditLog, integrations, monitoredDomains, notificationDeliveries, onboardingDrafts, playbooks, reports, sites, tenantPlans, tenants } from "@/db/schema";
+import { alerts, auditLog, dataGovernance, integrations, monitoredDomains, notificationDeliveries, onboardingDrafts, playbooks, reports, sites, tenantPlans, tenants } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { AccessDenied, type AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
@@ -87,7 +87,7 @@ describe("onboarding wizard", () => {
     const [report] = await adminDb().select().from(reports).where(eq(reports.id, done.reportId));
     expect(report?.kind).toBe("welcome");
     expect(report?.content.sections.some((s) => s.body?.includes("sample Microsoft 365"))).toBe(true);
-    expect(report?.content.sections.some((s) => s.body?.includes("not on yet"))).toBe(true);
+    expect(report?.content.sections.some((s) => s.body?.includes("strongest data rules are on"))).toBe(true);
     const pdf = await toPdf(report!.title, report!.content);
     expect(Buffer.from(pdf.subarray(0, 4)).toString("latin1")).toBe("%PDF");
 
@@ -104,6 +104,9 @@ describe("onboarding wizard", () => {
     const [tenant] = await adminDb().select().from(tenants).where(eq(tenants.id, done.tenantId));
     expect(tenant?.sectors).toContain("INDIGENOUS_BUSINESS");
     expect(tenant?.settings.ai.enabled).toBe(true);
+    // The setting alone is not enough: the governance profile written at finish keeps AI off and data in Australia.
+    const [gov] = await adminDb().select().from(dataGovernance).where(eq(dataGovernance.tenantId, done.tenantId));
+    expect(gov?.profile).toEqual({ residencyLock: true, sightings: null, ai: { assistant: false, triage_summary: false } });
 
     const [entra] = await adminDb().select().from(integrations).where(and(eq(integrations.tenantId, done.tenantId), eq(integrations.provider, "entra")));
     expect(entra?.config).toMatchObject({ mode: "fixture" });
@@ -118,7 +121,7 @@ describe("onboarding wizard", () => {
     expect(audits.find((a) => a.action === "tenant.create" && a.targetId === done.tenantId)).toMatchObject({ tenantId: null, targetId: done.tenantId });
     expect(audits.find((a) => a.action === "onboarding.abn_lookup")?.detail).toMatchObject({ found: true });
     expect(audits.find((a) => a.action === "onboarding.roles")?.detail).toMatchObject({ keys: ["customer_admin", "customer_security", "customer_readonly"] });
-    expect(audits.find((a) => a.action === "onboarding.governance")?.detail).toMatchObject({ choice: "most_protective", enforced: false });
+    expect(audits.find((a) => a.action === "onboarding.governance")?.detail).toMatchObject({ choice: "most_protective", enforced: true });
     expect(audits.find((a) => a.action === "onboarding.summary")?.detail).toMatchObject({ reportId: done.reportId, providerRef: "fixture-email" });
 
     const saved = await getDraft(ctx, draft.id);
