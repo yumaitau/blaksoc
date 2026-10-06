@@ -1,0 +1,76 @@
+# Yuma IT production: yumait-prod EKS (Auto Mode, ap-southeast-2).
+#
+#   helm upgrade --install blaksoc deploy/helm/blaksoc -n blaksoc --create-namespace \
+#     -f deploy/helm/blaksoc/values.yaml -f deploy/helm/blaksoc/values-yumait-prod.yaml \
+#     --set image.tag=<main commit, 12 chars>
+#
+# AWS resources (tag App=blaksoc): RDS blaksoc-eks-postgres, ElastiCache blaksoc-eks-cache,
+# ECR blaksoc-web and blaksoc-worker, Secrets Manager blaksoc-eks-runtime, ACM soc.yumait.au.
+# Wazuh and OpenCTI run on EC2 (blaksoc-wazuh, blaksoc-opencti), not in this chart.
+
+image:
+  repository: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blaksoc
+  pullPolicy: IfNotPresent
+
+appUrl: https://soc.yumait.au
+
+existingSecret: blaksoc-runtime
+externalSecret:
+  enabled: true
+  remoteKey: blaksoc-eks-runtime
+
+config:
+  AI_DATA_RESIDENCY: AU
+  OPENSEARCH_REGION: ap-southeast-2
+  WAZUH_INDEXER_REGION: ap-southeast-2
+  OPENCTI_REGION: ap-southeast-2
+  BREAK_GLASS_REQUIRE_MFA: "true"
+  BLAKSOC_ARCHIVE_DIR: /tmp/blaksoc-archive
+  DEMO_MODE: "false"
+
+web:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 384Mi }
+    limits: { memory: 1Gi }
+  autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPU: 70 }
+
+worker:
+  # One worker: BullMQ repeatable jobs are safe with more, but the poll loops are sized for one.
+  replicas: 1
+  resources:
+    requests: { cpu: 100m, memory: 384Mi }
+    limits: { memory: 1Gi }
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:ap-southeast-2:959038055523:certificate/6a7f33fa-63e6-4035-b1c8-6083aaace01a
+    alb.ingress.kubernetes.io/healthcheck-path: /api/health
+    # Live updates use SSE.
+    alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=3600
+  hosts: [soc.yumait.au]
+  tls: []
+
+# Not enforced on this cluster: Auto Mode node classes are DefaultAllow and the
+# network policy controller is off, so these objects would do nothing. The chart's
+# rules also assume ingress-nginx and cluster-only worker egress, while the worker
+# needs Microsoft Graph, Kelpie, CISA KEV and FIRST EPSS. Revisit with an egress
+# proxy or allow-list before turning enforcement on.
+networkPolicy:
+  enabled: false
+
+# Images are amd64. The image user is a name, so pin its numeric id for runAsNonRoot.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 100
+  runAsGroup: 101
+  seccompProfile: { type: RuntimeDefault }
+
+nodeSelector:
+  kubernetes.io/arch: amd64
