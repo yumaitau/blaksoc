@@ -11,6 +11,13 @@ appUrl: https://soc.example.com.au
 # BETTER_AUTH_SECRET, BLAKSOC_ENCRYPTION_KEY. Optional: ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET.
 existingSecret: blaksoc
 
+# Optional: build existingSecret from AWS Secrets Manager (or another store) via External Secrets.
+externalSecret:
+  enabled: false
+  refreshInterval: 1h
+  secretStore: { name: aws-secretsmanager, kind: ClusterSecretStore }
+  remoteKey: ""
+
 config:
   AI_DATA_RESIDENCY: AU
   OPENSEARCH_REGION: ap-southeast-2
