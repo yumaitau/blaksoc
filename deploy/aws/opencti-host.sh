@@ -24,8 +24,12 @@ token=$(curl -s -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-met
 ip=$(curl -s -H "X-aws-ec2-metadata-token: $token" http://169.254.169.254/latest/meta-data/local-ipv4)
 
 umask 077
+# Single-quoted so Compose reads values literally (no $VAR expansion).
 aws secretsmanager get-secret-value --region "$REGION" --secret-id "$SECRET" --query SecretString --output text \
-  | jq -r 'to_entries[] | "\(.key)=\(.value)"' > .env
+  | jq -r 'to_entries[] | (.value | tostring) as $v
+      | if (.key | test("^[A-Za-z_][A-Za-z0-9_]*$") | not) then error("bad secret key \(.key)")
+        elif ($v | test("[\u0027\n\r]")) then error("secret \(.key) contains a single quote or newline")
+        else "\(.key)=\u0027\($v)\u0027" end' > .env
 cat >> .env <<EOF
 OPENCTI_BASE_URL=http://$ip:8080
 OPENSEARCH_REGION=ap-southeast-2

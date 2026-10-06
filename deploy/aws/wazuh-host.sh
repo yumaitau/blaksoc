@@ -34,7 +34,14 @@ fi
 # Replace the published default passwords before the first start, so the indexer
 # security index is initialised with ours.
 if [ ! -f .blaksoc-passwords-set ]; then
-  hash() { docker run --rm "wazuh/wazuh-indexer:$VERSION" bash -c "/usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh -p '$1'" 2>/dev/null | tail -1; }
+  # The password goes in through the environment, never into the command string.
+  hash() {
+    local h
+    h=$(PW="$1" docker run --rm -e PW "wazuh/wazuh-indexer:$VERSION" \
+      bash -c '/usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh -p "$PW"' 2>/dev/null | tail -1)
+    [[ $h == '$2'* ]] || { echo "hash.sh did not return a bcrypt hash" >&2; return 1; }
+    printf '%s' "$h"
+  }
   ADMIN_HASH=$(hash "$INDEXER_PASSWORD")
   KIBANA_HASH=$(hash "$DASHBOARD_PASSWORD")
   ADMIN_HASH="$ADMIN_HASH" KIBANA_HASH="$KIBANA_HASH" INDEXER_PASSWORD="$INDEXER_PASSWORD" API_PASSWORD="$API_PASSWORD" DASHBOARD_PASSWORD="$DASHBOARD_PASSWORD" python3 - <<'PY'
@@ -44,15 +51,23 @@ text = users.read_text()
 for user, key in (("admin", "ADMIN_HASH"), ("kibanaserver", "KIBANA_HASH")):
     text, n = re.subn(rf'(^{user}:\n\s+hash: )"[^"]*"', lambda m: f'{m.group(1)}"{os.environ[key]}"', text, flags=re.M)
     assert n == 1, user
+def yaml_sq(v):
+    return "'" + v.replace("'", "''") + "'"
+
+# docker-compose.yml: quote each entry and escape $ so Compose passes the password through unchanged.
+compose = pathlib.Path("docker-compose.yml")
+t = compose.read_text()
+for key, default in (("INDEXER_PASSWORD", "SecretPassword"), ("DASHBOARD_PASSWORD", "kibanaserver"), ("API_PASSWORD", "MyS3cr37P450r.*-")):
+    value = os.environ[key].replace("$", "$$")
+    t, n = re.subn(rf"^(\s*- ){key}={re.escape(default)}$", lambda m: m.group(1) + yaml_sq(f"{key}={value}"), t, flags=re.M)
+    assert n >= 1, key
+dashboard = pathlib.Path("config/wazuh_dashboard/wazuh.yml")
+d, n = re.subn(r'^(\s*password: )"MyS3cr37P450r\.\*-"$', lambda m: m.group(1) + yaml_sq(os.environ["API_PASSWORD"]), dashboard.read_text(), flags=re.M)
+assert n == 1, "wazuh.yml password"
+# Write only after every default was found, so a failed run leaves the files untouched.
 users.write_text(text)
-swaps = {"SecretPassword": os.environ["INDEXER_PASSWORD"], "kibanaserver": os.environ["DASHBOARD_PASSWORD"], "MyS3cr37P450r.*-": os.environ["API_PASSWORD"]}
-for path in ("docker-compose.yml", "config/wazuh_dashboard/wazuh.yml"):
-    p = pathlib.Path(path)
-    t = p.read_text()
-    t = t.replace("INDEXER_PASSWORD=SecretPassword", "INDEXER_PASSWORD=" + swaps["SecretPassword"])
-    t = t.replace("DASHBOARD_PASSWORD=kibanaserver", "DASHBOARD_PASSWORD=" + swaps["kibanaserver"])
-    t = t.replace("MyS3cr37P450r.*-", swaps["MyS3cr37P450r.*-"])
-    p.write_text(t)
+compose.write_text(t)
+dashboard.write_text(d)
 PY
   touch .blaksoc-passwords-set
 fi
