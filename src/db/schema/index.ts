@@ -21,3 +21,4 @@ export * from "./training";
 export * from "./ir";
 export * from "./awareness";
 export * from "./governance";
+export * from "./kelpie";

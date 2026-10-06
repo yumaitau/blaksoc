@@ -11,6 +11,7 @@ import { runDueBoardSummaries } from "@/lib/services/board";
 import { releaseDueCollections } from "@/lib/services/dfir";
 import { archiveDueSyslog } from "@/lib/services/syslog";
 import { runDueHealth } from "@/lib/services/health";
+import { syncKelpie } from "@/lib/services/kelpie";
 import { runDueSurface } from "@/lib/services/surface";
 import { assertHostingEnv } from "@/lib/hosting/profile";
 
@@ -31,6 +32,7 @@ const handlers: Record<QueueName, Handler> = {
       return runDueHealth();
     }
     if (job.name === "dfir-release") return releaseDueCollections();
+    if (job.name === "kelpie") return syncKelpie();
   },
   [QUEUES.playbook]: async (job) => {
     const { tenantId, runId } = job.data as { tenantId: string; runId: string };
@@ -79,6 +81,7 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
   { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },
   { queue: QUEUES.sync, name: "dfir-release", every: 15 * 60_000 },
+  { queue: QUEUES.sync, name: "kelpie", every: 60_000 },
   { queue: QUEUES.detection, name: "run", every: 5 * 60_000 },
   { queue: QUEUES.intel, name: "cve", every: 6 * 60 * 60_000 },
   { queue: QUEUES.intel, name: "advisories", every: 60 * 60_000 },

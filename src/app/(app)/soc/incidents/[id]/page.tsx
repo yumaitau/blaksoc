@@ -44,6 +44,9 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
   const inc = data.incident;
   const tenantId = inc.tenantId;
   const editable = can(ctx, "incident:write", tenantId);
+  // When Kelpie owns this tenant's cases, status, fields, tasks and internal notes change there.
+  const kelpie = data.kelpie;
+  const caseEditable = editable && !kelpie.managed;
   const owners = editable ? await listIncidentOwners(ctx, tenantId) : [];
   const collectionRows = await listCollections(ctx, inc.id);
   const targets = editable ? await listCollectionTargets(ctx, tenantId) : [];
@@ -81,6 +84,11 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
           <AttackChips techniques={inc.attackTechniques} max={8} />
         </div>
         <div className="flex flex-wrap gap-2">
+          {kelpie.link?.caseUrl ? (
+            <Button asChild size="sm"><a href={kelpie.link.caseUrl} target="_blank" rel="noreferrer">Open in Kelpie {kelpie.link.caseNumber}</a></Button>
+          ) : kelpie.managed ? (
+            <Badge variant={kelpie.link?.lastError ? "danger" : "default"}>{kelpie.link?.lastError ? `Kelpie push failed: ${kelpie.link.lastError}` : "Sending to Kelpie"}</Badge>
+          ) : null}
           {can(ctx, "ai:use", tenantId) ? (
             <Button asChild size="sm" variant="secondary"><Link href={`/assistant?incident=${inc.id}`}><Sparkles /> Ask AI</Link></Button>
           ) : null}
@@ -95,6 +103,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
           <Card>
             <CardHeader><CardTitle>Case</CardTitle></CardHeader>
             <CardContent>
+              {kelpie.managed ? <p className="mb-3 text-sm text-muted">This case is managed in Kelpie. Status, severity and title come back from Kelpie every minute. Tasks and internal notes live there too.</p> : null}
               <CaseForm
                 incidentId={inc.id}
                 initial={{
@@ -105,7 +114,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
                 severities={SEVERITIES}
                 owners={owners}
                 canClose={can(ctx, "incident:close", tenantId)}
-                editable={editable}
+                editable={caseEditable}
               />
             </CardContent>
           </Card>
@@ -119,7 +128,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
                     <span key={o.label} className="inline-flex items-center gap-1"><span className={cn("inline-flex size-4 items-center justify-center rounded-full border", o.dot)}><o.icon className="size-2.5" /></span>{o.label}</span>
                   ))}
                 </span>
-                {editable ? <TimelineEventForm incidentId={inc.id} /> : null}
+                {caseEditable ? <TimelineEventForm incidentId={inc.id} /> : null}
               </div>
             </CardHeader>
             <CardContent>
@@ -285,7 +294,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
 
           <Card>
             <CardHeader><CardTitle>Tasks</CardTitle><span className="num text-xs text-muted">{data.tasks.filter((t) => t.done).length}/{data.tasks.length}</span></CardHeader>
-            <CardContent><TaskList incidentId={inc.id} tasks={data.tasks} editable={editable} /></CardContent>
+            <CardContent><TaskList incidentId={inc.id} tasks={data.tasks} editable={caseEditable} /></CardContent>
           </Card>
 
           {LINK_KINDS.map(([kind, title]) => {
