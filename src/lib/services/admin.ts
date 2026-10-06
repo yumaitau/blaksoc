@@ -97,17 +97,12 @@ export async function assignRole(ctx: AccessContext, input: { userId: string; ro
   if (role.key === STEWARD_ROLE && input.tenantId) await stewardRosterChanged(input.tenantId, input.userId, "added");
 }
 
-/**
- * Granting a tenant role needs user:manage there and passes the grant ceiling. Revoking needs only
- * user:manage on that tenant: taking access away never widens anyone's access, and an admin must be
- * able to remove a role they could not have granted (a partner admin removing a partner analyst).
- */
+/** Granting or revoking a tenant role: user:manage on the tenant and the grant ceiling (see tenantRoleGrantDenial). */
 async function assertTenantRoleGrant(ctx: AccessContext, role: { key: string; permissions: readonly string[] }, tenantId: string, opts: { revoking?: boolean } = {}) {
   assertCan(ctx, "user:manage", tenantId);
   const [tenant] = await withScope(dbScope(ctx, [tenantId]), (tx) => tx.select({ id: tenants.id, kind: tenants.kind }).from(tenants).where(eq(tenants.id, tenantId)));
   if (!tenant) throw new AccessDenied("tenant not in scope");
-  if (opts.revoking) return;
-  const denial = tenantRoleGrantDenial(ctx, role, tenant);
+  const denial = tenantRoleGrantDenial(ctx, role, tenant, opts);
   if (denial) throw new AccessDenied(denial);
 }
 

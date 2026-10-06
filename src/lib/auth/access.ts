@@ -167,21 +167,24 @@ const DELEGATED_GRANTS: Readonly<Record<string, readonly string[]>> = { partner_
 /**
  * Why `ctx` may not grant or revoke a tenant-scope role on `tenant`, or null when it may.
  * Platform staff holding platform `user:manage` administer every role. Anyone else may only
- * hand out (or take away) permissions they already hold on that tenant, so a customer admin
- * cannot raise themselves or a colleague to partner administrator.
+ * hand out or take away permissions they already hold on that tenant (or a role delegated to
+ * them, such as a partner admin's analysts), so a customer admin cannot raise a colleague to
+ * partner administrator, and a junior user admin cannot strip a more senior admin or a steward.
+ * Revoking skips only the tenant-kind rule: a role held on the wrong kind of tenant can be removed.
  */
 export function tenantRoleGrantDenial(
   ctx: AccessContext,
   role: { key: string; permissions: readonly string[] },
   tenant: { id: string; kind: TenantKind },
+  opts: { revoking?: boolean } = {},
 ): string | null {
-  if (PARTNER_ROLE_KEYS.includes(role.key) && tenant.kind !== "partner") return `${role.key} can only be held on a partner tenant`;
+  if (!opts.revoking && PARTNER_ROLE_KEYS.includes(role.key) && tenant.kind !== "partner") return `${role.key} can only be held on a partner tenant`;
   if (ctx.grants.some((g) => g.tenantId === null && g.permissions.has("user:manage"))) return null;
   const held = permissionsFor(ctx, tenant.id);
   if (!held.has("user:manage")) return "missing user:manage";
   if (ctx.grants.some((g) => g.tenantId === tenant.id && g.permissions.has("user:manage") && DELEGATED_GRANTS[g.roleKey]?.includes(role.key))) return null;
   const extra = role.permissions.filter((p) => !held.has(p as Permission));
-  return extra.length ? `cannot grant permissions you do not hold: ${extra.join(", ")}` : null;
+  return extra.length ? `cannot ${opts.revoking ? "revoke" : "grant"} permissions you do not hold: ${extra.join(", ")}` : null;
 }
 
 /** DB scope for a request: only the tenants that carry the needed permission. */

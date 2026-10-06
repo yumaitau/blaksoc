@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { eventNotification, subscribesTo } from "@/lib/connectors/subscriptions";
+import { eventJobPayload, eventNotification, subscribesTo } from "@/lib/connectors/subscriptions";
 
 describe("integration event subscriptions", () => {
   it("honours the events list on webhook, Teams and Slack configs", () => {
@@ -15,5 +15,12 @@ describe("integration event subscriptions", () => {
     const a = eventNotification({ type: "approval.requested", tenantId: "t1", id: "a1", summary: "Isolate endpoint FS01" }, "Wattle Health", "https://soc.example.com.au");
     expect(a.url).toBe("https://soc.example.com.au/soc/approvals");
     expect(a.title).toContain("Isolate endpoint FS01");
+  });
+
+  it("reads event jobs queued by every release shape", () => {
+    const event = { type: "incident.created" as const, tenantId: "t1", id: "i1", title: "x", severity: "high" };
+    expect(eventJobPayload({ ...event }, "job-1")).toEqual({ event, eventId: "job-1" });
+    expect(eventJobPayload({ event, eventId: "e-1" }, "job-2")).toEqual({ event, eventId: "e-1" });
+    expect(eventJobPayload({ ...event, eventId: "e-2" }, "job-3")).toEqual({ event, eventId: "e-2" });
   });
 });

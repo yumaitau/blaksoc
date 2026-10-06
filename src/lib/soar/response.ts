@@ -9,7 +9,7 @@ import { eventProvider } from "@/lib/connectors/instances";
 import type { ResponseActionState } from "@/lib/providers/types";
 import { systemDb } from "@/db/client";
 import { publish } from "@/lib/events";
-import { queue, QUEUES } from "@/lib/queue";
+import { queue, QUEUES, type QueueName } from "@/lib/queue";
 import { expireDfirApproval, settleDfirApproval } from "@/lib/services/dfir";
 import { addTimeline } from "@/lib/services/incidents";
 import { AccessDenied } from "@/lib/services/common";
@@ -101,7 +101,7 @@ export async function requestFromUser(ctx: AccessContext, input: Omit<RequestInp
   if (!can(ctx, "response:request", input.tenantId)) throw new AccessDenied("missing response:request");
   const res = await withScope({ tenantIds: [input.tenantId], platform: false }, (tx) => requestResponseAction(tx, { ...input, requestedBy: ctx.principal.userId, requestedByKind: via }));
   if (res.approvalId) await publish({ type: "approval.requested", tenantId: input.tenantId, id: res.approvalId, summary: RESPONSE_ACTIONS[input.action].label });
-  else await queue(QUEUES.response).add("execute", { tenantId: input.tenantId, actionId: res.action.id });
+  else await queueExecute(input.tenantId, res.action.id);
   return res;
 }
 
@@ -157,7 +157,7 @@ export async function decideApproval(ctx: AccessContext, approvalId: string, dec
     throw new Error("approval expired");
   }
   if (res.ap.kind === "response_action" && decision === "APPROVED") {
-    await queue(QUEUES.response).add("execute", { tenantId: res.ap.tenantId, actionId: res.ap.refId });
+    await queueExecute(res.ap.tenantId, res.ap.refId);
   }
   // Playbook runs waiting on this gate resume (or stop) in the worker.
   const runId = res.act?.playbookRunId ?? (res.ap.kind === "playbook_step" ? res.ap.refId : null);
@@ -188,17 +188,43 @@ async function expireApproval(tx: Tx, ap: typeof approvals.$inferSelect, now: Da
   return { tenantId: ap.tenantId, approvalId: ap.id, refId: ap.refId, runId };
 }
 
+/** How many times recovery retries a job that has failed all its BullMQ attempts before giving up. */
+export const MAX_RECOVERIES = 3;
+
 /**
- * Queue the worker to resume (or stop) a run after its gate was decided. One job id per run and
- * gate, so a repeat call does not resume twice; a failed job is retried rather than duplicated.
+ * Add a job at most once per id. A waiting, active or completed job means the work is queued or
+ * done. A failed job is retried up to MAX_RECOVERIES times; after that `onGiveUp` settles the work
+ * so recovery stops selecting it.
  */
-async function queueResume(tenantId: string, runId: string, approvalId: string, decision: "APPROVED" | "REJECTED", reason?: string) {
-  const q = queue(QUEUES.playbook);
-  const jobId = `resume-${runId}-${approvalId}`;
+async function queueOnce(name: QueueName, jobName: string, data: Record<string, unknown>, jobId: string, onGiveUp: () => Promise<void>) {
+  const q = queue(name);
   const existing = await q.getJob(jobId);
-  if (existing && (await existing.isFailed())) return void (await existing.retry());
-  if (existing && (await existing.isCompleted())) await existing.remove();
-  await q.add("resume", { tenantId, runId, approvalId, decision, ...(reason ? { reason } : {}) }, { jobId });
+  if (!existing) return void (await q.add(jobName, data, { jobId }));
+  if (!(await existing.isFailed())) return;
+  const recoveries = Number(existing.data?.recoveries ?? 0);
+  if (recoveries >= MAX_RECOVERIES) return onGiveUp();
+  await existing.updateData({ ...existing.data, recoveries: recoveries + 1 });
+  await existing.retry();
+}
+
+/** Queue execution of an APPROVED response action. Safe to call more than once. */
+export async function queueExecute(tenantId: string, actionId: string) {
+  await queueOnce(QUEUES.response, "execute", { tenantId, actionId }, `execute-${actionId}`, async () => {
+    await withScope(systemScope(tenantId), (tx) =>
+      tx.update(responseActions).set({ status: "FAILED", result: { error: `execution job failed after ${MAX_RECOVERIES} recoveries` } }).where(and(eq(responseActions.id, actionId), eq(responseActions.status, "APPROVED"))),
+    );
+    console.warn(`[response] gave up executing ${actionId} after ${MAX_RECOVERIES} recoveries`);
+  });
+}
+
+/** Queue the worker to resume (or stop) a run after its gate was decided. Safe to call more than once. */
+async function queueResume(tenantId: string, runId: string, approvalId: string, decision: "APPROVED" | "REJECTED", reason?: string) {
+  await queueOnce(QUEUES.playbook, "resume", { tenantId, runId, approvalId, decision, ...(reason ? { reason } : {}) }, `resume-${runId}-${approvalId}`, async () => {
+    await withScope(systemScope(tenantId), (tx) =>
+      tx.update(playbookRuns).set({ status: "FAILED", error: `resume failed after ${MAX_RECOVERIES} recoveries`, finishedAt: new Date() }).where(and(eq(playbookRuns.id, runId), eq(playbookRuns.status, "WAITING_APPROVAL"))),
+    );
+    console.warn(`[playbook] gave up resuming run ${runId} after ${MAX_RECOVERIES} recoveries`);
+  });
 }
 
 /** After the expiry commits: stop the waiting playbook run and tell live views. */
@@ -208,8 +234,9 @@ async function afterExpiry(e: ExpiredApproval) {
 }
 
 /**
- * Runs still WAITING_APPROVAL on a gate that is no longer pending. Normally the decision or expiry
- * queued their resume; this repairs runs whose resume job was never queued (e.g. Redis was down).
+ * Work whose follow-up job may never have been queued (e.g. Redis was down after the commit):
+ * runs still WAITING_APPROVAL on a settled gate, and APPROVED response actions that never started.
+ * Queueing is idempotent per job id, so work already queued or done is not repeated.
  */
 export async function recoverStalledRuns() {
   const stalled = await systemDb()
@@ -222,7 +249,9 @@ export async function recoverStalledRuns() {
   for (const row of stalled) {
     await queueResume(row.tenantId, row.runId, row.approvalId, row.status === "APPROVED" ? "APPROVED" : "REJECTED", row.status === "EXPIRED" ? "approval expired" : undefined);
   }
-  return stalled.length;
+  const approved = await systemDb().select({ tenantId: responseActions.tenantId, id: responseActions.id }).from(responseActions).where(eq(responseActions.status, "APPROVED")).limit(500);
+  for (const row of approved) await queueExecute(row.tenantId, row.id);
+  return stalled.length + approved.length;
 }
 
 /** Worker: expire every approval past its deadline, then repair runs left waiting on a settled gate. */
@@ -267,8 +296,9 @@ export async function executeResponseAction(tenantId: string, actionId: string) 
   const act = await withScope(scope, async (tx) => (await tx.select().from(responseActions).where(eq(responseActions.id, actionId)))[0]);
   if (!act) throw new Error("action not found");
   if (act.status !== "APPROVED") return { skipped: true, status: act.status };
-
-  await withScope(scope, (tx) => tx.update(responseActions).set({ status: "EXECUTING" }).where(eq(responseActions.id, actionId)));
+  // Claim the action: only one job moves it from APPROVED to EXECUTING, so a duplicate never runs it twice.
+  const claimed = await withScope(scope, (tx) => tx.update(responseActions).set({ status: "EXECUTING" }).where(and(eq(responseActions.id, actionId), eq(responseActions.status, "APPROVED"))).returning({ id: responseActions.id }));
+  if (!claimed.length) return { skipped: true, status: "EXECUTING" };
   let ok = false;
   let message = "";
   let integrationId: string | null = null;
