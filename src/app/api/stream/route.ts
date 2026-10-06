@@ -20,19 +20,27 @@ export async function GET(req: Request) {
   let unsubscribe = () => {};
   let ping: ReturnType<typeof setInterval> | undefined;
   let recheck: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+  // One idempotent cleanup for every exit: client abort, consumer cancel, or a failed session recheck.
+  const cleanup = (controller?: ReadableStreamDefaultController) => {
+    if (closed) return;
+    closed = true;
+    clearInterval(ping);
+    clearInterval(recheck);
+    unsubscribe();
+    req.signal.removeEventListener("abort", onAbort);
+    try {
+      controller?.close();
+    } catch {
+      /* already closed */
+    }
+  };
+  let onAbort = () => cleanup();
   const stream = new ReadableStream({
     start(controller) {
-      const stop = () => {
-        clearInterval(ping);
-        clearInterval(recheck);
-        unsubscribe();
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      };
+      onAbort = () => cleanup(controller);
       const send = (s: string) => {
+        if (closed) return;
         try {
           controller.enqueue(encoder.encode(s));
         } catch {
@@ -48,16 +56,15 @@ export async function GET(req: Request) {
         sessionStateFor(req.headers)
           .then((state) => {
             if (state.state === "ok") ctx = state.access;
-            else stop();
+            else cleanup(controller);
           })
-          .catch(() => stop());
+          .catch(() => cleanup(controller));
       }, RECHECK_MS);
-      req.signal.addEventListener("abort", stop);
+      req.signal.addEventListener("abort", onAbort);
+      if (req.signal.aborted) cleanup(controller);
     },
     cancel() {
-      clearInterval(ping);
-      clearInterval(recheck);
-      unsubscribe();
+      cleanup();
     },
   });
   return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" } });

@@ -31,8 +31,13 @@ NOT_PUBLIC.addSubnet("127.0.0.0", 8, "ipv4");
 NOT_PUBLIC.addSubnet("100.64.0.0", 10, "ipv4");
 NOT_PUBLIC.addSubnet("198.18.0.0", 15, "ipv4");
 NOT_PUBLIC.addSubnet("192.0.0.0", 24, "ipv4");
+// Documentation ranges (TEST-NET-1/2/3, RFC 5737; 2001:db8::/32, RFC 3849) are not globally reachable.
+NOT_PUBLIC.addSubnet("192.0.2.0", 24, "ipv4");
+NOT_PUBLIC.addSubnet("198.51.100.0", 24, "ipv4");
+NOT_PUBLIC.addSubnet("203.0.113.0", 24, "ipv4");
 NOT_PUBLIC.addAddress("::1", "ipv6");
 NOT_PUBLIC.addSubnet("fc00::", 7, "ipv6");
+NOT_PUBLIC.addSubnet("2001:db8::", 32, "ipv6");
 
 /**
  * An IPv4-mapped IPv6 address is judged as the IPv4 address it carries, in either the dotted

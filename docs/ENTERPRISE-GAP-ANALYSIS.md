@@ -78,11 +78,18 @@ The detailed matrix below has one row per capability.
 These are bugs or contradictions with documented behaviour, not missing features. They should be
 fixed before feature work, because several weaken controls the new program depends on.
 
-**Update:** all 19 were fixed on branch `docs/enterprise-gap-analysis`, with unit tests and database
-tests in `tests/integration/hardening.test.ts`. The table records what was found; the status column
-records how each claim was confirmed before it was fixed. **Verified**
-means the claim was checked directly against the code while writing this document. **Reported**
-means it came from the evidence sweep and should be confirmed when it is fixed.
+**Update:** all 19 were fixed in PR #111. Test coverage:
+
+- Database tests in `tests/integration/hardening.test.ts`: D1, D4, D6, D7, D8, D17.
+- Unit tests: D1 (`access`), D2 (`proxy`), D5 (`response-approval`), D9 (`egress`), D11
+  (`assistant-redaction`), D14 (`rate-limit`), D15 (`events`, visibility only), D16 (`subscriptions`),
+  D18 (`sigma`), D19 (`dfir`).
+- Not covered by automated tests: D3, D10, D12, D13 (Dockerfile and Helm changes, checked with `helm lint`,
+  `helm template` and a production build).
+
+The table records what was found. In the status column, **Verified** means the claim was checked directly
+against the code while writing this document, and **Reported** means it came from the evidence sweep and was
+confirmed when it was fixed.
 
 | # | Severity | Status | Where | Defect |
 | --- | --- | --- | --- | --- |
@@ -234,7 +241,7 @@ Each phase is shippable on its own and builds on the one before it. The detailed
 
 | Phase | Theme | Contents | Why this order |
 | --- | --- | --- | --- |
-| 0 | Fix defects | D1–D12 first, then the rest. Add an RLS coverage test and an authorisation matrix test. | Several defects weaken controls the later phases rely on (role grants, approval gating, egress). |
+| 0 | Fix defects | Done: D1–D19 fixed in PR #111. Remaining: an RLS coverage test and an authorisation matrix test (#104). | Several defects weakened controls the later phases rely on (role grants, approval gating, egress). |
 | 1 | Programmable foundations | Service identities with scopes and short-lived tokens; a versioned REST API over existing services with OpenAPI; a transactional event outbox replacing lossy pub/sub; webhook subscriptions with signing, retries and dead-letter; structured logs, metrics and tracing. | The API, events and identities are prerequisites for MCP, external agents and integrations. Observability is needed before scale. |
 | 2 | Data fabric and schema | Evolve `SecurityEventProvider` into `SecurityDataProvider` with `capabilities()`, typed and paged search, and query-in-place for Wazuh/OpenSearch and syslog first; an OCSF-aligned canonical event schema with provenance fields and `normalization_version`; an event search UI. | Correlation, backtesting, timelines and agents all need typed event access. |
 | 3 | Entities and investigation | Generic entity and relationship tables in Postgres (observed vs inferred provenance), traversal API, entity pages, entity risk with decay and explanation, and a unified timeline merging case activity with provider events. | Builds on phase 2 events. Postgres with recursive queries is enough to start; revisit a graph store only with measured need. |

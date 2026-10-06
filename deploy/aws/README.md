@@ -42,7 +42,9 @@ separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-
 
 `DATABASE_SYSTEM_URL` and `BLAKSOC_SYSTEM_DB_PASSWORD` were added with the `blaksoc_system` role. Before the
 first upgrade that includes them, generate a password, store it in `blaksoc-eks-bootstrap`, and add both keys
-to `blaksoc-eks-runtime` (the URL is `postgres://blaksoc_system:<password>@<rds-endpoint>:5432/blaksoc`).
+to `blaksoc-eks-runtime`. The URL is `postgres://blaksoc_system:<password>@<rds-endpoint>:5432/blaksoc` with the
+password percent-encoded (`encodeURIComponent`); `BLAKSOC_SYSTEM_DB_PASSWORD` holds it unencoded. The migration
+job checks that the two match and stops if they do not.
 The migration job sets the role's password from `BLAKSOC_SYSTEM_DB_PASSWORD`. Web and worker refuse to start
 in production without `DATABASE_SYSTEM_URL`.
 
@@ -74,6 +76,7 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 
 - Network policies are disabled here because the cluster does not enforce them. The chart now allows public
   HTTPS egress with private and metadata ranges excluded (`networkPolicy.publicHttps`). Before turning
-  enforcement on, add the VPC range to `networkPolicy.egressCidrs` for RDS, ElastiCache, Wazuh and OpenCTI,
-  and replace the ingress-nginx namespace rule with one that admits the ALB.
+  enforcement on, set `networkPolicy.dataStoresInCluster: false`, add the VPC range to
+  `networkPolicy.egressCidrs` for RDS, ElastiCache, Wazuh and OpenCTI, and replace the ingress-nginx namespace
+  rule with one that admits the ALB.
 - One RDS instance, single AZ, and one Redis node, the same as the other apps on this cluster.

@@ -5,6 +5,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { instantiate, secretAad } from "@/lib/connectors/instances";
 import { connectorDef, CONNECTORS } from "@/lib/connectors/registry";
+import { subscriptionsChanged } from "@/lib/connectors/subscriptions";
 import { assertDemoOnly, isTrainingTenant, TrainingIsolationError } from "@/lib/training/isolation";
 import { syncVeeamBackups } from "@/lib/services/backup";
 import { stampSyslogTenant } from "@/lib/services/syslog";
@@ -61,7 +62,13 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
     return row!.id;
   });
   if (def.provider === "veeam" && input.tenantId) await syncVeeamBackups(input.tenantId);
+  await refreshSubscriptions();
   return id;
+}
+
+/** Webhook, Teams and Slack subscriptions may have changed. A failure only delays the refresh to the cache TTL. */
+async function refreshSubscriptions() {
+  await subscriptionsChanged().catch((err: unknown) => console.warn(`[integrations] subscription refresh failed: ${err instanceof Error ? err.message : err}`));
 }
 
 /** Secrets are write-only: omitted keys keep their stored values. */
@@ -86,6 +93,7 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
     return cur.provider === "veeam" ? cur.tenantId : null;
   });
   if (followUp) await syncVeeamBackups(followUp);
+  await refreshSubscriptions();
 }
 
 export async function linkTenant(ctx: AccessContext, integrationId: string, tenantId: string, selector: { agentGroups?: string[] }) {

@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Tx } from "@/db/client";
-import { approvals, assetSources, integrations, responseActions, tenants, user } from "@/db/schema";
+import { approvals, assetSources, integrations, playbookRuns, playbookRunSteps, responseActions, tenants, user } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { can, systemScope, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -129,13 +129,14 @@ export async function listApprovals(ctx: AccessContext, status: "PENDING" | "ALL
 /** Human decision on an approval gate. Approval of a response action queues execution. */
 export async function decideApproval(ctx: AccessContext, approvalId: string, decision: "APPROVED" | "REJECTED", note: string) {
   const res = await withScope({ tenantIds: ctx.tenantIds, platform: false }, async (tx) => {
-    const [ap] = await tx.select().from(approvals).where(eq(approvals.id, approvalId));
+    // Locked so the expiry job and a human decision cannot both settle the same approval.
+    const [ap] = await tx.select().from(approvals).where(eq(approvals.id, approvalId)).for("update");
     if (!ap) throw new AccessDenied("approval not found");
     if (!can(ctx, "response:approve", ap.tenantId)) throw new AccessDenied("missing response:approve");
     if (ap.status !== "PENDING") throw new Error(`approval already ${ap.status}`);
     // Expire inside the transaction and report after it commits; throwing here would roll the expiry back.
     if (ap.expiresAt && ap.expiresAt < new Date()) return { ap, act: null, expired: await expireApproval(tx, ap, new Date()) };
-    await tx.update(approvals).set({ status: decision, decidedBy: ctx.principal.userId, decidedAt: new Date(), decisionNote: note }).where(eq(approvals.id, ap.id));
+    await tx.update(approvals).set({ status: decision, decidedBy: ctx.principal.userId, decidedAt: new Date(), decisionNote: note }).where(and(eq(approvals.id, ap.id), eq(approvals.status, "PENDING")));
     await audit(tx, { actorId: ctx.principal.userId, actorKind: "user", tenantId: ap.tenantId, action: `approval.${decision.toLowerCase()}`, targetType: ap.kind, targetId: ap.refId, detail: { approvalId, note, requestedByKind: ap.requestedByKind } });
 
     if (ap.kind === "response_action") {
@@ -160,7 +161,7 @@ export async function decideApproval(ctx: AccessContext, approvalId: string, dec
   }
   // Playbook runs waiting on this gate resume (or stop) in the worker.
   const runId = res.act?.playbookRunId ?? (res.ap.kind === "playbook_step" ? res.ap.refId : null);
-  if (runId) await queue(QUEUES.playbook).add("resume", { tenantId: res.ap.tenantId, runId, approvalId, decision });
+  if (runId) await queueResume(res.ap.tenantId, runId, approvalId, decision);
   await publish({ type: "response.updated", tenantId: res.ap.tenantId, id: res.ap.refId, status: decision });
   return res.ap;
 }
@@ -187,13 +188,44 @@ async function expireApproval(tx: Tx, ap: typeof approvals.$inferSelect, now: Da
   return { tenantId: ap.tenantId, approvalId: ap.id, refId: ap.refId, runId };
 }
 
+/**
+ * Queue the worker to resume (or stop) a run after its gate was decided. One job id per run and
+ * gate, so a repeat call does not resume twice; a failed job is retried rather than duplicated.
+ */
+async function queueResume(tenantId: string, runId: string, approvalId: string, decision: "APPROVED" | "REJECTED", reason?: string) {
+  const q = queue(QUEUES.playbook);
+  const jobId = `resume-${runId}-${approvalId}`;
+  const existing = await q.getJob(jobId);
+  if (existing && (await existing.isFailed())) return void (await existing.retry());
+  if (existing && (await existing.isCompleted())) await existing.remove();
+  await q.add("resume", { tenantId, runId, approvalId, decision, ...(reason ? { reason } : {}) }, { jobId });
+}
+
 /** After the expiry commits: stop the waiting playbook run and tell live views. */
 async function afterExpiry(e: ExpiredApproval) {
-  if (e.runId) await queue(QUEUES.playbook).add("resume", { tenantId: e.tenantId, runId: e.runId, approvalId: e.approvalId, decision: "REJECTED", reason: "approval expired" });
+  if (e.runId) await queueResume(e.tenantId, e.runId, e.approvalId, "REJECTED", "approval expired");
   await publish({ type: "response.updated", tenantId: e.tenantId, id: e.refId, status: "EXPIRED" });
 }
 
-/** Worker: expire every approval past its deadline. Without this a run waiting on a gate nobody decides stays WAITING_APPROVAL forever. */
+/**
+ * Runs still WAITING_APPROVAL on a gate that is no longer pending. Normally the decision or expiry
+ * queued their resume; this repairs runs whose resume job was never queued (e.g. Redis was down).
+ */
+export async function recoverStalledRuns() {
+  const stalled = await systemDb()
+    .select({ tenantId: playbookRuns.tenantId, runId: playbookRuns.id, approvalId: approvals.id, status: approvals.status })
+    .from(playbookRuns)
+    .innerJoin(playbookRunSteps, and(eq(playbookRunSteps.runId, playbookRuns.id), eq(playbookRunSteps.status, "WAITING_APPROVAL")))
+    .innerJoin(approvals, eq(approvals.id, playbookRunSteps.approvalId))
+    .where(and(eq(playbookRuns.status, "WAITING_APPROVAL"), inArray(approvals.status, ["APPROVED", "REJECTED", "EXPIRED"])))
+    .limit(500);
+  for (const row of stalled) {
+    await queueResume(row.tenantId, row.runId, row.approvalId, row.status === "APPROVED" ? "APPROVED" : "REJECTED", row.status === "EXPIRED" ? "approval expired" : undefined);
+  }
+  return stalled.length;
+}
+
+/** Worker: expire every approval past its deadline, then repair runs left waiting on a settled gate. */
 export async function expireDueApprovals(now: Date) {
   const due = await systemDb().select({ id: approvals.id, tenantId: approvals.tenantId }).from(approvals).where(and(eq(approvals.status, "PENDING"), lt(approvals.expiresAt, now))).limit(500);
   let expired = 0;
@@ -203,10 +235,12 @@ export async function expireDueApprovals(now: Date) {
       return ap ? expireApproval(tx, ap, now) : null;
     });
     if (!res) continue;
-    await afterExpiry(res);
     expired++;
+    // The expiry is committed; a queue failure here is repaired by recoverStalledRuns on the next pass.
+    await afterExpiry(res).catch((err: unknown) => console.warn(`[approvals] follow-up for ${res.approvalId} failed: ${err instanceof Error ? err.message : err}`));
   }
-  return { expired };
+  const recovered = await recoverStalledRuns();
+  return { expired, recovered };
 }
 
 /** Tenant-owned connector first, then a platform connector. Exact action wins. block_ioc may fall back to block_ip. */

@@ -4,6 +4,7 @@ import { integrations, tenants } from "@/db/schema";
 import { env } from "@/lib/env";
 import type { SocEvent } from "@/lib/events";
 import { queue, QUEUES } from "@/lib/queue";
+import { redis } from "@/lib/redis";
 import { notifier } from "./instances";
 import type { Notification } from "./notify";
 
@@ -45,23 +46,39 @@ export function eventNotification(e: SocEvent, tenantName: string, appUrl: strin
 }
 
 const CACHE_MS = 60_000;
-let cached: { at: number; types: Set<string> } | null = null;
+const VERSION_KEY = "blaksoc:subscriptions:version";
+let cached: { at: number; version: string; types: Set<string> } | null = null;
 
-/** Event types any enabled subscriber wants. Cached so publish() does not query per alert. */
+/**
+ * Call after creating, changing, enabling or disabling a webhook, Teams or Slack integration.
+ * Every process's subscribedEventTypes() cache refreshes on its next publish.
+ */
+export async function subscriptionsChanged(): Promise<void> {
+  await redis().incr(VERSION_KEY);
+}
+
+/**
+ * Event types any enabled subscriber wants. Cached so publish() does not query Postgres per alert;
+ * the cache refreshes when subscriptionsChanged() bumps the shared version, or after CACHE_MS.
+ */
 export async function subscribedEventTypes(now = Date.now()): Promise<Set<string>> {
-  if (cached && now - cached.at < CACHE_MS) return cached.types;
+  const version = (await redis().get(VERSION_KEY)) ?? "0";
+  if (cached && cached.version === version && now - cached.at < CACHE_MS) return cached.types;
   const rows = await systemDb().select({ config: integrations.config }).from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, SUBSCRIBER_CATEGORIES)));
   const types = new Set<string>();
   for (const row of rows) {
     const events = (row.config as { events?: unknown }).events;
     if (Array.isArray(events)) events.forEach((t) => typeof t === "string" && types.add(t));
   }
-  cached = { at: now, types };
+  cached = { at: now, version, types };
   return types;
 }
 
-/** Worker: one delivery job per subscribed integration, so each retries on its own. */
-export async function fanOutEvent(e: SocEvent): Promise<{ queued: number }> {
+/**
+ * Worker: one delivery job per subscribed integration, so each retries on its own. Job ids are
+ * derived from the event id, so retrying this fan-out never queues a second delivery.
+ */
+export async function fanOutEvent(e: SocEvent, eventId: string): Promise<{ queued: number }> {
   const rows = await systemDb()
     .select({ id: integrations.id, config: integrations.config })
     .from(integrations)
@@ -70,8 +87,13 @@ export async function fanOutEvent(e: SocEvent): Promise<{ queued: number }> {
   if (!targets.length) return { queued: 0 };
   const [tenant] = await systemDb().select({ name: tenants.name }).from(tenants).where(eq(tenants.id, e.tenantId));
   const notification = eventNotification(e, tenant?.name ?? "", env().APP_URL);
-  for (const target of targets) await queue(QUEUES.notify).add("deliver", { integrationId: target.id, notification });
+  for (const target of targets) await queue(QUEUES.notify).add("deliver", { integrationId: target.id, notification }, { jobId: deliveryJobId(eventId, target.id) });
   return { queued: targets.length };
+}
+
+/** BullMQ ignores an add whose job id already exists, which makes delivery idempotent per event and integration. */
+export function deliveryJobId(eventId: string, integrationId: string): string {
+  return `deliver-${eventId}-${integrationId}`;
 }
 
 /** Worker: send one notification. Throws on failure so BullMQ retries with backoff and keeps the failed job. */

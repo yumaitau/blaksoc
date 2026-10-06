@@ -5,6 +5,7 @@
 # Wazuh runs from the official wazuh-docker stack; see deploy/wazuh/README.md.
 name: blaksoc
 
+# Database passwords are interpolated into URLs unencoded, so they must be URL-safe (see .env.example).
 x-app-env: &app-env
   NODE_ENV: production
   APP_URL: ${APP_URL:?set APP_URL}

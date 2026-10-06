@@ -23,6 +23,16 @@ describe("egress guard", () => {
     expect(egressDenial("2606:4700::1111", "public")).toBeNull();
   });
 
+  it("treats documentation ranges as not public, and their neighbours as public", () => {
+    for (const ip of ["192.0.2.0", "192.0.2.255", "198.51.100.1", "198.51.100.255", "203.0.113.0", "203.0.113.255", "2001:db8::1"]) {
+      expect(egressDenial(ip, "public"), ip).not.toBeNull();
+      expect(egressDenial(ip, "internal"), ip).toBeNull();
+    }
+    for (const ip of ["192.0.3.0", "198.51.99.255", "198.51.101.0", "203.0.112.255", "203.0.114.0", "2001:db9::1"]) {
+      expect(egressDenial(ip, "public"), ip).toBeNull();
+    }
+  });
+
   it("checks schemes and literal IP hosts that never reach a DNS lookup", () => {
     expect(() => assertEgressUrl("http://169.254.169.254/latest/meta-data/", "internal")).toThrow(/metadata/);
     // URL parsing rewrites [::ffff:169.254.169.254] to the hex form [::ffff:a9fe:a9fe].
