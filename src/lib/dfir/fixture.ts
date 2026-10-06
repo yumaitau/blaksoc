@@ -1,4 +1,5 @@
 import { sha256 } from "@/lib/crypto";
+import type { ProviderHealth } from "@/lib/providers/types";
 import { type ArtifactSet } from "./sets";
 
 export type FixtureAsset = { id: string; hostname: string | null; name: string; ips?: string[] };
@@ -6,6 +7,12 @@ export type FixtureAsset = { id: string; hostname: string | null; name: string; 
 /** Live gRPC is out of this build. Callers pass fixture config or this throws before any network. */
 export function assertFixtureMode(mode: unknown): void {
   if (mode === "live") throw new Error("live Velociraptor is not called from this build");
+}
+
+/** Health for the Velociraptor connector. Fixture mode is healthy and says so; live is not built. */
+export function velociraptorHealth(mode: unknown): ProviderHealth {
+  if (mode === "live") return { ok: false, latencyMs: 0, detail: { mode: "live" }, error: "live Velociraptor is not called from this build" };
+  return { ok: true, latencyMs: 0, detail: { mode: "fixture", note: "collections return fixture artefacts" } };
 }
 
 /** Deterministic artefact body. The SHA-256 of this string is what custody records. */

@@ -7,9 +7,22 @@ imagePullSecrets: []
 appUrl: https://soc.example.com.au
 
 # All secrets come from an existing Secret (sealed-secrets / external-secrets / Vault).
-# Required keys: DATABASE_URL, DATABASE_ADMIN_URL, BLAKSOC_APP_DB_PASSWORD, REDIS_URL,
-# BETTER_AUTH_SECRET, BLAKSOC_ENCRYPTION_KEY. Optional: ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET.
+# Required keys: DATABASE_URL, DATABASE_SYSTEM_URL, DATABASE_ADMIN_URL, BLAKSOC_APP_DB_PASSWORD,
+# BLAKSOC_SYSTEM_DB_PASSWORD, REDIS_URL, BETTER_AUTH_SECRET, BLAKSOC_ENCRYPTION_KEY.
+# Only the migration job receives the whole Secret. Web and worker receive the keys listed in
+# runtimeSecretKeys, so the owner URL and role passwords never reach a serving pod.
 existingSecret: blaksoc
+runtimeSecretKeys:
+  required: [DATABASE_URL, DATABASE_SYSTEM_URL, REDIS_URL, BETTER_AUTH_SECRET, BLAKSOC_ENCRYPTION_KEY]
+  optional:
+    - ENTRA_TENANT_ID
+    - ENTRA_CLIENT_ID
+    - ENTRA_CLIENT_SECRET
+    - ABR_GUID
+    - M365_CONNECTOR_CLIENT_ID
+    - M365_CONNECTOR_CLIENT_SECRET
+    - SSO_TRUSTED_ORIGINS
+    - BLAKSOC_SUPPLIER_ABN
 
 # Optional: build existingSecret from AWS Secrets Manager (or another store) via External Secrets.
 externalSecret:
@@ -67,11 +80,24 @@ dataPlane:
 
 networkPolicy:
   enabled: true
-  # Cluster-internal egress only. 0.0.0.0/0 and ::/0 fail the hosting profile check.
+  # Namespace of the ingress controller allowed to reach web.
+  ingressNamespace: ingress-nginx
+  # TCP 443 to public addresses for web and worker, with private, link-local (cloud metadata),
+  # CGNAT and loopback ranges excluded. Needed for Entra sign-in, Microsoft Graph, CISA KEV,
+  # FIRST EPSS, ACSC advisories, Kelpie, ABR and hosted AI providers. These services are not
+  # region-pinned: which tenant data may reach them is enforced in the app by the data
+  # governance profile. Set false for an air-gapped install and list exact CIDRs below instead.
+  publicHttps: true
+  # Extra egress CIDRs (any port), e.g. the VPC range of a managed Postgres or Redis outside the
+  # cluster. 0.0.0.0/0 and ::/0 fail the hosting profile check.
   egressCidrs: []
 
 podSecurityContext:
   runAsNonRoot: true
+  # The image user `blaksoc` is 100:101. A numeric id lets the kubelet verify runAsNonRoot.
+  runAsUser: 100
+  runAsGroup: 101
+  fsGroup: 101
   seccompProfile: { type: RuntimeDefault }
 securityContext:
   allowPrivilegeEscalation: false

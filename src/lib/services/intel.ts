@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { adminDb, db } from "@/db/client";
+import { systemDb, db } from "@/db/client";
 import { advisories, intelFeeds, intelMatches, intelTags, SECTOR_TAGS, sigmaRules, tenantFeedEntitlements, tenants, type SectorTag } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, type AccessContext } from "@/lib/auth/access";
@@ -12,7 +12,7 @@ import { governanceProfile } from "./governance";
 /** Live search across OpenCTI (the CTI system of record) plus local sector tags. */
 export async function searchIntel(ctx: AccessContext, term: string, types?: string[]) {
   assertCan(ctx, "intel:read");
-  const intel = await intelProviderFor(adminDb(), null);
+  const intel = await intelProviderFor(systemDb(), null);
   if (!intel) return { configured: false as const, results: [] };
   const results = await intel.provider.search(term, types);
   const tags = results.length ? await db().select().from(intelTags).where(inArray(intelTags.openctiId, results.map((r) => r.id))) : [];
@@ -29,7 +29,7 @@ export async function tagIntel(ctx: AccessContext, input: { openctiId: string; e
     .insert(intelTags)
     .values({ openctiId: input.openctiId, entityType: input.entityType, name: input.name, tags, updatedBy: ctx.principal.userId })
     .onConflictDoUpdate({ target: intelTags.openctiId, set: { tags, updatedBy: ctx.principal.userId, updatedAt: new Date() } });
-  const intel = await intelProviderFor(adminDb(), null);
+  const intel = await intelProviderFor(systemDb(), null);
   await intel?.provider.addLabels(input.openctiId, tags.map((t) => t.toLowerCase())).catch(() => undefined);
   await withScope({ tenantIds: [], platform: true }, (tx) => audit(tx, { ...actor(ctx), tenantId: null, action: "intel.tag", targetType: "opencti", targetId: input.openctiId, detail: { tags } }));
   return tags;

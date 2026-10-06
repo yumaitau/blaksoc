@@ -1,3 +1,5 @@
+import { can, type AccessContext } from "./auth/access";
+import { queue, QUEUES } from "./queue";
 import { newRedis, redis } from "./redis";
 
 /** Live SOC events. Every event carries tenantId; the SSE endpoint filters by the viewer's scope. */
@@ -11,8 +13,18 @@ export type SocEvent =
 
 const CHANNEL = "blaksoc:events";
 
+/**
+ * Live update for open SSE streams (lossy pub/sub), plus a durable notify job when a webhook,
+ * Teams or Slack integration subscribes to this event type.
+ */
 export async function publish(event: SocEvent): Promise<void> {
   await redis().publish(CHANNEL, JSON.stringify(event));
+  try {
+    const { subscribedEventTypes } = await import("./connectors/subscriptions");
+    if ((await subscribedEventTypes()).has(event.type)) await queue(QUEUES.notify).add("event", event);
+  } catch (err) {
+    console.warn(`[events] could not queue ${event.type} for subscribers: ${err instanceof Error ? err.message : err}`);
+  }
 }
 
 export function subscribe(onEvent: (e: SocEvent) => void): () => void {
@@ -26,4 +38,11 @@ export function subscribe(onEvent: (e: SocEvent) => void): () => void {
     }
   });
   return () => void sub.quit();
+}
+
+/** Whether a viewer with `ctx` may see `e` on the live stream. Customers only receive incident/response events for their own tenant. */
+export function eventVisible(ctx: AccessContext, e: SocEvent): boolean {
+  if (!ctx.tenantIds.includes(e.tenantId)) return false;
+  if (e.type.startsWith("alert.") || e.type === "approval.requested") return can(ctx, "alert:read", e.tenantId) && ctx.isPlatform;
+  return can(ctx, "incident:read", e.tenantId);
 }

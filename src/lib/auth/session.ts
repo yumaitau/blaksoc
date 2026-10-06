@@ -11,8 +11,9 @@ export type SessionState =
   | { state: "mfa_enrolment_required"; userId: string }
   | { state: "ok"; access: AccessContext };
 
-export const getSessionState = cache(async (): Promise<SessionState> => {
-  const session = await auth.api.getSession({ headers: await headers() });
+/** Session state for explicit request headers. Long-lived handlers (SSE) re-check with this. */
+export async function sessionStateFor(requestHeaders: Headers): Promise<SessionState> {
+  const session = await auth.api.getSession({ headers: requestHeaders });
   if (!session) return { state: "anonymous" };
   const u = session.user as typeof session.user & { isBreakGlass?: boolean; disabled?: boolean; twoFactorEnabled?: boolean };
   if (u.disabled) return { state: "anonymous" };
@@ -21,7 +22,9 @@ export const getSessionState = cache(async (): Promise<SessionState> => {
   }
   const access = await resolveAccess({ userId: u.id, name: u.name, email: u.email, isBreakGlass: !!u.isBreakGlass });
   return { state: "ok", access };
-});
+}
+
+export const getSessionState = cache(async (): Promise<SessionState> => sessionStateFor(await headers()));
 
 /** For pages: redirect when unauthenticated. */
 export async function requireAccess(): Promise<AccessContext> {

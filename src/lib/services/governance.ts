@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { adminDb, type DbOrTx, type Tx } from "@/db/client";
+import { systemDb, type DbOrTx, type Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import {
   AI_CAPABILITIES, dataGovernance, governanceChanges, integrations, MOST_PROTECTIVE, notificationDeliveries, roleAssignments, roles, tenants, user,
@@ -32,7 +32,7 @@ export async function governanceProfile(tx: DbOrTx, tenantId: string): Promise<G
 
 /** Owner-connection read for the worker and other system paths. */
 export async function governanceFor(tenantId: string): Promise<GovernanceProfile> {
-  return governanceProfile(adminDb(), tenantId);
+  return governanceProfile(systemDb(), tenantId);
 }
 
 /** A steward holds the role directly on this tenant. Platform staff and partner reach never count. */
@@ -42,13 +42,13 @@ export function isSteward(ctx: AccessContext, tenantId: string): boolean {
 
 /** Steward user ids for a tenant. Users who also hold a platform role are excluded. */
 export async function stewardIds(tenantId: string): Promise<string[]> {
-  const rows = await adminDb()
+  const rows = await systemDb()
     .select({ userId: roleAssignments.userId })
     .from(roleAssignments)
     .where(and(eq(roleAssignments.roleKey, STEWARD_ROLE), eq(roleAssignments.tenantId, tenantId)));
   const ids = [...new Set(rows.map((r) => r.userId))];
   if (!ids.length) return [];
-  const platform = await adminDb()
+  const platform = await systemDb()
     .select({ userId: roleAssignments.userId })
     .from(roleAssignments)
     .innerJoin(roles, eq(roles.key, roleAssignments.roleKey))
@@ -58,7 +58,7 @@ export async function stewardIds(tenantId: string): Promise<string[]> {
 }
 
 export async function userHoldsPlatformRole(userId: string): Promise<boolean> {
-  const rows = await adminDb()
+  const rows = await systemDb()
     .select({ key: roleAssignments.roleKey })
     .from(roleAssignments)
     .innerJoin(roles, eq(roles.key, roleAssignments.roleKey))
@@ -105,7 +105,7 @@ function nextProfile(before: GovernanceProfile, input: GovernanceProposal): Gove
 /** Email every steward and record each delivery. A missing email connector is recorded as a failed delivery. */
 export async function notifyStewards(tx: Tx, tenantId: string, target: { type: string; id: string }, title: string, summary: string) {
   const ids = await stewardIds(tenantId);
-  const people = ids.length ? await adminDb().select({ id: user.id, email: user.email }).from(user).where(inArray(user.id, ids)) : [];
+  const people = ids.length ? await systemDb().select({ id: user.id, email: user.email }).from(user).where(inArray(user.id, ids)) : [];
   const [tenant] = await tx.select({ name: tenants.name }).from(tenants).where(eq(tenants.id, tenantId));
   const [row] = await tx.select().from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.enabled, true), eq(integrations.provider, "email")));
   for (const person of people) {
@@ -181,7 +181,7 @@ export async function proposeGovernanceChange(ctx: AccessContext, tenantId: stri
 }
 
 export async function decideGovernanceChange(ctx: AccessContext, changeId: string, decision: "approve" | "reject") {
-  const [found] = await adminDb().select({ tenantId: governanceChanges.tenantId }).from(governanceChanges).where(eq(governanceChanges.id, changeId));
+  const [found] = await systemDb().select({ tenantId: governanceChanges.tenantId }).from(governanceChanges).where(eq(governanceChanges.id, changeId));
   if (!found) throw new AccessDenied("change");
   assertSteward(ctx, found.tenantId);
   const who = actor(ctx);

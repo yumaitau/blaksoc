@@ -1,5 +1,5 @@
 import { and, asc, eq, isNull, or } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { aiConversations, aiInvocations, aiMessages, integrations, tenants, type AiPolicy, type Citation, type GovernanceProfile } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, type AccessContext } from "@/lib/auth/access";
@@ -28,7 +28,7 @@ const CITE = /\[\[(alert|asset|incident|opencti|cve|attack|rule):([^\]\s]+)\]\]/
 
 export async function aiProviderFor(tenantId: string): Promise<AIProvider | null> {
   // AI provider integrations are platform or tenant owned; read with owner connection, then policy-check.
-  const rows = await adminDb().select().from(integrations).where(and(eq(integrations.category, "ai"), eq(integrations.enabled, true), or(eq(integrations.tenantId, tenantId), isNull(integrations.tenantId))));
+  const rows = await systemDb().select().from(integrations).where(and(eq(integrations.category, "ai"), eq(integrations.enabled, true), or(eq(integrations.tenantId, tenantId), isNull(integrations.tenantId))));
   const row = rows.sort((a, b) => (b.tenantId ? 1 : 0) - (a.tenantId ? 1 : 0))[0];
   if (!row) return null;
   const inst = instantiate(row);
@@ -51,6 +51,11 @@ export type AssistantReply = {
   toolCalls: { name: string; args: unknown }[];
   policy: string;
 };
+
+/** What the model receives. Earlier turns are stored as typed, so they are redacted on every send, not only the newest message. */
+export function modelMessages(system: string, history: ChatMessage[], message: string, scrub: (s: string) => string): ChatMessage[] {
+  return [{ role: "system", content: system }, ...history.map((m) => ({ ...m, content: scrub(m.content) })), { role: "user", content: scrub(message) }];
+}
 
 export async function runAssistant(ctx: AccessContext, input: { tenantId: string; message: string; conversationId?: string; subject?: { type: string; id: string }; allowWrites?: boolean }): Promise<AssistantReply> {
   assertCan(ctx, "ai:use", input.tenantId);
@@ -87,11 +92,7 @@ export async function runAssistant(ctx: AccessContext, input: { tenantId: string
   const calls: { name: string; args: unknown; resultRefs: Citation[] }[] = [];
 
   const subjectHint = input.subject ? `\nThe analyst is looking at ${input.subject.type} ${input.subject.id}. Start by retrieving it.` : "";
-  const messages: ChatMessage[] = [
-    { role: "system", content: `${SYSTEM}\nTenant: ${tenant.name}. Writes ${toolCtx.allowWrites ? "enabled (notes, proposals)" : "disabled — read-only"}.${subjectHint}` },
-    ...history,
-    { role: "user", content: scrub(input.message) },
-  ];
+  const messages = modelMessages(`${SYSTEM}\nTenant: ${tenant.name}. Writes ${toolCtx.allowWrites ? "enabled (notes, proposals)" : "disabled — read-only"}.${subjectHint}`, history, input.message, scrub);
 
   let final = "";
   let usageIn = 0, usageOut = 0;

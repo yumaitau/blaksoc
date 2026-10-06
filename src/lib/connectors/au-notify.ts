@@ -1,5 +1,6 @@
 import net from "node:net";
 import type { DeliveryReceipt, Notification, Notifier } from "./notify";
+import { EgressDenied, egressDenial, guardedLookup } from "@/lib/net/egress";
 
 export type VendorRequest = {
   url: string;
@@ -173,7 +174,12 @@ export async function sendSmtp(opts: {
   subject: string;
   body: string;
 }): Promise<string> {
-  const socket = net.connect({ host: opts.host, port: opts.port });
+  // The relay may be internal, but never a metadata or link-local address.
+  if (net.isIP(opts.host)) {
+    const denied = egressDenial(opts.host, "internal");
+    if (denied) throw new EgressDenied(denied);
+  }
+  const socket = net.connect({ host: opts.host, port: opts.port, lookup: guardedLookup("internal") });
   socket.setTimeout(5_000);
   const read = readReplies(socket);
   try {

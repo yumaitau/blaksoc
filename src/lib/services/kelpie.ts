@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, isNull, lte, min, ne } from "drizzle-orm";
-import { adminDb, type DbOrTx } from "@/db/client";
+import { systemDb, type DbOrTx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { alerts, dataGovernance, incidentAlerts, incidentLinks, incidents, incidentTasks, incidentTimeline, integrations, kelpieCases, MOST_PROTECTIVE, tenants } from "@/db/schema";
 import { systemScope } from "@/lib/auth/access";
@@ -167,11 +167,11 @@ export async function syncKelpie(opts: { now?: Date; connect?: KelpieConnect; li
   const connect = opts.connect ?? defaultConnect;
   const limit = opts.limit ?? 200;
   const counts: Counts = { queued: 0, pushed: 0, failed: 0, synced: 0, forwarded: 0 };
-  const rows = await adminDb().select().from(integrations).where(and(eq(integrations.provider, "kelpie"), eq(integrations.enabled, true)));
+  const rows = await systemDb().select().from(integrations).where(and(eq(integrations.provider, "kelpie"), eq(integrations.enabled, true)));
   for (const integration of rows) {
     const tenantId = integration.tenantId;
     if (!tenantId) continue;
-    const [gov] = await adminDb().select({ profile: dataGovernance.profile }).from(dataGovernance).where(eq(dataGovernance.tenantId, tenantId));
+    const [gov] = await systemDb().select({ profile: dataGovernance.profile }).from(dataGovernance).where(eq(dataGovernance.tenantId, tenantId));
     if (!checkGovernedRegion(gov?.profile ?? MOST_PROTECTIVE, integration.config.region).allowed) continue;
     let client: KelpieClient;
     try {
@@ -179,7 +179,7 @@ export async function syncKelpie(opts: { now?: Date; connect?: KelpieConnect; li
     } catch {
       continue;
     }
-    const [tenant] = await adminDb().select({ slug: tenants.slug }).from(tenants).where(eq(tenants.id, tenantId));
+    const [tenant] = await systemDb().select({ slug: tenants.slug }).from(tenants).where(eq(tenants.id, tenantId));
 
     // Queue open incidents that have no link yet. Closed incidents are history and stay in blakSOC.
     counts.queued += await withScope(systemScope(tenantId), async (tx) => {

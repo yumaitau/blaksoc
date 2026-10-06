@@ -41,6 +41,8 @@ export const playbookRuns = pgTable(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     playbookId: uuid("playbook_id").notNull().references(() => playbooks.id, { onDelete: "cascade" }),
     playbookVersion: integer("playbook_version").notNull(),
+    /** Steps as they were when the run started. Null only on runs from before migration 0023. */
+    steps: jsonb("steps").$type<PlaybookStep[]>(),
     status: text("status").notNull().default("RUNNING"), // RUNNING | WAITING_APPROVAL | SUCCEEDED | FAILED | CANCELLED
     trigger: jsonb("trigger").$type<Record<string, unknown>>().notNull(),
     context: jsonb("context").$type<Record<string, unknown>>().notNull().default({}),

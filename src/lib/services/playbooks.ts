@@ -173,8 +173,9 @@ export async function getRun(ctx: AccessContext, id: string) {
       approvalIds.length ? tx.select().from(approvals).where(inArray(approvals.id, approvalIds)) : Promise.resolve([]),
       tx.select().from(responseActions).where(eq(responseActions.playbookRunId, id)).orderBy(responseActions.createdAt),
     ]);
-    const { context: _ctx, ...run } = row.run;
-    return { ...run, tenantName: row.tenantName, playbookName: row.playbookName, playbookSteps: row.playbookSteps, currentVersion: row.playbookVersion, alertTitle: row.alertTitle, steps, approvals: gates, responseActions: actions };
+    const { context: _ctx, steps: pinnedSteps, ...run } = row.run;
+    // playbookSteps are the steps this run executes: its own snapshot, or the live playbook for runs older than the snapshot.
+    return { ...run, tenantName: row.tenantName, playbookName: row.playbookName, playbookSteps: pinnedSteps ?? row.playbookSteps, stepsPinned: pinnedSteps != null, currentVersion: row.playbookVersion, alertTitle: row.alertTitle, steps, approvals: gates, responseActions: actions };
   });
 }
 
@@ -194,7 +195,7 @@ export async function runPlaybookManually(ctx: AccessContext, playbookId: string
     const runCtx = { tenantId: alert.tenantId, alertId, incidentId: alert.incidentId ?? undefined, alert: { ...alert, raw: undefined, responseHint: responseHintOf(alert.raw) }, asset };
     const [run] = await tx
       .insert(playbookRuns)
-      .values({ tenantId: alert.tenantId, playbookId, playbookVersion: pb.version, trigger: { event: "manual", alertId, requestedBy: ctx.principal.userId }, context: runCtx, alertId, incidentId: alert.incidentId })
+      .values({ tenantId: alert.tenantId, playbookId, playbookVersion: pb.version, steps: pb.steps, trigger: { event: "manual", alertId, requestedBy: ctx.principal.userId }, context: runCtx, alertId, incidentId: alert.incidentId })
       .returning({ id: playbookRuns.id, tenantId: playbookRuns.tenantId });
     await audit(tx, { ...actor(ctx), tenantId: alert.tenantId, action: "playbook.run_manual", targetType: "playbook_run", targetId: run!.id, detail: { playbook: pb.name, playbookId, alertId } });
     return run!;

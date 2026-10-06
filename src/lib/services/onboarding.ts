@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import {
   integrations, notificationDeliveries, onboardingDrafts, playbooks, reports, roles, sites, tenants,
 } from "@/db/schema";
@@ -204,12 +204,12 @@ function withTenant(ctx: AccessContext, tenant: { id: string; slug: string; name
 
 export async function startOnboarding(ctx: AccessContext) {
   assertAnalyst(ctx);
-  const [open] = await adminDb()
+  const [open] = await systemDb()
     .select()
     .from(onboardingDrafts)
     .where(and(eq(onboardingDrafts.ownerUserId, ctx.principal.userId), eq(onboardingDrafts.status, "draft")));
   if (open) return open;
-  return adminDb().transaction(async (tx) => {
+  return systemDb().transaction(async (tx) => {
     const [row] = await tx.insert(onboardingDrafts).values({ ownerUserId: ctx.principal.userId, status: "draft", step: "org" }).returning();
     await audit(tx, { ...actor(ctx), tenantId: null, action: "onboarding.save", targetType: "onboarding_draft", targetId: row!.id, detail: { step: "start" } });
     return row!;
@@ -218,14 +218,14 @@ export async function startOnboarding(ctx: AccessContext) {
 
 export async function getDraft(ctx: AccessContext, draftId: string) {
   assertAnalyst(ctx);
-  const [row] = await adminDb().select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId));
+  const [row] = await systemDb().select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId));
   if (!row || row.ownerUserId !== ctx.principal.userId) throw new AccessDenied("draft");
   return row;
 }
 
 export async function ownDraft(ctx: AccessContext) {
   assertAnalyst(ctx);
-  const [row] = await adminDb()
+  const [row] = await systemDb()
     .select()
     .from(onboardingDrafts)
     .where(eq(onboardingDrafts.ownerUserId, ctx.principal.userId))
@@ -241,7 +241,7 @@ export async function saveOnboardingStep(ctx: AccessContext, draftId: string, st
   const pre = await getDraft(ctx, draftId);
   if (pre.status === "complete") return pre;
   const patch = await parseStep(step, raw, pre);
-  return adminDb().transaction(async (tx) => {
+  return systemDb().transaction(async (tx) => {
     const [row] = await tx.select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId)).for("update");
     if (!row || row.ownerUserId !== ctx.principal.userId) throw new AccessDenied("draft");
     if (row.status === "complete") return row;
@@ -276,7 +276,7 @@ export async function recordM365Consent(ctx: AccessContext, query: URLSearchPara
     if (row.status === "complete" || ONBOARDING_STEPS.indexOf(row.step as OnboardingStep) < ONBOARDING_STEPS.indexOf("connect")) throw new OnboardingError("order");
     const { azureTenantId } = parseCallback(query);
     const consent = await check(azureTenantId);
-    return await adminDb().transaction(async (tx) => {
+    return await systemDb().transaction(async (tx) => {
       const [fresh] = await tx.select().from(onboardingDrafts).where(eq(onboardingDrafts.id, draftId)).for("update");
       const connect: ConnectDraft = { domains: [], agents: "later", ...fresh!.connect, azureTenantId: consent.azureTenantId, m365Consent: consent };
       const [saved] = await tx.update(onboardingDrafts).set({ connect, updatedAt: new Date() }).where(eq(onboardingDrafts.id, draftId)).returning();
@@ -285,7 +285,7 @@ export async function recordM365Consent(ctx: AccessContext, query: URLSearchPara
     });
   } catch (err) {
     if (err instanceof AccessDenied || (err instanceof OnboardingError && err.code === "order")) throw err;
-    await adminDb().transaction((tx) =>
+    await systemDb().transaction((tx) =>
       audit(tx, { ...actor(ctx), tenantId: null, action: "onboarding.m365_consent_failed", targetType: "onboarding_draft", targetId: draftId || undefined, detail: { reason: err instanceof Error ? err.message.slice(0, 200) : "failed" } }));
     throw new OnboardingError("consent");
   }
@@ -320,7 +320,7 @@ async function openTenant(ctx: AccessContext, name: string, sectors: string[]) {
 }
 
 async function ensureSites(ctx: AccessContext, tenantId: string, locations: OrgLocation[]) {
-  const existing = await adminDb().select({ id: sites.id }).from(sites).where(eq(sites.tenantId, tenantId));
+  const existing = await systemDb().select({ id: sites.id }).from(sites).where(eq(sites.tenantId, tenantId));
   if (existing.length) return;
   for (const loc of locations) {
     const location = loc.remote === "no" ? loc.name : `${loc.name}, ${loc.remote}`;
@@ -335,11 +335,11 @@ async function ensureSites(ctx: AccessContext, tenantId: string, locations: OrgL
  */
 async function recordM365(tenantId: string, connect: ConnectDraft) {
   const consent = connect.m365Consent ?? null;
-  let [row] = await adminDb().select().from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.provider, "entra")));
+  let [row] = await systemDb().select().from(integrations).where(and(eq(integrations.tenantId, tenantId), eq(integrations.provider, "entra")));
   if (!row) {
     const entra = connectorDef("entra");
     const id = randomUUID();
-    [row] = await adminDb().insert(integrations).values({
+    [row] = await systemDb().insert(integrations).values({
       id,
       tenantId,
       category: "identity",
@@ -359,9 +359,9 @@ async function recordM365(tenantId: string, connect: ConnectDraft) {
 }
 
 async function ensurePlaybooks(ctx: AccessContext, tenantId: string) {
-  const existing = await adminDb().select({ id: playbooks.id }).from(playbooks).where(eq(playbooks.tenantId, tenantId));
+  const existing = await systemDb().select({ id: playbooks.id }).from(playbooks).where(eq(playbooks.tenantId, tenantId));
   if (existing.length) return;
-  const globals = await adminDb().select().from(playbooks).where(isNull(playbooks.tenantId));
+  const globals = await systemDb().select().from(playbooks).where(isNull(playbooks.tenantId));
   const sources = globals.map((g) => ({ tenantId, name: g.name, description: g.description, trigger: g.trigger, steps: g.steps }));
   if (!sources.some((s) => s.name === SUSPECTED_BEC_PLAYBOOK.name)) {
     sources.push({
@@ -402,13 +402,13 @@ function welcomeContent(tenantName: string, stack: StackDraft, connect: ConnectD
 }
 
 async function sendSummary(tenant: { id: string; name: string }, to: string, summary: string) {
-  let [row] = await adminDb()
+  let [row] = await systemDb()
     .select()
     .from(integrations)
     .where(and(eq(integrations.tenantId, tenant.id), eq(integrations.provider, "email"), eq(integrations.name, "Setup summary email")));
   if (!row) {
     const id = randomUUID();
-    [row] = await adminDb().insert(integrations).values({
+    [row] = await systemDb().insert(integrations).values({
       id,
       tenantId: tenant.id,
       category: "collaboration",
@@ -437,13 +437,13 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
   assertAnalyst(ctx);
   const row = await getDraft(ctx, draftId);
   if (row.status === "complete" && row.tenantId) {
-    const [report] = await adminDb().select().from(reports).where(and(eq(reports.tenantId, row.tenantId), eq(reports.kind, "welcome")));
+    const [report] = await systemDb().select().from(reports).where(and(eq(reports.tenantId, row.tenantId), eq(reports.kind, "welcome")));
     return { tenantId: row.tenantId, reportId: report?.id ?? "", draftId: row.id };
   }
   if (!row.org || !row.contacts || !row.stack || !row.connect || !row.governance || !row.plan) throw new OnboardingError("missing");
 
   const partnerId = partnerHome(ctx);
-  let tenant = row.tenantId ? (await adminDb().select().from(tenants).where(eq(tenants.id, row.tenantId)))[0] : undefined;
+  let tenant = row.tenantId ? (await systemDb().select().from(tenants).where(eq(tenants.id, row.tenantId)))[0] : undefined;
   if (!tenant) {
     if (partnerId) {
       if (!opts?.partnerConsent) throw new OnboardingError("missing");
@@ -451,7 +451,7 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
     } else {
       tenant = await openTenant(ctx, row.org.name, row.org.sectors);
     }
-    await adminDb().update(onboardingDrafts).set({ tenantId: tenant.id, updatedAt: new Date() }).where(eq(onboardingDrafts.id, row.id));
+    await systemDb().update(onboardingDrafts).set({ tenantId: tenant.id, updatedAt: new Date() }).where(eq(onboardingDrafts.id, row.id));
   }
   const wide = withTenant(ctx, tenant);
   await ensureSites(wide, tenant.id, row.org.locations);
@@ -459,16 +459,16 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
   await setTenantPlan(wide, tenant.id, { tier: row.plan.tier, nonprofit: row.plan.nonprofit });
   await ensurePlaybooks(wide, tenant.id);
 
-  const roleRows = await adminDb().select({ key: roles.key }).from(roles).where(inArray(roles.key, [...ROLE_KEYS]));
+  const roleRows = await systemDb().select({ key: roles.key }).from(roles).where(inArray(roles.key, [...ROLE_KEYS]));
   if (roleRows.length !== ROLE_KEYS.length) throw new Error("default roles missing");
 
   const now = new Date();
   const partner = partnerId ? ctx.tenants.find((t) => t.id === partnerId) : undefined;
   const content = welcomeContent(tenant.name, row.stack, row.connect, now, partner ? cobrandLine(partner.name, partner.brandName) : null);
   await toPdf(COPY.emailTitle, content);
-  let [report] = await adminDb().select().from(reports).where(and(eq(reports.tenantId, tenant.id), eq(reports.kind, "welcome")));
+  let [report] = await systemDb().select().from(reports).where(and(eq(reports.tenantId, tenant.id), eq(reports.kind, "welcome")));
   if (!report) {
-    [report] = await adminDb().insert(reports).values({
+    [report] = await systemDb().insert(reports).values({
       tenantId: tenant.id,
       kind: "welcome",
       title: COPY.emailTitle,
@@ -481,7 +481,7 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
   }
 
   const summary = [connectedLine(row.stack.identity, !!row.connect.m365Consent), COPY.reportWhyBody, domainLine(row.connect.domains), COPY.govLead, COPY.agents].join(" ");
-  const [alreadySent] = await adminDb()
+  const [alreadySent] = await systemDb()
     .select()
     .from(notificationDeliveries)
     .where(and(
@@ -492,7 +492,7 @@ export async function finishOnboarding(ctx: AccessContext, draftId: string, opts
     ));
   const receipt = alreadySent ? { providerRef: alreadySent.providerRef } : await sendSummary(tenant, row.contacts.summaryEmail, summary);
 
-  await adminDb().transaction(async (tx) => {
+  await systemDb().transaction(async (tx) => {
     if (!alreadySent) {
       await tx.insert(notificationDeliveries).values({
         tenantId: tenant.id,

@@ -1,3 +1,4 @@
+import { egressFetch } from "@/lib/net/egress";
 /**
  * Minimal client for the Kelpie case management REST API (`/api/v1`).
  * Mirrors the contract of `@kelpie/sdk` (github.com/yumaitau/Kelpie, packages/sdk) for the calls blakSOC makes.
@@ -55,7 +56,7 @@ const redact = (s: string) => s.replace(/klp_[A-Za-z0-9_-]+/g, "[redacted]").rep
 
 export class KelpieClient {
   private readonly base: string;
-  constructor(baseUrl: string, private readonly token: string, private readonly doFetch: KelpieFetch = fetch) {
+  constructor(baseUrl: string, private readonly token: string, private readonly doFetch: KelpieFetch = (url, init) => egressFetch(url, init, "internal")) {
     this.base = baseUrl.replace(/\/+$/, "");
   }
 

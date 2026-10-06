@@ -9,8 +9,7 @@ x-app-env: &app-env
   NODE_ENV: production
   APP_URL: ${APP_URL:?set APP_URL}
   DATABASE_URL: postgres://blaksoc_app:${BLAKSOC_APP_DB_PASSWORD:?}@postgres:5432/blaksoc
-  DATABASE_ADMIN_URL: postgres://blaksoc:${POSTGRES_PASSWORD:?}@postgres:5432/blaksoc
-  BLAKSOC_APP_DB_PASSWORD: ${BLAKSOC_APP_DB_PASSWORD:?}
+  DATABASE_SYSTEM_URL: postgres://blaksoc_system:${BLAKSOC_SYSTEM_DB_PASSWORD:?}@postgres:5432/blaksoc
   REDIS_URL: redis://:${REDIS_PASSWORD:?}@redis:6379
   BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?}
   BLAKSOC_ENCRYPTION_KEY: ${BLAKSOC_ENCRYPTION_KEY:?}
@@ -44,7 +43,12 @@ services:
     image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
     build: { context: ../.., target: worker }
     command: ["sh", "-c", "node dist/db/migrate.mjs && node dist/db/seed.mjs"]
-    environment: *app-env
+    # Only the migration job gets owner credentials; web and worker use the app and system roles.
+    environment:
+      <<: *app-env
+      DATABASE_ADMIN_URL: postgres://blaksoc:${POSTGRES_PASSWORD:?}@postgres:5432/blaksoc
+      BLAKSOC_APP_DB_PASSWORD: ${BLAKSOC_APP_DB_PASSWORD:?}
+      BLAKSOC_SYSTEM_DB_PASSWORD: ${BLAKSOC_SYSTEM_DB_PASSWORD:?}
     depends_on: { postgres: { condition: service_healthy } }
     restart: "no"
 

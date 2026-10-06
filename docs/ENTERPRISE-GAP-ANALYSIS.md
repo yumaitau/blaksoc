@@ -76,7 +76,11 @@ The detailed matrix below has one row per capability.
 ## Defects found during the analysis
 
 These are bugs or contradictions with documented behaviour, not missing features. They should be
-fixed before feature work, because several weaken controls the new program depends on. **Verified**
+fixed before feature work, because several weaken controls the new program depends on.
+
+**Update:** all 19 were fixed on branch `docs/enterprise-gap-analysis`, with unit tests and database
+tests in `tests/integration/hardening.test.ts`. The table records what was found; the status column
+records how each claim was confirmed before it was fixed. **Verified**
 means the claim was checked directly against the code while writing this document. **Reported**
 means it came from the evidence sweep and should be confirmed when it is fixed.
 

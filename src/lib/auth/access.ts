@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { adminDb, db } from "@/db/client";
+import { systemDb, db } from "@/db/client";
 import { roleAssignments, roles, tenants } from "@/db/schema";
 import { withScope, type DbScope } from "@/db/scope";
 import { cobrandLine } from "@/lib/tenancy/brand";
@@ -94,7 +94,7 @@ export async function resolveAccess(principal: Principal): Promise<AccessContext
   const byId = new Map(active.map((row) => [row.id, row]));
   const missingParents = [...new Set(active.map((row) => row.parentId).filter((id): id is string => !!id))].filter((id) => !byId.has(id));
   if (missingParents.length) {
-    const parents = await adminDb().select(columns).from(tenants).where(inArray(tenants.id, missingParents));
+    const parents = await systemDb().select(columns).from(tenants).where(inArray(tenants.id, missingParents));
     for (const parent of parents) byId.set(parent.id, parent);
   }
   const cobrandFor = (row: (typeof active)[number]) => {
@@ -156,6 +156,32 @@ export function tenantsWith(ctx: AccessContext, permission: Permission, requeste
 
 export function assertCan(ctx: AccessContext, permission: Permission, tenantId?: string): void {
   if (!can(ctx, permission, tenantId)) throw new AccessDenied(`missing ${permission}`);
+}
+
+/** Roles that only make sense on a partner (IT provider) tenancy. */
+export const PARTNER_ROLE_KEYS: readonly string[] = ["partner_admin", "partner_analyst"];
+
+/** Roles a direct grant may hand out beyond its own permissions: a partner admin staffs its own analysts. */
+const DELEGATED_GRANTS: Readonly<Record<string, readonly string[]>> = { partner_admin: ["partner_analyst"] };
+
+/**
+ * Why `ctx` may not grant or revoke a tenant-scope role on `tenant`, or null when it may.
+ * Platform staff holding platform `user:manage` administer every role. Anyone else may only
+ * hand out (or take away) permissions they already hold on that tenant, so a customer admin
+ * cannot raise themselves or a colleague to partner administrator.
+ */
+export function tenantRoleGrantDenial(
+  ctx: AccessContext,
+  role: { key: string; permissions: readonly string[] },
+  tenant: { id: string; kind: TenantKind },
+): string | null {
+  if (PARTNER_ROLE_KEYS.includes(role.key) && tenant.kind !== "partner") return `${role.key} can only be held on a partner tenant`;
+  if (ctx.grants.some((g) => g.tenantId === null && g.permissions.has("user:manage"))) return null;
+  const held = permissionsFor(ctx, tenant.id);
+  if (!held.has("user:manage")) return "missing user:manage";
+  if (ctx.grants.some((g) => g.tenantId === tenant.id && g.permissions.has("user:manage") && DELEGATED_GRANTS[g.roleKey]?.includes(role.key))) return null;
+  const extra = role.permissions.filter((p) => !held.has(p as Permission));
+  return extra.length ? `cannot grant permissions you do not hold: ${extra.join(", ")}` : null;
 }
 
 /** DB scope for a request: only the tenants that carry the needed permission. */

@@ -19,7 +19,7 @@
 
 1. Explicit `tenant_id` filters in every service query.
 2. Postgres RLS on every tenant table (`src/db/sql/005_rls.sql`), `FORCE`d, evaluated against transaction-local `app.tenant_ids` set by `withScope()`.
-3. App connects as `blaksoc_app` (no ownership, `NOBYPASSRLS`). Migrations/seed use the owner role, which the running web tier never needs.
+3. App connects as `blaksoc_app` (no ownership, `NOBYPASSRLS`). Worker jobs and the few web paths that run before a tenant scope exists (onboarding, provider lookups) use `blaksoc_system`, which also owns nothing and has no `BYPASSRLS`: it reaches rows through `system_access` policies (`src/db/sql/020_system_access.sql`), so it cannot change schema, policies or triggers, or update or delete audit rows. Only the migration job holds the owner credentials; the Helm chart gives web and worker an explicit list of secret keys (`runtimeSecretKeys`) that excludes them.
 4. Integration tests (`tests/integration/tenancy.test.ts`) assert cross-tenant reads return nothing, cross-tenant filters fail closed, and customers cannot triage.
 5. SSE live events are filtered server-side per viewer.
 
@@ -31,9 +31,9 @@ the UI and API: they are never selected into client payloads, and updates keep e
 
 ## Audit
 
-`audit_log` is append-only: the app role has no UPDATE/DELETE grant, a statement trigger rejects
+`audit_log` is append-only: the app and system roles have no UPDATE/DELETE grant, a statement trigger rejects
 UPDATE/DELETE/TRUNCATE, and each row is hash-chained (SHA-256 of the previous hash + row content) by a
-`SECURITY DEFINER` trigger. `audit_log_verify()` (Admin → Audit → Verify integrity) detects tampering by
+`SECURITY DEFINER` trigger. Rows written since migration 0022 (`hash_version` 2) also cover the source IP. `audit_log_verify()` (Admin → Audit → Verify integrity) detects tampering by
 anyone who bypasses the triggers.
 
 ## Containment safety
@@ -41,8 +41,14 @@ anyone who bypasses the triggers.
 - Destructive actions (isolate, disable identity, block IOC, kill process) always create an approval
   unless a **platform administrator** enabled auto-containment for that customer — and then only for
   playbook-initiated actions.
-- AI-originated actions are always approval-gated, regardless of tenant settings.
-- Approvals expire after 24h; decisions and executions are audited and placed on the incident timeline.
+- Every AI-proposed action is approval-gated, destructive or not (releasing an endpoint or unblocking an IOC
+  included), regardless of tenant settings (`responseNeedsApproval` in `src/lib/soar/response.ts`).
+- Approvals expire after 24h. A worker job expires them every 5 minutes, rejects the waiting response action
+  or DFIR collection, and cancels the waiting playbook run. Decisions, expiries and executions are audited and
+  placed on the incident timeline.
+- Integration URLs go through an egress guard (`src/lib/net/egress.ts`) that refuses cloud metadata and
+  link-local addresses for every connector, and private addresses for SaaS endpoints (webhooks, Teams, Slack,
+  Azure OpenAI). The check runs on each connection, so DNS answers that change after a check are covered.
 
 ## AI
 
@@ -102,4 +108,4 @@ A domain must pass TXT verification before a breach check runs. Each stored row 
 - Set strong `BETTER_AUTH_SECRET`, `BLAKSOC_ENCRYPTION_KEY`, DB/Redis passwords; rotate via your secret manager.
 - TLS everywhere; Wazuh/OpenCTI CAs can be pinned per integration (`caPem`) instead of disabling verification.
 - Keep `DEMO_MODE=false`. Store break-glass credentials + TOTP backup codes sealed and test them quarterly.
-- The shipped worker NetworkPolicy allows cluster-internal egress only. Do not set `networkPolicy.egressCidrs` to `0.0.0.0/0` or `::/0`. Add a CIDR only for a host already pinned to an Australian region.
+- The shipped NetworkPolicies give web and worker cluster-internal egress plus public TCP 443 (`networkPolicy.publicHttps`), with private, link-local (cloud metadata), CGNAT and loopback ranges excluded. Set `publicHttps: false` for an air-gapped install. Add the VPC CIDR of a managed Postgres or Redis to `networkPolicy.egressCidrs`. Do not set `egressCidrs` to `0.0.0.0/0` or `::/0`.

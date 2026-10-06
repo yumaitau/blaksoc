@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS dashboard_readers (
   tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE
 );
 REVOKE ALL ON TABLE dashboard_readers FROM PUBLIC;
-REVOKE ALL ON TABLE dashboard_readers FROM blaksoc_app;
+REVOKE ALL ON TABLE dashboard_readers FROM blaksoc_app, blaksoc_system;
 
 CREATE OR REPLACE FUNCTION app_reader_tenant() RETURNS uuid
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
@@ -116,12 +116,12 @@ REVOKE ALL ON FUNCTION app_partner_consented(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_can_touch(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_can_see_tenant(uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION app_reader_tenant() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION app_is_partner(uuid) TO blaksoc_app;
-GRANT EXECUTE ON FUNCTION app_partner_customer(uuid) TO blaksoc_app;
-GRANT EXECUTE ON FUNCTION app_partner_consented(uuid) TO blaksoc_app;
-GRANT EXECUTE ON FUNCTION app_can_touch(uuid) TO blaksoc_app;
-GRANT EXECUTE ON FUNCTION app_can_see_tenant(uuid) TO blaksoc_app;
-GRANT EXECUTE ON FUNCTION app_reader_tenant() TO blaksoc_app;
+GRANT EXECUTE ON FUNCTION app_is_partner(uuid) TO blaksoc_app, blaksoc_system;
+GRANT EXECUTE ON FUNCTION app_partner_customer(uuid) TO blaksoc_app, blaksoc_system;
+GRANT EXECUTE ON FUNCTION app_partner_consented(uuid) TO blaksoc_app, blaksoc_system;
+GRANT EXECUTE ON FUNCTION app_can_touch(uuid) TO blaksoc_app, blaksoc_system;
+GRANT EXECUTE ON FUNCTION app_can_see_tenant(uuid) TO blaksoc_app, blaksoc_system;
+GRANT EXECUTE ON FUNCTION app_reader_tenant() TO blaksoc_app, blaksoc_system;
 
 DO $$
 DECLARE
@@ -188,6 +188,7 @@ DROP POLICY IF EXISTS tenant_isolation ON tenants;
 DROP POLICY IF EXISTS platform_write ON tenants;
 DROP POLICY IF EXISTS tenant_insert ON tenants;
 DROP POLICY IF EXISTS tenant_partner_update ON tenants;
+DROP POLICY IF EXISTS tenant_partner_customer_update ON tenants;
 CREATE POLICY tenant_isolation ON tenants FOR SELECT USING (app_can_see_tenant(id));
 CREATE POLICY platform_write ON tenants USING (app_is_platform()) WITH CHECK (app_is_platform());
 CREATE POLICY tenant_insert ON tenants FOR INSERT
@@ -195,6 +196,10 @@ CREATE POLICY tenant_insert ON tenants FOR INSERT
 CREATE POLICY tenant_partner_update ON tenants FOR UPDATE
   USING (app_is_partner(id) AND id = ANY (app_grant_ids()))
   WITH CHECK (app_is_partner(id) AND id = ANY (app_grant_ids()));
+-- A partner admin may update a customer under it while that customer's consent is active.
+CREATE POLICY tenant_partner_customer_update ON tenants FOR UPDATE
+  USING (app_partner_consented(id))
+  WITH CHECK (app_partner_consented(id));
 
 ALTER TABLE partner_consents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE partner_consents FORCE ROW LEVEL SECURITY;

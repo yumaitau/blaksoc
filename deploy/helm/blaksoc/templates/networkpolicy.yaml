@@ -3,9 +3,10 @@
 # External scans run only on the worker (queue `surface`, job `scan`).
 # Per tenant: 1 scan at a time, 6 hosts per minute (src/lib/asm/scan.ts SCAN_LIMITS).
 # A scan starts only after an asm.attest audit row. Fixture mode opens no sockets.
-# Worker egress is cluster-internal. The shipped profile has no egress CIDR.
-# Do not set networkPolicy.egressCidrs to 0.0.0.0/0 or ::/0.
-# Do not add that egress to web.
+# Egress for both: cluster-internal (including DNS), public TCP 443 when
+# networkPolicy.publicHttps is true (private, metadata and loopback ranges excluded,
+# so a misconfigured integration URL cannot reach internal services), and any CIDRs in
+# networkPolicy.egressCidrs. Do not set egressCidrs to 0.0.0.0/0 or ::/0.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,11 +14,12 @@ metadata:
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: web }
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
   ingress:
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }} } }
       ports: [{ port: 3000 }]
+{{- include "blaksoc.egress" . }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -28,12 +30,5 @@ spec:
     matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
   policyTypes: [Ingress, Egress]
   ingress: []
-  egress:
-    - to: [{ namespaceSelector: {} }]
-    {{- if .Values.networkPolicy.egressCidrs }}
-    - to:
-      {{- range .Values.networkPolicy.egressCidrs }}
-        - ipBlock: { cidr: {{ . | quote }} }
-      {{- end }}
-    {{- end }}
+{{- include "blaksoc.egress" . }}
 {{- end }}

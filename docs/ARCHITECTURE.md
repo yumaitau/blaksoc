@@ -22,9 +22,14 @@ alerts / observables / intel_matches rows (RLS scope = that tenant)  →  Redis 
 evaluateTriggers("alert.created")  →  playbook runs  →  approval gates  →  response actions
 ```
 
-Scheduled jobs (`src/worker/index.ts`): alert poll 30s, in-flight response action status 30s, asset sync 15m, vulnerability sync 1h,
-integration health 5m, Sigma deployments 5m, CISA KEV + FIRST EPSS + OpenCTI CVE context 6h,
-ACSC/CISA advisories 1h.
+Scheduled jobs (`src/worker/index.ts`, `SCHEDULES`): alert poll 30s, in-flight response action status 30s,
+Kelpie sync and escalations 1m, integration health and tenant health 5m, Sigma deployments 5m, approval expiry 5m,
+asset sync, DFIR release and attested surface scans 15m, vulnerability sync, syslog archive, ACSC/CISA advisories and
+board summaries 1h, CISA KEV + FIRST EPSS + OpenCTI CVE context 6h.
+
+Notifications: webhook, Teams and Slack integrations list the bus events they want (`events` in their config).
+`publish()` queues a `notify` job for subscribed event types; the worker sends one delivery job per integration,
+which BullMQ retries with backoff and keeps on failure.
 
 ## Provider abstraction
 
@@ -57,8 +62,9 @@ Playbook = trigger (event + conditions) + ordered steps (`when` guards, `require
 `continueOnError`). Non-destructive steps: OpenCTI enrichment, asset/endpoint context, incident creation,
 notification, record note, explicit approval gate. Response steps (isolate, disable identity, block IOC…)
 always go through `requestResponseAction()`, which creates an approval unless the tenant has
-admin-enabled auto-containment and the requester is a playbook (never AI). Runs pause at gates and resume
-when a human decides.
+admin-enabled auto-containment and the requester is a playbook. Anything an AI proposes waits for a human,
+destructive or not. Runs pause at gates and resume when a human decides; a gate nobody decides expires after 24h
+and cancels the run. Each run stores the steps it started with, so editing a playbook never changes a run in flight.
 
 Most providers finish a response action in the call. Endpoint agents that act on their next check-in
 (Tawny) return `pending` with a provider reference; the action stays `EXECUTING`, the worker asks

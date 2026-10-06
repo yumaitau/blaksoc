@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { adminDb } from "@/db/client";
+import { systemDb } from "@/db/client";
 import { assetSources, assets, detectionDeployments, integrations, integrationTenantLinks, sigmaRules, vulnerabilities } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
@@ -18,14 +18,14 @@ import { wazuhLevelToSeverity } from "@/lib/providers/wazuh";
 type Log = (m: string) => void;
 
 async function eventIntegrations(): Promise<IntegrationRow[]> {
-  const rows = await adminDb().select().from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, ["siem", "endpoint", "identity"])));
+  const rows = await systemDb().select().from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, ["siem", "endpoint", "identity"])));
   return rows.filter((r) => connectorDef(r.provider)?.capabilities.includes("events"));
 }
 
 /** Which tenants a SIEM integration serves: its owner, or its tenant links for shared clusters. */
 async function tenantLinks(row: IntegrationRow) {
   if (row.tenantId) return [{ tenantId: row.tenantId, selector: {} as { agentGroups?: string[] } }];
-  return adminDb().select({ tenantId: integrationTenantLinks.tenantId, selector: integrationTenantLinks.selector }).from(integrationTenantLinks).where(eq(integrationTenantLinks.integrationId, row.id));
+  return systemDb().select({ tenantId: integrationTenantLinks.tenantId, selector: integrationTenantLinks.selector }).from(integrationTenantLinks).where(eq(integrationTenantLinks.integrationId, row.id));
 }
 
 async function tierOfTenant(): Promise<(id: string) => Tier> {
@@ -40,7 +40,7 @@ function allowedLinks<T extends { tenantId: string }>(links: T[], tierOf: (id: s
 
 async function markHealth(row: IntegrationRow, ok: boolean, error?: string) {
   const now = new Date();
-  await adminDb()
+  await systemDb()
     .update(integrations)
     .set(ok ? { status: "healthy", lastSuccessAt: now } : { status: "error", lastError: error ?? "unknown", lastErrorAt: now })
     .where(eq(integrations.id, row.id));
@@ -76,7 +76,7 @@ export async function syncAllVulnerabilities(log: Log) {
     const provider = eventProvider(row);
     if (!provider.getVulnerabilities) continue;
     try {
-      const sources = await adminDb().select().from(assetSources).where(eq(assetSources.integrationId, row.id));
+      const sources = await systemDb().select().from(assetSources).where(eq(assetSources.integrationId, row.id));
       const byExt = new Map(sources.map((s) => [s.externalId, s]));
       const vulns = await provider.getVulnerabilities();
       const byTenant = new Map<string, typeof vulns>();
@@ -119,7 +119,7 @@ export async function pollAlerts(log: Log) {
       // Leave the cursor where it is when nobody on this integration may collect.
       if (!live.size) continue;
       // Route by the provider's asset id; built from asset inventory (system-level map).
-      const sources = await adminDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
+      const sources = await systemDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
       const agentTenant = new Map(sources.map((s) => [s.externalId, s.tenantId]));
       const fallbackTenant = row.tenantId ?? (links.length === 1 ? links[0]!.tenantId : null);
 
@@ -142,7 +142,7 @@ export async function pollAlerts(log: Log) {
       for (const a of alerts) {
         const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
         if (!tenantId || !live.has(tenantId)) continue;
-        if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(adminDb(), tenantId));
+        if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(systemDb(), tenantId));
         const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
         if (res.created) {
           n++;
@@ -162,24 +162,24 @@ export async function pollAlerts(log: Log) {
 /** Scheduled Sigma deployments: run each active query against its tenant's SIEM. */
 export async function runDetections(log: Log) {
   const tierOf = await tierOfTenant();
-  const deps = await adminDb()
+  const deps = await systemDb()
     .select({ d: detectionDeployments, rule: sigmaRules })
     .from(detectionDeployments)
     .innerJoin(sigmaRules, eq(sigmaRules.id, detectionDeployments.ruleId))
     .where(and(eq(detectionDeployments.status, "active"), eq(sigmaRules.enabled, true)));
   for (const { d, rule } of deps) {
     if (!d.integrationId) continue;
-    const [row] = await adminDb().select().from(integrations).where(eq(integrations.id, d.integrationId));
+    const [row] = await systemDb().select().from(integrations).where(eq(integrations.id, d.integrationId));
     if (!row || row.provider === "demo") continue;
     if (!collectionAllowed(tierOf(d.tenantId), row.provider)) continue;
     try {
       const provider = eventProvider(row);
       // The provider runs this rule itself (e.g. Tawny); its hits arrive through the alert poll.
       if (provider.deployDetection) continue;
-      const agents = await adminDb().select({ externalId: assetSources.externalId }).from(assetSources).where(and(eq(assetSources.integrationId, row.id), eq(assetSources.tenantId, d.tenantId)));
+      const agents = await systemDb().select({ externalId: assetSources.externalId }).from(assetSources).where(and(eq(assetSources.integrationId, row.id), eq(assetSources.tenantId, d.tenantId)));
       const since = d.lastRunAt ?? new Date(Date.now() - 15 * 60_000);
       const res = await provider.searchEvents({ query: d.query, since, routingKeys: agents.map((a) => `agent:${a.externalId}`), limit: 100 });
-      const intel = await intelProviderFor(adminDb(), d.tenantId);
+      const intel = await intelProviderFor(systemDb(), d.tenantId);
       for (const ev of res.events) {
         const e = ev as { _id: string; timestamp?: string; agent?: { id?: string; name?: string } };
         const level = { informational: 3, low: 5, medium: 8, high: 11, critical: 14 }[rule.severity];
@@ -196,7 +196,7 @@ export async function runDetections(log: Log) {
         });
         if (r.created) await evaluateTriggers(d.tenantId, "alert.created", { alertId: r.alertId });
       }
-      await adminDb().update(detectionDeployments).set({ lastRunAt: new Date(), lastHitCount: res.total }).where(eq(detectionDeployments.id, d.id));
+      await systemDb().update(detectionDeployments).set({ lastRunAt: new Date(), lastHitCount: res.total }).where(eq(detectionDeployments.id, d.id));
     } catch (e) {
       log(`detection ${rule.title} (${d.tenantId.slice(0, 8)}) failed: ${(e as Error).message}`);
     }
@@ -205,14 +205,14 @@ export async function runDetections(log: Log) {
 
 /** Health probe for every enabled integration (not just SIEMs). */
 export async function probeHealth(log: Log) {
-  const rows = await adminDb().select().from(integrations).where(eq(integrations.enabled, true));
+  const rows = await systemDb().select().from(integrations).where(eq(integrations.enabled, true));
   const { instantiate } = await import("@/lib/connectors/instances");
   for (const row of rows) {
     try {
       const inst = instantiate(row);
       if (inst.kind === "notify") continue;
       const h = await inst.provider.health();
-      await adminDb()
+      await systemDb()
         .update(integrations)
         .set({ health: h as never, status: h.ok ? "healthy" : "error", ...(h.ok ? { lastSuccessAt: new Date() } : { lastError: h.error ?? "health check failed", lastErrorAt: new Date() }) })
         .where(eq(integrations.id, row.id));
@@ -224,5 +224,5 @@ export async function probeHealth(log: Log) {
 }
 
 export async function tenantsWithAssets() {
-  return (await adminDb().selectDistinct({ id: assets.tenantId }).from(assets)).map((r) => r.id);
+  return (await systemDb().selectDistinct({ id: assets.tenantId }).from(assets)).map((r) => r.id);
 }

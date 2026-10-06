@@ -1,5 +1,5 @@
 import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
-import { adminDb, type DbOrTx } from "@/db/client";
+import { systemDb, type DbOrTx } from "@/db/client";
 import { alerts, assets, integrations, tenantPlans, tenants, usageDaily } from "@/db/schema";
 import type { AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -61,7 +61,7 @@ export async function loadPlan(tx: DbOrTx, tenantId: string): Promise<Plan> {
 }
 
 export async function plansByTenant(): Promise<Map<string, Tier>> {
-  const rows = await adminDb().select({ tenantId: tenantPlans.tenantId, tier: tenantPlans.tier }).from(tenantPlans);
+  const rows = await systemDb().select({ tenantId: tenantPlans.tenantId, tier: tenantPlans.tier }).from(tenantPlans);
   return new Map(rows.map((r) => [r.tenantId, asTier(r.tier)]));
 }
 

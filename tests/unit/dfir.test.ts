@@ -35,3 +35,15 @@ describe("velociraptor fixture", () => {
     expect(LOW_BANDWIDTH_HOSTS).toBe(3);
   });
 });
+
+describe("velociraptor connector", () => {
+  it("instantiates for health checks instead of throwing", async () => {
+    const { connectorDef } = await import("@/lib/connectors/registry");
+    const def = connectorDef("velociraptor")!;
+    const fixture = def.create!(def.config.parse({}), {});
+    const live = def.create!(def.config.parse({ mode: "live" }), {});
+    if (fixture.kind !== "dfir" || live.kind !== "dfir") throw new Error("expected a dfir instance");
+    await expect(fixture.provider.health()).resolves.toMatchObject({ ok: true, detail: { mode: "fixture" } });
+    await expect(live.provider.health()).resolves.toMatchObject({ ok: false });
+  });
+});
