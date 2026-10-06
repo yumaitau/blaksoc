@@ -1,6 +1,7 @@
 import {
   bigserial, boolean, doublePrecision, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
 } from "drizzle-orm/pg-core";
+import type { Authentication, DetectionFinding, NetworkActivity } from "@/lib/ocsf/schema";
 import { user } from "./auth";
 import { sites, tenants } from "./platform";
 
@@ -186,6 +187,12 @@ export const alerts = pgTable(
     intelVerdict: text("intel_verdict").notNull().default("unchecked"),
     incidentId: uuid("incident_id").references(() => incidents.id, { onDelete: "set null" }),
     raw: jsonb("raw"),
+    /** The alert as an OCSF Detection Finding (2004). See src/lib/ocsf. */
+    ocsf: jsonb("ocsf").$type<DetectionFinding>(),
+    /** The source record in its OCSF activity class, when blakSOC maps one (syslog → 4001, Entra sign-in → 3002). */
+    ocsfSourceEvent: jsonb("ocsf_source_event").$type<NetworkActivity | Authentication>(),
+    /** Mapper version that wrote `ocsf` (NORMALIZATION_VERSION). Null when no OCSF record was written. */
+    normalizationVersion: text("normalization_version"),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

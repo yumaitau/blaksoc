@@ -17,6 +17,8 @@ filterByEntitlement()  drop commercial-feed intel the tenant isn't licensed for
 scoreAlert()  SIEM severity + asset criticality + exposure + identity privilege + intel
               + KEV/EPSS + high-impact ATT&CK + repetition + active incident  → 0–100 + factors
       ▼
+ocsfForAlert() + validateOcsf()  Detection Finding (+ Network Activity / Authentication source record)
+      ▼
 alerts / observables / intel_matches rows (RLS scope = that tenant)  →  Redis pub/sub → SSE
       ▼
 evaluateTriggers("alert.created")  →  playbook runs  →  approval gates  →  response actions
@@ -39,6 +41,12 @@ Nothing outside an adapter touches vendor shapes. New SIEM = one class + one con
 
 `IntelProvider` (`src/lib/intel/types.ts`) plays the same role for CTI; OpenCTI is the implementation,
 and blakSOC stores only what it needs locally (CVE scoring context, advisories, sector tags, per-tenant matches).
+
+## Canonical event schema
+
+Alerts are stored with an OCSF Detection Finding and, where blakSOC maps the source record, that record in its
+OCSF activity class. Provenance (source, source event id, tenant, ingestion time, normaliser version) is in OCSF
+`metadata`; the vendor payload stays in `alerts.raw`. See [ocsf.md](ocsf.md).
 
 ## Risk scores are explainable by construction
 

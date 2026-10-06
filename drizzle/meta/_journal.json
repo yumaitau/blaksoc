@@ -169,6 +169,13 @@
       "when": 1790616000000,
       "tag": "0023_playbook_run_steps",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790617000000,
+      "tag": "0024_alert_ocsf",
+      "breakpoints": true
     }
   ]
 }
