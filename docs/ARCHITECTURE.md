@@ -34,6 +34,15 @@ Notifications: webhook, Teams and Slack integrations list the bus events they wa
 `publish()` queues a `notify` job for subscribed event types; the worker sends one delivery job per integration,
 which BullMQ retries with backoff and keeps on failure.
 
+## Data retention
+
+Alerts are purged every 6 hours by severity (`ALERT_RETENTION_DAYS` in `src/lib/services/retention.ts`):
+informational 30 days, low and medium 180, high and critical 365. Alerts linked to an incident are kept with
+the incident. A purge deletes in batches of 1,000, removes the alert's graph node and evidence, and writes one
+`retention.purge_alerts` audit row per tenant with the counts. The Wazuh indexer keeps alert indices for 90 days
+(ISM policy `blaksoc-alerts-90d`, installed by `deploy/aws/wazuh-host.sh`). Not yet covered: per-tenant
+retention, legal hold, and enforcing `retain_until` on archived syslog (#101).
+
 ## Provider abstraction
 
 `SecurityEventProvider` (`src/lib/providers/types.ts`): `getAlerts`, `getAlert`, `searchEvents`,

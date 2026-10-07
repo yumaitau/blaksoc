@@ -106,6 +106,23 @@ YML
 docker compose -f docker-compose.yml -f blaksoc-overlay.yml up -d
 echo "wazuh stack started"
 
+# Retention: alert indices are deleted after 90 days; vulnerability and inventory state indices hold current
+# state only and are not touched. Raw-log archiving (logall) stays off. See docs/disaster-recovery.md.
+for _ in $(seq 1 60); do curl -sk -o /dev/null -u "admin:$INDEXER_PASSWORD" https://localhost:9200 && break; sleep 5; done
+curl -sk -u "admin:$INDEXER_PASSWORD" -X PUT "https://localhost:9200/_plugins/_ism/policies/blaksoc-alerts-90d" -H 'Content-Type: application/json' -d '{
+  "policy": {
+    "description": "blakSOC: delete Wazuh alert and monitoring indices 90 days after creation",
+    "default_state": "hot",
+    "states": [
+      { "name": "hot", "actions": [], "transitions": [{ "state_name": "delete", "conditions": { "min_index_age": "90d" } }] },
+      { "name": "delete", "actions": [{ "delete": {} }], "transitions": [] }
+    ],
+    "ism_template": [{ "index_patterns": ["wazuh-alerts-*", "wazuh-archives-*", "wazuh-monitoring-*", "wazuh-statistics-*"], "priority": 100 }]
+  }
+}' | jq -c '{ism_policy: (._id // .error.type)}'
+# The template only covers indices created from now on; attach existing ones that have no policy yet.
+curl -sk -u "admin:$INDEXER_PASSWORD" -X POST "https://localhost:9200/_plugins/_ism/add/wazuh-alerts-*,wazuh-monitoring-*,wazuh-statistics-*" -H 'Content-Type: application/json' -d '{"policy_id":"blaksoc-alerts-90d"}' | jq -c '{attached: .updated_indices, failed: .failures}'
+
 # Local rules (blakSOC tuning), applied through the API once the manager answers.
 API_URL=https://localhost:55000
 for _ in $(seq 1 60); do curl -sk -o /dev/null "$API_URL" && break; sleep 5; done
