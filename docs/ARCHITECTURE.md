@@ -40,6 +40,34 @@ which BullMQ retries with backoff and keeps on failure.
 `getAssets`, `getAsset`, `getVulnerabilities?`, `supportedActions`, `executeResponseAction`, `health`.
 Nothing outside an adapter touches vendor shapes. New SIEM = one class + one connector definition.
 
+### Query-in-place search
+
+`SecurityDataProvider` (`src/lib/providers/data.ts`) reads events where they live and returns OCSF events
+with provenance; nothing is copied into Postgres. `capabilities()` declares search, event lookup, entity
+activity, OCSF classes, the longest range, paging, free-text syntax, typed filters (`severity`, `host`,
+`user`, `ip`, `ruleId`) and tiers. `search()` takes time bounds, typed filters, free text, page size and an
+opaque cursor; `getEvent(id)`, `getEntityActivity(entity, range)` and `health()` complete it.
+
+An event provider opts in with `dataProvider(scope)`, which binds it to one tenant's slice of the source
+(`TenantDataScope`). Existing providers keep working unchanged; connectors without an adapter declare
+`NO_DATA_CAPABILITIES` through the registry (`data` on the connector definition, `dataCapabilitiesOf()`).
+
+| Source | Reads | Tenant filter | Paging | OCSF |
+| --- | --- | --- | --- | --- |
+| Wazuh | `wazuh-alerts-*`, plus `archivesIndex` when configured, through the SSRF-guarded fetch | `terms` on the tenant's agent ids (asset_sources + link selector) on a shared cluster; no query at all when the tenant has no agents | `search_after` on `timestamp`, `_id` | Detection Finding; Base Event for records with no rule |
+| Syslog | Hot lines in `syslog_events`; cold lines from the AU archive object store (`scanArchive`, capped per page) | The integration's stamped owner, under that tenant's RLS scope | Keyset on receive time per tier | Network Activity; Base Event when no IPs |
+| Demo | Deterministic synthetic events for the seeded cluster | Tenant's agents | Slot cursor | Detection Finding |
+
+`src/lib/services/search.ts` federates a tenant's sources: it resolves every enabled event integration
+serving the tenant (tenant-owned, or platform-owned with a tenant link), runs them in parallel with a
+per-source timeout, and reports each as `ok`, `partial`, `error` or `unsupported` (no adapter, a typed
+filter it cannot apply, or not in the tenant's plan). One failing source never fails the search. Searching
+needs `alert:triage` in the tenant and the first page of each search is audited (`event.search`).
+`listTenantDataSources()` and `connectorDataCapabilities()` expose capability discovery.
+
+The alert queue's free text uses a generated `tsvector` with a GIN index (`alerts.search_vector`,
+migration 0033) alongside the substring match on title, user and asset.
+
 `IntelProvider` (`src/lib/intel/types.ts`) plays the same role for CTI; OpenCTI is the implementation,
 and blakSOC stores only what it needs locally (CVE scoring context, advisories, sector tags, per-tenant matches).
 
@@ -160,6 +188,7 @@ Most providers finish a response action in the call. Endpoint agents that act on
 | `/soc` | SOC dashboard: what is happening, what matters, who is affected, what next, what was done |
 | `/soc/mssp` | Per-customer roll-up; enter a customer workspace |
 | `/soc/alerts`, `/soc/alerts/[id]` | Unified queue (saved views, bulk actions) and alert detail with risk factors + intel |
+| `/soc/hunt` | Event search across a customer's sources in place (Wazuh, syslog, cold syslog archive) with per-source status |
 | `/soc/incidents`, `/soc/incidents/[id]` | Case management with visual timeline, evidence, tasks, containment |
 | `/soc/approvals` | Human approval gates |
 | `/soc/entities/[id]` | Entity: identifiers, aliases, neighbours by relationship with provenance and evidence, reach within 3 hops |

@@ -22,6 +22,7 @@ export const NAV: NavGroup[] = [
   {
     label: "Investigate",
     items: [
+      { href: "/soc/hunt", label: "Event search", icon: "SearchCode", perm: "alert:triage" },
       { href: "/assets", label: "Assets", icon: "Server", perm: "asset:read" },
       { href: "/vulnerabilities", label: "Vulnerabilities", icon: "Bug", perm: "vuln:read" },
       { href: "/intel", label: "Threat intelligence", icon: "Radar", perm: "intel:read", platformOnly: true },

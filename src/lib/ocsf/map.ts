@@ -1,10 +1,10 @@
 import type { Observable } from "@/lib/intel/observables";
 import type { NormalisedAlert, NormalisedVulnerability, Severity } from "@/lib/providers/types";
 import {
-  ACTION_ID, ANALYTIC_TYPE_ID, AUTH_ACTIVITY, AUTH_PROTOCOL_ID, DISPOSITION_ID, FINDING_ACTIVITY, FINDING_STATUS, NETWORK_ACTIVITY,
+  ACTION_ID, ANALYTIC_TYPE_ID, AUTH_ACTIVITY, BASE_ACTIVITY, AUTH_PROTOCOL_ID, DISPOSITION_ID, FINDING_ACTIVITY, FINDING_STATUS, NETWORK_ACTIVITY,
   NORMALIZATION_VERSION, OBSERVABLE_TYPE_ID, OCSF_CLASSES, OCSF_VERSION, SEVERITY_ID, SEVERITY_NAME, STATUS_ID,
-  type Authentication, type DetectionFinding, type NetworkActivity, type OcsfAttack, type OcsfBase, type OcsfClassKey, type OcsfEvidence,
-  type OcsfMetadata, type OcsfObservable, type OcsfProduct, type VulnerabilityFinding,
+  type Authentication, type BaseEvent, type DetectionFinding, type NetworkActivity, type OcsfAttack, type OcsfBase, type OcsfClassKey, type OcsfEvidence,
+  type OcsfDevice, type OcsfEndpoint, type OcsfMetadata, type OcsfObservable, type OcsfProduct, type OcsfUser, type VulnerabilityFinding,
 } from "./schema";
 
 /** Where an event came from and when blakSOC received it. Becomes OCSF metadata. */
@@ -161,6 +161,31 @@ export function syslogToNetworkActivity(alert: NormalisedAlert, p: Provenance): 
     connection_info: { direction_id: 0, ...(str(raw.proto) ? { protocol_name: str(raw.proto)!.toLowerCase() } : {}) },
     ...(alert.hostname ? { device: { type_id: 9, hostname: alert.hostname } } : {}),
     unmapped: { action: raw.action ?? null },
+  };
+}
+
+/**
+ * A record read in place that blakSOC has no activity mapper for, as an OCSF Base Event (0). Search
+ * returns these so an unmapped record is still shown with its time, source and provenance.
+ */
+export function toBaseEvent(
+  e: { time: Date; message: string; severity: Severity; device?: OcsfDevice; user?: OcsfUser; src?: OcsfEndpoint; dst?: OcsfEndpoint; unmapped?: Record<string, unknown> },
+  p: Provenance,
+): BaseEvent {
+  const sev = severityId(e.severity);
+  return {
+    ...classFields("base_event", BASE_ACTIVITY.other, "Other"),
+    class_uid: 0,
+    severity_id: sev,
+    severity: SEVERITY_NAME[sev],
+    time: e.time.getTime(),
+    message: e.message,
+    metadata: ocsfMetadata(p),
+    ...(e.device ? { device: e.device } : {}),
+    ...(e.user ? { user: e.user } : {}),
+    ...(e.src ? { src_endpoint: e.src } : {}),
+    ...(e.dst ? { dst_endpoint: e.dst } : {}),
+    ...(e.unmapped ? { unmapped: e.unmapped } : {}),
   };
 }
 

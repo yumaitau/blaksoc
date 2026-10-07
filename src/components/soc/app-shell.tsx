@@ -1,5 +1,5 @@
 import {
-  Bug, Building2, ChartColumn, FileText, Fingerprint, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow,
+  Bug, Building2, ChartColumn, FileText, Fingerprint, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, SearchCode, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow,
 } from "lucide-react";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { Wordmark } from "./brand";
@@ -9,7 +9,7 @@ import { NavLink } from "./nav-link";
 import { SignOutButton } from "./sign-out";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
-const ICONS = { Bug, Building2, ChartColumn, FileText, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow } as const;
+const ICONS = { Bug, Building2, ChartColumn, FileText, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, SearchCode, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow } as const;
 
 export function AppShell({ ctx, workspace, brand, children }: { ctx: AccessContext; workspace: string; brand?: string | null; children: React.ReactNode }) {
   const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(ctx, i.perm) && (!i.platformOnly || ctx.isPlatform) && (!i.customerOnly || !ctx.isPlatform) && !(i.href === "/portal" && ctx.isPlatform)) })).filter((g) => g.items.length);

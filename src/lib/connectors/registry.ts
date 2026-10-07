@@ -5,12 +5,13 @@ import type { IntelProvider } from "@/lib/intel/types";
 import { googleWorkspaceConnector } from "@/lib/providers/google/connector";
 import { entraConnector } from "@/lib/providers/m365/connector";
 import { CloudflareProvider, DefenderProvider, FortinetProvider, SophosProvider } from "@/lib/providers/containment";
-import { DemoProvider } from "@/lib/providers/demo";
+import { NO_DATA_CAPABILITIES, type DataCapabilities } from "@/lib/providers/data";
+import { DEMO_DATA_CAPABILITIES, DemoProvider } from "@/lib/providers/demo";
 import type { ProviderHealth, SecurityEventProvider } from "@/lib/providers/types";
-import { SyslogProvider } from "@/lib/providers/syslog";
+import { SYSLOG_DATA_CAPABILITIES, SyslogProvider } from "@/lib/providers/syslog";
 import { TawnyProvider } from "@/lib/providers/tawny";
 import { VeeamProvider } from "@/lib/providers/veeam";
-import { WazuhProvider } from "@/lib/providers/wazuh";
+import { WAZUH_DATA_CAPABILITIES, WazuhProvider } from "@/lib/providers/wazuh";
 import { veeamConfig } from "@/lib/backup/status";
 import { BedrockProvider, OpenAICompatibleProvider } from "@/lib/ai/providers";
 import type { AIProvider } from "@/lib/ai/types";
@@ -44,6 +45,8 @@ export type ConnectorDefinition = {
   description: string;
   status: "available" | "planned";
   capabilities: Capability[];
+  /** Query-in-place event access (src/lib/providers/data.ts). Omitted: the connector cannot be searched. */
+  data?: DataCapabilities;
   /** Permissions the connector needs in the remote system (documented to admins). */
   remotePermissions: string[];
   config: z.ZodType<Record<string, unknown>>;
@@ -66,14 +69,16 @@ export const CONNECTORS: ConnectorDefinition[] = [
     description: "SIEM/XDR telemetry: alerts from the Wazuh indexer, agent inventory, vulnerability states and active response via the Wazuh API.",
     status: "available",
     capabilities: ["events", "assets", "vulnerabilities", "response"],
+    data: WAZUH_DATA_CAPABILITIES,
     remotePermissions: [
       "Wazuh API user with agents:read, active-response:command, cluster:read",
-      "Indexer user with read on wazuh-alerts-* and wazuh-states-vulnerabilities-*",
+      "Indexer user with read on wazuh-alerts-* and wazuh-states-vulnerabilities-* (and wazuh-archives-* when archive search is configured)",
     ],
     config: z.object({
       apiUrl: z.string().url(),
       indexerUrl: z.string().url(),
       alertsIndex: z.string().optional(),
+      archivesIndex: z.string().optional(),
       vulnerabilitiesIndex: z.string().optional(),
       activeResponse: z.record(z.string(), z.union([z.string(), z.object({ windows: z.string().optional(), default: z.string() })])).optional(),
       region: z.enum(["ap-southeast-2", "ap-southeast-4"]),
@@ -89,6 +94,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
     description: "Synthetic Wazuh-shaped telemetry for demonstrations and training. Never use for customers.",
     status: "available",
     capabilities: ["events", "assets", "response"],
+    data: DEMO_DATA_CAPABILITIES,
     remotePermissions: [],
     config: z.object({ agents: z.array(z.object({ id: z.string(), name: z.string(), group: z.string(), os: z.string(), ip: z.string() })) }),
     secrets: z.object({}),
@@ -101,6 +107,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
     description: "Per-tenant syslog from small-office firewalls. Vector forwards each line. Parsers cover UniFi, Sophos, FortiGate, MikroTik, and DrayTek.",
     status: "available",
     capabilities: ["events"],
+    data: SYSLOG_DATA_CAPABILITIES,
     remotePermissions: ["TLS syslog listener or Vector HTTP sink using a per-tenant bearer token"],
     config: z.object({
       tenantId: z.string().uuid().optional(),
@@ -383,6 +390,11 @@ export const CONNECTORS: ConnectorDefinition[] = [
 
 export function connectorDef(provider: string): ConnectorDefinition | undefined {
   return CONNECTORS.find((c) => c.provider === provider);
+}
+
+/** Declared query-in-place capabilities. Connectors without a data adapter report no search. */
+export function dataCapabilitiesOf(provider: string): DataCapabilities {
+  return connectorDef(provider)?.data ?? NO_DATA_CAPABILITIES;
 }
 
 function aiConnectors(): ConnectorDefinition[] {
