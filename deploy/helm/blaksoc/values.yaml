@@ -45,8 +45,47 @@ config:
   WAZUH_INDEXER_REGION: ap-southeast-2
   OPENCTI_REGION: ap-southeast-2
   BREAK_GLASS_REQUIRE_MFA: "true"
-  # Worker root is read-only. This emptyDir path dies with the pod; mount a volume for a durable archive.
+  # File-store fallback for the syslog archive when archive.s3.buckets is empty. The worker root is
+  # read-only and this path is on the /tmp emptyDir, so objects DIE WITH THE POD. Dev only.
   BLAKSOC_ARCHIVE_DIR: /tmp/blaksoc-archive
+
+# Durable syslog archive: AWS S3 or an S3-compatible store, Australian regions only. Set at least
+# one bucket in production. Credentials come from the service account (IRSA / EKS Pod Identity) or
+# optional existingSecret keys BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID and BLAKSOC_ARCHIVE_S3_SECRET_ACCESS_KEY.
+archive:
+  s3:
+    buckets: {}            # e.g. { ap-southeast-2: blaksoc-archive-syd, ap-southeast-4: blaksoc-archive-mel }
+    endpoint: ""           # S3-compatible endpoint (MinIO, an Australian provider); empty = AWS S3
+    forcePathStyle: ""     # empty = path style when endpoint is set
+    sse: AES256            # or aws:kms
+    kmsKeyId: ""
+
+# Worker and backup pods run as this account. Annotate it for IRSA, or bind it with EKS Pod Identity.
+serviceAccount:
+  create: false
+  name: ""                 # empty = <release>-blaksoc when create is true, else the namespace default
+  annotations: {}
+
+# Logical Postgres backup (deploy/backup/pg-backup.sh): pg_dump -Fc with the owner URL from
+# existingSecret (DATABASE_ADMIN_URL), uploaded with server-side encryption to an AU bucket.
+# On RDS this is the second copy; automated backups and PITR are the first (docs/disaster-recovery.md).
+backup:
+  enabled: false
+  schedule: "15 */6 * * *"   # every 6 hours: the logical-backup RPO
+  bucket: ""
+  region: ap-southeast-2     # ap-southeast-2 or ap-southeast-4; anything else fails the render
+  prefix: postgres/
+  keep: 28                   # dumps kept (7 days at 6-hourly); add a bucket lifecycle rule as backstop
+  sse: AES256                # or aws:kms
+  kmsKeyId: ""
+  endpoint: ""               # S3-compatible endpoint; empty = AWS S3
+  # pg_dump's major version must be >= the server's. Pin both images by digest in production.
+  pgImage: postgres:16-alpine
+  uploadImage: amazon/aws-cli:2.22.0
+  activeDeadlineSeconds: 3600
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 1Gi }
 
 web:
   replicas: 2

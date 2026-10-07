@@ -2,7 +2,7 @@
   "name": "blaksoc",
   "version": "0.1.0",
   "private": true,
-  "description": "blakSOC \u2014 sovereign-capable multi-tenant SOC control plane by Yuma IT",
+  "description": "blakSOC — sovereign-capable multi-tenant SOC control plane by Yuma IT",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "scripts": {
@@ -21,10 +21,12 @@
     "db:attack": "tsx --env-file-if-exists=.env.local src/db/import-attack.ts",
     "db:graph-backfill": "tsx --env-file-if-exists=.env.local src/db/graph-backfill.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "drill:restore": "tsx --env-file-if-exists=.env.local scripts/restore-drill.ts",
     "build:worker": "esbuild src/worker/index.ts src/db/migrate.ts src/db/seed.ts src/db/graph-backfill.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outdir=dist --out-extension:.js=.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1141.0",
+    "@aws-sdk/client-s3": "^3.1147.0",
     "@better-auth/passkey": "^1.7.7",
     "@better-auth/sso": "^1.7.7",
     "@opentelemetry/api": "^1.9.1",

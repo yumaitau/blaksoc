@@ -1,0 +1,65 @@
+{
+  "label": "local dev drill (not production)",
+  "startedAt": "2026-10-07T07:23:18.104Z",
+  "ok": true,
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 10,
+    "memoryBytes": 17179869184,
+    "postgres": "16.14 (Homebrew)"
+  },
+  "dump": {
+    "file": "blaksoc-20261007T072318Z.dump",
+    "bytes": 493756
+  },
+  "target": "blaksoc_dr_restore",
+  "kept": false,
+  "steps": {
+    "dumpMs": 185,
+    "createMs": 67,
+    "restoreMs": 215,
+    "verifyMs": 22,
+    "dropMs": 880
+  },
+  "rtoMs": 304,
+  "migrations": {
+    "applied": 28,
+    "journal": 28,
+    "pending": []
+  },
+  "audit": {
+    "ok": true,
+    "checked": 934,
+    "firstBadId": null
+  },
+  "systemRole": {
+    "tenants": 4,
+    "ok": true
+  },
+  "counts": {
+    "tenants": 4,
+    "user": 8,
+    "role_assignments": 13,
+    "integrations": 5,
+    "assets": 32,
+    "alerts": 98,
+    "incidents": 10,
+    "evidence": 0,
+    "audit_log": 934,
+    "syslog_archive": 0
+  },
+  "sourceCounts": {
+    "tenants": 4,
+    "user": 8,
+    "role_assignments": 13,
+    "integrations": 5,
+    "assets": 32,
+    "alerts": 98,
+    "incidents": 10,
+    "evidence": 0,
+    "audit_log": 934,
+    "syslog_archive": 0
+  },
+  "countsMatch": true
+}

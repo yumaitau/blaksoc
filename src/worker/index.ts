@@ -1,5 +1,5 @@
 import { Worker, type Job } from "bullmq";
-import { queue, QUEUES, type QueueName } from "@/lib/queue";
+import { QUEUES, type QueueName } from "@/lib/queue";
 import { redisConnectionOptions } from "@/lib/redis";
 import { runDueEscalations } from "@/lib/services/escalation";
 import { runDueClockReminders, runDueObligationReminders } from "@/lib/services/obligations";
@@ -15,6 +15,9 @@ import { syncKelpie } from "@/lib/services/kelpie";
 import { runDueSurface } from "@/lib/services/surface";
 import { runCorrelationAll } from "@/lib/services/correlation";
 import { assertHostingEnv } from "@/lib/hosting/profile";
+import { ArchiveResidencyError, S3ArchiveStore } from "@/lib/hosting/s3-store";
+import { defaultArchiveStore } from "@/lib/hosting/store";
+import { ensureSchedules, SCHEDULE_CHECK_MS, SCHEDULES } from "./schedules";
 import { deliverToIntegration, eventJobPayload, fanOutEvent } from "@/lib/connectors/subscriptions";
 import type { Notification } from "@/lib/connectors/notify";
 import { recordSchedules } from "@/lib/obs/heartbeat";
@@ -97,33 +100,35 @@ const handlers: Record<QueueName, Handler> = {
   [QUEUES.surface]: async () => runDueSurface(),
 };
 
-/** Repeatable schedules. Upserted on boot so config changes apply on redeploy. */
-const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
-  { queue: QUEUES.ingest, name: "poll", every: 30_000 },
-  { queue: QUEUES.ingest, name: "syslog-retain", every: 60 * 60_000 },
-  { queue: QUEUES.response, name: "poll-pending", every: 30_000 },
-  { queue: QUEUES.response, name: "expire-approvals", every: 5 * 60_000 },
-  { queue: QUEUES.sync, name: "assets", every: 15 * 60_000 },
-  { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
-  { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },
-  { queue: QUEUES.sync, name: "dfir-release", every: 15 * 60_000 },
-  { queue: QUEUES.sync, name: "kelpie", every: 60_000 },
-  { queue: QUEUES.detection, name: "run", every: 5 * 60_000 },
-  { queue: QUEUES.detection, name: "correlate", every: 60_000 },
-  { queue: QUEUES.intel, name: "cve", every: 6 * 60 * 60_000 },
-  { queue: QUEUES.intel, name: "advisories", every: 60 * 60_000 },
-  { queue: QUEUES.notify, name: "escalate", every: 60_000 },
-  { queue: QUEUES.surface, name: "scan", every: 15 * 60_000 },
-  { queue: QUEUES.report, name: "board", every: 60 * 60_000 },
-];
+/** Refuse an archive bucket outside Australia. An unreachable store is logged, not fatal: alert polling must go on. */
+async function checkArchive() {
+  const store = defaultArchiveStore();
+  if (!(store instanceof S3ArchiveStore)) return log("archive")("local file store; objects do not survive pod replacement");
+  try {
+    log("archive")(`s3 buckets ${JSON.stringify(await store.verifyRegions())}`);
+  } catch (err) {
+    if (err instanceof ArchiveResidencyError) throw err;
+    log("archive")(`bucket check failed: ${(err as Error).message}`);
+  }
+}
 
 async function main() {
   assertHostingEnv(process.env);
   startTracing("blaksoc-worker");
-  for (const s of SCHEDULES) {
-    await queue(s.queue).upsertJobScheduler(`${s.queue}:${s.name}`, { every: s.every }, { name: s.name });
-  }
+  await checkArchive();
+  await ensureSchedules(true);
   await recordSchedules(SCHEDULES);
+  // A Redis flush or failover to an empty node drops the schedulers while this process keeps running.
+  const scheduleCheck = setInterval(() => {
+    ensureSchedules()
+      .then(async (ids) => {
+        if (!ids.length) return;
+        // The heartbeat's interval table went with them.
+        await recordSchedules(SCHEDULES);
+        log("worker")(`recreated schedulers ${ids.join(", ")}`);
+      })
+      .catch((err: Error) => logger.warn("scheduler check failed", { err }));
+  }, SCHEDULE_CHECK_MS);
   // Own port, never behind the ingress; see the chart's PodMonitor and NetworkPolicy.
   if (process.env.METRICS_PORT) {
     registerWorkerMetrics();
@@ -140,6 +145,7 @@ async function main() {
 
   const shutdown = async () => {
     logger.info("worker shutting down");
+    clearInterval(scheduleCheck);
     await Promise.all(workers.map((w) => w.close()));
     await stopTracing();
     process.exit(0);

@@ -78,6 +78,8 @@ export const integrations = pgTable("integrations", {
   lastError: text("last_error"),
   lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
   health: jsonb("health").$type<Record<string, unknown>>(),
+  /** Alert poll position. Durable so a Redis loss neither replays nor skips a provider window. */
+  pollCursor: text("poll_cursor"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

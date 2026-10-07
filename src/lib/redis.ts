@@ -16,6 +16,8 @@ export function redisConnectionOptions() {
     port: Number(u.port || 6379),
     username: u.username || undefined,
     password: u.password || undefined,
+    // Same logical database as redis(); without it queues and schedulers land in db 0.
+    db: Number(u.pathname.slice(1)) || 0,
     tls: u.protocol === "rediss:" ? {} : undefined,
     maxRetriesPerRequest: null,
   };
