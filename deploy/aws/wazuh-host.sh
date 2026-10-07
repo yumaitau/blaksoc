@@ -83,28 +83,24 @@ t = re.sub(r"<use_password>no</use_password>", "<use_password>yes</use_password>
 p.write_text(t)
 PY
 
-# Region attribute that blakSOC checks before trusting the indexer (deploy/wazuh/indexer-region.yml).
+# Region attribute that blakSOC checks before trusting the indexer (assertSearchNodeInAustralia).
+# opensearch.yml is a read-only bind mount of this file inside the container, so it is written here.
+python3 - <<'PY'
+import pathlib, re
+p = pathlib.Path("config/wazuh_indexer/wazuh.indexer.yml")
+t = p.read_text()
+line = "node.attr.region: ap-southeast-2"
+t, n = re.subn(r"^node\.attr\.region:.*$", line, t, flags=re.M)
+if not n:
+    t = t.rstrip("\n") + "\n" + line + "\n"
+p.write_text(t)
+PY
+
 cat > blaksoc-overlay.yml <<'YML'
 services:
   wazuh.manager:
     volumes:
       - ./config/authd.pass:/var/ossec/etc/authd.pass:ro
-  wazuh.indexer:
-    environment:
-      node.attr.region: ap-southeast-2
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        set -eu
-        region=$$(printenv 'node.attr.region')
-        conf=/usr/share/wazuh-indexer/config/opensearch.yml
-        case "$$region" in
-          ap-southeast-2|ap-southeast-4) ;;
-          *) echo "indexer region must be in Australia, got $${region}" >&2; exit 2 ;;
-        esac
-        grep -q '^node.attr.region:' "$$conf" || printf '\nnode.attr.region: %s\n' "$$region" >> "$$conf"
-        exec /entrypoint.sh opensearchwrapper
 YML
 
 docker compose -f docker-compose.yml -f blaksoc-overlay.yml up -d
