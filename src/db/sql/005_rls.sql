@@ -132,7 +132,7 @@ DECLARE
     'incident_notes','incident_tasks','evidence','vulnerabilities','detection_deployments',
     'playbook_runs','playbook_run_steps','approvals','response_actions','ai_conversations',
     'ai_messages','ai_invocations','reports','tenant_feed_entitlements','tenant_plans','usage_daily',
-    'escalation_policies','notification_deliveries','e8_assessments','e8_tasks','obligation_cases','obligation_drafts',
+    'escalation_policies','notification_deliveries','e8_assessments','e8_tasks','obligation_cases','obligation_drafts','reporting_clocks',
     'monitored_domains','email_posture_checks','dmarc_reports','credential_exposures',
     'enrolment_tokens','coverage_tasks','health_baselines','board_briefs',
     'syslog_sources','syslog_events','syslog_archive',
@@ -147,7 +147,12 @@ DECLARE
     'awareness_clicks',
     'data_governance',
     'governance_changes',
-    'kelpie_cases'
+    'kelpie_cases',
+    'entities',
+    'entity_aliases',
+    'entity_relationships',
+    'entity_relationship_evidence',
+    'correlation_findings','correlation_rule_settings','correlation_cursors','incident_group_exclusions'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];
@@ -181,6 +186,20 @@ DROP POLICY IF EXISTS tenant_isolation ON integrations;
 CREATE POLICY tenant_isolation ON integrations
   USING ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)))
   WITH CHECK ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)));
+
+-- API service identities and their tokens: platform identities (tenant_id NULL) only to platform staff.
+-- Token issue and bearer checks run before a scope exists and use blaksoc_system.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['service_identities', 'service_tokens'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I USING ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id))) WITH CHECK ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)))', t);
+  END LOOP;
+END $$;
 
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;

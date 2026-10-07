@@ -12,12 +12,16 @@ import { requireAccess } from "@/lib/auth/session";
 import { SEVERITIES } from "@/lib/services/alerts";
 import { COLLECTION_STATUS_LABEL } from "@/lib/dfir/sets";
 import { listCollectionTargets, listCollections } from "@/lib/services/dfir";
+import { formatZoned } from "@/lib/obligations/clock";
+import { CLOCK_INFO } from "@/lib/obligations/model";
+import { getObligation } from "@/lib/services/obligations";
+import { canViewPortal } from "@/lib/services/portal";
 import { getIncident, INCIDENT_STATUSES, listIncidentOwners } from "@/lib/services/incidents";
 import { isResponseAction, RESPONSE_ACTIONS } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { cn, fmtDateTime, fmtTime, timeAgo } from "@/lib/utils";
 import { CollectionPanel } from "./collection-panel";
-import { CaseForm, EvidenceForm, NoteForm, TaskList, TimelineEventForm } from "./incident-forms";
+import { CaseForm, EvidenceForm, NoteForm, TaskList, TimelineEventForm, UngroupButton } from "./incident-forms";
 
 export const metadata = { title: "Incident" };
 
@@ -50,8 +54,10 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
   const owners = editable ? await listIncidentOwners(ctx, tenantId) : [];
   const collectionRows = await listCollections(ctx, inc.id);
   const targets = editable ? await listCollectionTargets(ctx, tenantId) : [];
+  const obligation = await getObligation(ctx, inc.id);
   const active = !["CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"].includes(inc.status);
   const breached = active && inc.slaDueAt && inc.slaDueAt.getTime() < new Date().getTime();
+  const autoGrouped = data.alerts.filter((a) => a.origin === "auto");
 
   // Group the timeline by Sydney calendar day, preserving chronological order.
   const days: { day: string; events: typeof data.timeline }[] = [];
@@ -167,7 +173,10 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Alerts</CardTitle><span className="num text-xs text-muted">{data.alerts.length}</span></CardHeader>
+            <CardHeader>
+              <span className="flex items-center gap-2"><CardTitle>Alerts</CardTitle><span className="num text-xs text-muted">{data.alerts.length}</span></span>
+              {editable && autoGrouped.length > 1 ? <UngroupButton incidentId={inc.id} label={`Ungroup all ${autoGrouped.length} auto-grouped`} /> : null}
+            </CardHeader>
             {data.alerts.length === 0 ? <CardContent><p className="text-sm text-muted">No alerts linked.</p></CardContent> : (
               <Table>
                 <THead>
@@ -178,7 +187,16 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
                     <TR key={a.id}>
                       <TD><SeverityBadge severity={a.severity} /></TD>
                       <TD><RiskScore score={a.riskScore} /></TD>
-                      <TD className="max-w-sm"><Link href={`/soc/alerts/${a.id}`} className="block truncate font-medium hover:text-accent">{a.title}</Link></TD>
+                      <TD className="max-w-sm">
+                        <Link href={`/soc/alerts/${a.id}`} className="block truncate font-medium hover:text-accent">{a.title}</Link>
+                        {a.origin === "auto" ? (
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted" title={a.groupReason?.summary}>
+                            <Badge variant="outline">Auto-grouped</Badge>
+                            <span className="truncate">{a.groupReason?.summary}</span>
+                            {editable ? <UngroupButton incidentId={inc.id} alertIds={[a.id]} label="Ungroup" /> : null}
+                          </span>
+                        ) : null}
+                      </TD>
                       <TD className="max-w-36 truncate text-xs">{a.assetName ?? <span className="text-faint">—</span>}</TD>
                       <TD className="max-w-32 truncate text-xs">{a.userName ?? <span className="text-faint">—</span>}</TD>
                       <TD><IntelVerdict verdict={a.intelVerdict} compact /></TD>
@@ -258,6 +276,31 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
         </div>
 
         <div className="space-y-5">
+          <Card>
+            <CardHeader>
+              <CardTitle>Reporting clocks</CardTitle>
+              {canViewPortal(ctx, tenantId) ? <Link href={`/portal/incidents/${inc.id}#obligations`} className="text-xs text-accent hover:underline">Reporting duties →</Link> : null}
+            </CardHeader>
+            <CardContent>
+              {!obligation ? <p className="text-sm text-muted">No reporting clock started.</p> : (
+                <ul className="space-y-1.5 text-sm">
+                  <li>NDB assessment due {obligation.case.dueAt.toISOString().slice(0, 10)}{obligation.case.decision ? ` · ${obligation.case.decision.replaceAll("_", " ")}` : ""}</li>
+                  {obligation.clocks.map((clock) => {
+                    const overdue = !clock.reportedAt && clock.dueAt.getTime() < new Date().getTime();
+                    return (
+                      <li key={clock.id}>
+                        {CLOCK_INFO[clock.kind].label}
+                        <div className="text-xs text-muted">
+                          Due {formatZoned(clock.dueAt, clock.timeZone)} · {clock.reportedAt ? "marked reported" : overdue ? <Badge variant="danger">Deadline passed</Badge> : "not reported"}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader><CardTitle>Response actions</CardTitle><Link href="/soc/approvals" className="text-xs text-accent hover:underline">Approvals →</Link></CardHeader>
             {data.pendingApprovals.length ? (

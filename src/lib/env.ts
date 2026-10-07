@@ -18,6 +18,13 @@ const schema = z.object({
   ENTRA_TENANT_ID: z.string().optional(),
   ENTRA_CLIENT_ID: z.string().optional(),
   ENTRA_CLIENT_SECRET: z.string().optional(),
+  /** Yuma IT staff Google Workspace OAuth client. Requires GOOGLE_HOSTED_DOMAIN. */
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  /** Workspace domain whose `hd` claim staff Google sign-ins must carry. */
+  GOOGLE_HOSTED_DOMAIN: z.string().optional(),
+  /** WebAuthn relying party id. Defaults to the APP_URL hostname. */
+  PASSKEY_RP_ID: z.string().optional(),
   /** Australian Business Register web services GUID. Unset: setup checks the ATO example ABN only. */
   ABR_GUID: z.string().optional(),
   /** Multi-tenant Entra app that customers' admins consent to for Graph reads. Separate from the staff sign-in app. */
@@ -40,11 +47,18 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
+/** Google accepts any personal account unless sign-in is pinned to one Workspace domain. */
+function checkGoogle(e: Env) {
+  if (e.GOOGLE_CLIENT_ID && !e.GOOGLE_HOSTED_DOMAIN) throw new Error("GOOGLE_HOSTED_DOMAIN must be set when GOOGLE_CLIENT_ID is set");
+  if (e.GOOGLE_HOSTED_DOMAIN === "*") throw new Error("GOOGLE_HOSTED_DOMAIN must name one Workspace domain, not *");
+}
+
 let cached: Env | undefined;
 
 export function env(): Env {
   if (!cached) {
     cached = schema.parse(process.env);
+    checkGoogle(cached);
     // `next build` evaluates route modules to collect page data. Secrets exist only at runtime.
     if (cached.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
       // Development defaults for these would connect production to the wrong database or key.

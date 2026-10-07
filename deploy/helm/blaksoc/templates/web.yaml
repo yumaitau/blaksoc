@@ -21,7 +21,7 @@ spec:
         - name: web
           image: {{ include "blaksoc.image" (dict "root" . "target" "web") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          ports: [{ name: http, containerPort: 3000 }]
+          ports: [{ name: http, containerPort: 3000 }{{ include "blaksoc.metricsPort" . }}]
           env:
             {{- include "blaksoc.env" . | nindent 12 }}
             {{- include "blaksoc.secretEnv" . | trim | nindent 12 }}

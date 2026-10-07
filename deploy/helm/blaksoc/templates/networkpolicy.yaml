@@ -2,7 +2,8 @@
 {{- if and (not .Values.networkPolicy.dataStoresInCluster) (empty .Values.networkPolicy.egressCidrs) }}
 {{- fail "networkPolicy.dataStoresInCluster is false: list the Postgres and Redis CIDRs in networkPolicy.egressCidrs, or web and worker cannot reach them" }}
 {{- end }}
-# Web accepts traffic only from the ingress controller; nothing may reach the worker.
+# Web accepts traffic only from the ingress controller; nothing may reach the worker. With
+# observability.metrics.enabled, the scrape namespace may also reach both on the metrics port.
 # External scans run only on the worker (queue `surface`, job `scan`).
 # Per tenant: 1 scan at a time, 6 hosts per minute (src/lib/asm/scan.ts SCAN_LIMITS).
 # A scan starts only after an asm.attest audit row. Fixture mode opens no sockets.
@@ -22,6 +23,7 @@ spec:
     - from:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }} } }
       ports: [{ port: 3000 }]
+{{- include "blaksoc.metricsIngress" . }}
 {{- include "blaksoc.egress" . }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -32,6 +34,25 @@ spec:
   podSelector:
     matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: worker }
   policyTypes: [Ingress, Egress]
+{{- if .Values.observability.metrics.enabled }}
+  ingress:
+{{- include "blaksoc.metricsIngress" . }}
+{{- else }}
+  ingress: []
+{{- end }}
+{{- include "blaksoc.egress" . }}
+{{- if .Values.backup.enabled }}
+---
+# Backup pods reach Postgres and the bucket only; same egress rules, no ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "blaksoc.fullname" . }}-backup
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: backup }
+  policyTypes: [Ingress, Egress]
   ingress: []
 {{- include "blaksoc.egress" . }}
+{{- end }}
 {{- end }}

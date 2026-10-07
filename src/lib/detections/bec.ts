@@ -1,9 +1,11 @@
+import { evaluateRule, type CorrelationEvent } from "@/lib/correlation/engine";
+import { IMPOSSIBLE_TRAVEL, MFA_FATIGUE } from "@/lib/correlation/rules";
 import type { NormalisedAlert, Severity } from "@/lib/providers/types";
 
 /**
  * BEC / email-threat pack.
- * Single-event detections are Sigma. Impossible travel and MFA fatigue are native correlators
- * in this file; they emit an event the matching Sigma rule then classifies.
+ * Single-event detections are Sigma. Impossible travel and MFA fatigue are correlation engine rules
+ * (src/lib/correlation/rules.ts) run over the provider's raw sign-ins; they emit an event the matching Sigma rule then classifies.
  * Payment-keyword inbox rules, external forwarding, suspicious OAuth, legacy auth, and mass send are Sigma-only.
  */
 
@@ -244,52 +246,37 @@ export const SUSPECTED_BEC_PLAYBOOK = {
 
 export type SignInPoint = { id: string; user: string; country: string; ip: string; at: string };
 
-/** Two countries inside two hours, and the account has mailbox activity in that window. */
+/** Two countries inside two hours, and the account has mailbox activity. Runs the IMPOSSIBLE_TRAVEL engine rule. */
 export function correlateImpossibleTravel(signIns: SignInPoint[], mailboxUsers: Set<string>, windowMs = 2 * 3600_000) {
-  const hits: { id: string; user: string; from: SignInPoint; to: SignInPoint }[] = [];
-  const byUser = new Map<string, SignInPoint[]>();
-  for (const s of signIns) {
-    const list = byUser.get(s.user) ?? [];
-    list.push(s);
-    byUser.set(s.user, list);
-  }
-  for (const [user, list] of byUser) {
-    if (!mailboxUsers.has(user.toLowerCase())) continue;
-    const ordered = [...list].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-    for (let i = 1; i < ordered.length; i++) {
-      const from = ordered[i - 1]!;
-      const to = ordered[i]!;
-      if (!from.country || !to.country || from.country.toUpperCase() === to.country.toUpperCase()) continue;
-      const gap = Date.parse(to.at) - Date.parse(from.at);
-      if (gap <= 0 || gap > windowMs) continue;
-      hits.push({ id: `travel:${from.id}:${to.id}`, user, from, to });
-    }
-  }
-  return hits;
+  const rule = { ...IMPOSSIBLE_TRAVEL, clause: { ...IMPOSSIBLE_TRAVEL.clause, within: windowMs } };
+  const byId = new Map(signIns.map((s) => [s.id, s]));
+  const events: CorrelationEvent[] = [
+    ...signIns.map((s) => ({ id: s.id, at: Date.parse(s.at), fields: { event_type: "signin", user: s.user, country: s.country, src_ip: s.ip, summary: `sign-in from ${s.country || "an unknown country"}${s.ip ? ` (${s.ip})` : ""}` } })),
+    // Mailbox use carries no time here: the provider only knows which accounts touched a mailbox this poll.
+    ...[...mailboxUsers].map((u) => ({ id: `mailbox:${u}`, at: 0, fields: { event_type: "mailbox_activity", user: u, summary: "mailbox activity" } })),
+  ];
+  return evaluateRule(rule, events).map((f) => {
+    const from = byId.get(f.matches[0]!.events[0]!.id)!;
+    const to = byId.get(f.anchorId)!;
+    return { id: `travel:${from.id}:${to.id}`, user: to.user, from, to, matches: f.matches };
+  });
 }
 
 export type MfaPoint = { id: string; user: string; at: string; denied: boolean; success: boolean };
 
-/** At least three MFA denials, then a success, all inside 60 minutes. */
+/** At least three MFA denials, then a success, all inside 60 minutes. Runs the MFA_FATIGUE engine rule. */
 export function correlateMfaFatigue(points: MfaPoint[], windowMs = 60 * 60_000) {
-  const hits: { id: string; user: string; denied: number; successId: string; at: string }[] = [];
-  const byUser = new Map<string, MfaPoint[]>();
-  for (const p of points) {
-    const list = byUser.get(p.user) ?? [];
-    list.push(p);
-    byUser.set(p.user, list);
-  }
-  for (const [user, list] of byUser) {
-    const ordered = [...list].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-    const success = ordered.filter((p) => p.success);
-    for (const ok of success) {
-      const end = Date.parse(ok.at);
-      const denied = ordered.filter((p) => p.denied && Date.parse(p.at) <= end && end - Date.parse(p.at) <= windowMs);
-      if (denied.length < 3) continue;
-      hits.push({ id: `mfa:${ok.id}`, user, denied: denied.length, successId: ok.id, at: ok.at });
-    }
-  }
-  return hits;
+  const rule = { ...MFA_FATIGUE, clause: { ...MFA_FATIGUE.clause, within: windowMs } };
+  const byId = new Map(points.map((p) => [p.id, p]));
+  const events: CorrelationEvent[] = points.map((p) => ({
+    id: p.id,
+    at: Date.parse(p.at),
+    fields: { event_type: p.denied ? "mfa_denied" : p.success ? "mfa_success" : "mfa_prompt", user: p.user, summary: p.denied ? "MFA prompt denied" : "MFA prompt approved" },
+  }));
+  return evaluateRule(rule, events).map((f) => {
+    const ok = byId.get(f.anchorId)!;
+    return { id: `mfa:${ok.id}`, user: ok.user, denied: f.matches[0]!.events.length, successId: ok.id, at: ok.at, matches: f.matches };
+  });
 }
 
 export function paymentKeywords(text: string): string[] {

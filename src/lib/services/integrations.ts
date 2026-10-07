@@ -10,6 +10,7 @@ import { assertDemoOnly, isTrainingTenant, TrainingIsolationError } from "@/lib/
 import { syncVeeamBackups } from "@/lib/services/backup";
 import { stampSyslogTenant } from "@/lib/services/syslog";
 import { encryptSecret } from "@/lib/crypto";
+import { logger } from "@/lib/obs/log";
 import { actor, AccessDenied, scoped } from "./common";
 
 /** Columns safe for the browser. secretCiphertext is never selected here. */
@@ -68,7 +69,7 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
 
 /** Webhook, Teams and Slack subscriptions may have changed. A failure only delays the refresh to the cache TTL. */
 async function refreshSubscriptions() {
-  await subscriptionsChanged().catch((err: unknown) => console.warn(`[integrations] subscription refresh failed: ${err instanceof Error ? err.message : err}`));
+  await subscriptionsChanged().catch((err: unknown) => logger.warn("subscription refresh failed", { err }));
 }
 
 /** Secrets are write-only: omitted keys keep their stored values. */

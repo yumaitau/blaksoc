@@ -138,7 +138,7 @@ function sameScope(a: GovernanceProfile, b: GovernanceProfile): boolean {
   return !!a.sightings && !!b.sightings && a.sightings.attribution === b.sightings.attribution && a.sightings.maxTlp === b.sightings.maxTlp;
 }
 
-async function apply(tx: Tx, proposed: typeof governanceChanges.$inferSelect, approvals: string[], who: { actorId: string; actorKind: "user" }) {
+async function apply(tx: Tx, proposed: typeof governanceChanges.$inferSelect, approvals: string[], who: { actorId: string; actorKind: "user" | "service" }) {
   const now = new Date();
   // New sighting consent is recorded against every steward who approved it, at the time it took effect.
   const fresh = proposed.after.sightings && !sameScope(proposed.before, proposed.after);
@@ -208,7 +208,7 @@ export async function decideGovernanceChange(ctx: AccessContext, changeId: strin
 }
 
 /** Onboarding writes the most protective profile. It needs no steward: nothing is loosened. */
-export async function initialiseGovernance(tx: Tx, tenantId: string, who: { actorId: string | null; actorKind: "user" | "system" }) {
+export async function initialiseGovernance(tx: Tx, tenantId: string, who: { actorId: string | null; actorKind: "user" | "system" | "service" }) {
   const [existing] = await tx.select({ tenantId: dataGovernance.tenantId }).from(dataGovernance).where(eq(dataGovernance.tenantId, tenantId));
   if (existing) return false;
   await tx.insert(dataGovernance).values({ tenantId, profile: MOST_PROTECTIVE });

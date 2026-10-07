@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 
+// Content-Security-Policy is set per request in src/proxy.ts because it carries a nonce.
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -12,7 +13,8 @@ const config: NextConfig = {
   output: "standalone",
   turbopack: { root: import.meta.dirname },
   poweredByHeader: false,
-  serverExternalPackages: ["bullmq", "ioredis", "postgres", "undici"],
+  // Telemetry packages stay external so instrumentation and route code share one copy (one registry, one tracer provider).
+  serverExternalPackages: ["bullmq", "ioredis", "postgres", "undici", "@prometheus-io/client", "@opentelemetry/api", "@opentelemetry/sdk-trace-node", "@opentelemetry/sdk-trace-base", "@opentelemetry/exporter-trace-otlp-http", "@opentelemetry/resources"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

@@ -5,7 +5,7 @@ import { withAccess } from "@/lib/actions";
 import { SEVERITIES } from "@/lib/services/alerts";
 import { ARTIFACT_SETS } from "@/lib/dfir/sets";
 import { custodyExport, requestCollection, startHunt } from "@/lib/services/dfir";
-import { addAnalystTimelineEvent, addEvidence, addNote, addTask, INCIDENT_STATUSES, toggleTask, updateIncident } from "@/lib/services/incidents";
+import { addAnalystTimelineEvent, addEvidence, addNote, addTask, INCIDENT_STATUSES, toggleTask, ungroupAlerts, updateIncident } from "@/lib/services/incidents";
 
 const id = z.guid();
 const longText = z.string().trim().max(20_000).transform((v) => v || null);
@@ -52,6 +52,16 @@ export async function addIncidentTimelineEvent(incidentId: string, input: z.inpu
     const e = timelineEvent.parse(input);
     await addAnalystTimelineEvent(ctx, id.parse(incidentId), { occurredAt: new Date(e.occurredAt), title: e.title, detail: e.detail || undefined });
     refresh(incidentId);
+  });
+}
+
+/** Undo automatic grouping for the given alerts, or for every auto-grouped alert when none are given. */
+export async function ungroupIncidentAlerts(incidentId: string, alertIds?: string[]) {
+  return withAccess(async (ctx) => {
+    const res = await ungroupAlerts(ctx, id.parse(incidentId), alertIds ? z.array(id).min(1).max(500).parse(alertIds) : undefined);
+    refresh(incidentId);
+    revalidatePath("/soc/alerts");
+    return res;
   });
 }
 

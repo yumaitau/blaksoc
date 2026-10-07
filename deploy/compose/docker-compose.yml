@@ -17,11 +17,22 @@ x-app-env: &app-env
   ENTRA_TENANT_ID: ${ENTRA_TENANT_ID:-}
   ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID:-}
   ENTRA_CLIENT_SECRET: ${ENTRA_CLIENT_SECRET:-}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  GOOGLE_HOSTED_DOMAIN: ${GOOGLE_HOSTED_DOMAIN:-}
   AI_DATA_RESIDENCY: ${AI_DATA_RESIDENCY:-AU}
   OPENSEARCH_REGION: ${OPENSEARCH_REGION:-ap-southeast-2}
   WAZUH_INDEXER_REGION: ${WAZUH_INDEXER_REGION:-ap-southeast-2}
   OPENCTI_REGION: ${OPENCTI_REGION:-ap-southeast-2}
   BREAK_GLASS_REQUIRE_MFA: "true"
+  # Syslog archive: an AU S3 or S3-compatible bucket when set ("ap-southeast-2=bucket"), else the
+  # `archive` volume below (survives container replacement, not loss of this host).
+  BLAKSOC_ARCHIVE_DIR: /var/lib/blaksoc/archive
+  BLAKSOC_ARCHIVE_S3_BUCKETS: ${BLAKSOC_ARCHIVE_S3_BUCKETS:-}
+  BLAKSOC_ARCHIVE_S3_ENDPOINT: ${BLAKSOC_ARCHIVE_S3_ENDPOINT:-}
+  BLAKSOC_ARCHIVE_S3_SSE: ${BLAKSOC_ARCHIVE_S3_SSE:-AES256}
+  BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID: ${BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID:-}
+  BLAKSOC_ARCHIVE_S3_SECRET_ACCESS_KEY: ${BLAKSOC_ARCHIVE_S3_SECRET_ACCESS_KEY:-}
 
 services:
   postgres:
@@ -41,7 +52,7 @@ services:
     volumes: [redisdata:/data]
 
   migrate:
-    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yumaitau/blaksoc}-worker:${BLAKSOC_VERSION:-local}
     build: { context: ../.., target: worker }
     command: ["sh", "-c", "node dist/db/migrate.mjs && node dist/db/seed.mjs"]
     # Only the migration job gets owner credentials; web and worker use the app and system roles.
@@ -54,7 +65,7 @@ services:
     restart: "no"
 
   web:
-    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-web:${BLAKSOC_VERSION:-latest}
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yumaitau/blaksoc}-web:${BLAKSOC_VERSION:-local}
     build: { context: ../.., target: web }
     restart: unless-stopped
     environment: *app-env
@@ -62,10 +73,47 @@ services:
     depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_started } }
 
   worker:
-    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yumaitau/blaksoc}-worker:${BLAKSOC_VERSION:-local}
     restart: unless-stopped
     environment: *app-env
+    volumes: [archive:/var/lib/blaksoc/archive]
     depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_started } }
+
+  # ---------------------------------------------------------------- Postgres backup
+  # Run from host cron, e.g. every 6 hours:
+  #   docker compose --env-file .env --profile backup run --rm backup
+  # backup-dump writes pg_dump -Fc to the pgbackup volume; backup uploads it to the AU bucket
+  # (server-side encrypted), checks its size and keeps the newest BACKUP_KEEP. Restore and drill:
+  # docs/disaster-recovery.md.
+  backup-dump:
+    profiles: [backup]
+    image: postgres:17-alpine
+    command: ["sh", "/scripts/pg-backup.sh", "dump"]
+    environment:
+      BACKUP_DATABASE_URL: postgres://blaksoc:${POSTGRES_PASSWORD:?}@postgres:5432/blaksoc
+      BACKUP_DIR: /backup
+    volumes: [pgbackup:/backup, ../backup/pg-backup.sh:/scripts/pg-backup.sh:ro]
+    depends_on: { postgres: { condition: service_healthy } }
+    restart: "no"
+
+  backup:
+    profiles: [backup]
+    image: amazon/aws-cli:2.22.0
+    entrypoint: ["sh", "/scripts/pg-backup.sh", "upload"]
+    environment:
+      BACKUP_DIR: /backup
+      BACKUP_BUCKET: ${BACKUP_BUCKET:-}
+      BACKUP_REGION: ${BACKUP_REGION:-ap-southeast-2}
+      BACKUP_PREFIX: ${BACKUP_PREFIX:-postgres/}
+      BACKUP_KEEP: ${BACKUP_KEEP:-28}
+      BACKUP_SSE: ${BACKUP_SSE:-AES256}
+      BACKUP_KMS_KEY_ID: ${BACKUP_KMS_KEY_ID:-}
+      BACKUP_ENDPOINT: ${BACKUP_ENDPOINT:-}
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:-}
+    volumes: [pgbackup:/backup, ../backup/pg-backup.sh:/scripts/pg-backup.sh:ro]
+    depends_on: { backup-dump: { condition: service_completed_successfully } }
+    restart: "no"
 
   # ---------------------------------------------------------------- OpenCTI
   opencti-redis:
@@ -223,6 +271,8 @@ services:
 volumes:
   pgdata:
   redisdata:
+  archive:
+  pgbackup:
   octi-redis:
   octi-search:
   octi-minio:

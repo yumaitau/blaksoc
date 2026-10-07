@@ -13,3 +13,12 @@ export function assertAuRegion(region: string): asserts region is AuArchiveRegio
 export function archiveKey(tenantId: string, eventId: string): string {
   return `syslog/${tenantId}/${eventId}.log`;
 }
+
+/** Archive keys are relative paths with no empty, `.` or `..` segment. Every store driver checks this. */
+export function assertArchiveKey(key: string): string[] {
+  const parts = key.split("/");
+  if (!key || key.startsWith("/") || parts.some((part) => part === "" || part === "." || part === "..")) {
+    throw new Error("archive key");
+  }
+  return parts;
+}

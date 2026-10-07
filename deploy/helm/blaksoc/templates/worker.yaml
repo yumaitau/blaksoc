@@ -16,15 +16,22 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
+      serviceAccountName: {{ include "blaksoc.serviceAccountName" . }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
       terminationGracePeriodSeconds: 60
       containers:
         - name: worker
           image: {{ include "blaksoc.image" (dict "root" . "target" "worker") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.observability.metrics.enabled }}
+          ports: [{ name: metrics, containerPort: {{ .Values.observability.metrics.port }} }]
+          {{- end }}
           env:
             {{- include "blaksoc.env" . | nindent 12 }}
             {{- include "blaksoc.secretEnv" . | trim | nindent 12 }}
+            {{- with include "blaksoc.archiveEnv" . | trim }}
+            {{- . | nindent 12 }}
+            {{- end }}
           resources: {{- toYaml .Values.worker.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts: [{ name: tmp, mountPath: /tmp }]

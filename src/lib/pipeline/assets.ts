@@ -1,6 +1,7 @@
 import { and, arrayOverlaps, eq, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { assetSources, assets } from "@/db/schema";
+import { recordAssetGraph } from "@/lib/graph/store";
 import type { NormalisedAsset } from "@/lib/providers/types";
 
 /**
@@ -14,13 +15,16 @@ export function dedupeKeys(a: { hostname: string | null; macs?: string[] }, inte
   return keys;
 }
 
-/** Upsert provider assets into the unified inventory for one tenant. Returns externalId → assetId. */
-export async function syncAssets(tx: Tx, tenantId: string, integrationId: string, list: NormalisedAsset[]): Promise<Map<string, string>> {
+/**
+ * Upsert provider assets into the unified inventory for one tenant, and into the entity graph.
+ * `source` is the provider name recorded as the entity's source system. Returns externalId → assetId.
+ */
+export async function syncAssets(tx: Tx, tenantId: string, integrationId: string, list: NormalisedAsset[], source = "inventory"): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   for (const a of list) {
     const keys = dedupeKeys(a, integrationId, a.externalId);
     const [existing] = await tx
-      .select({ id: assets.id, dedupeKeys: assets.dedupeKeys })
+      .select({ id: assets.id, kind: assets.kind, name: assets.name, dedupeKeys: assets.dedupeKeys, firstSeen: assets.firstSeen })
       .from(assets)
       .where(and(eq(assets.tenantId, tenantId), arrayOverlaps(assets.dedupeKeys, keys)))
       .limit(1);
@@ -50,6 +54,11 @@ export async function syncAssets(tx: Tx, tenantId: string, integrationId: string
       .insert(assetSources)
       .values({ tenantId, assetId, integrationId, externalId: a.externalId, raw: a.raw })
       .onConflictDoUpdate({ target: [assetSources.integrationId, assetSources.externalId], set: { assetId, raw: a.raw, lastSyncedAt: sql`now()` } });
+    const lastSeen = a.lastSeen ?? new Date();
+    await recordAssetGraph(tx, tenantId, {
+      id: assetId, kind: existing?.kind ?? a.kind, name: existing?.name ?? a.name, hostname: a.hostname, ips: a.ips, os: a.os,
+      dedupeKeys: existing ? [...new Set([...existing.dedupeKeys, ...keys])] : keys, firstSeen: existing?.firstSeen ?? lastSeen, lastSeen,
+    }, [source]);
     out.set(a.externalId, assetId);
   }
   return out;

@@ -21,6 +21,8 @@ export const OCSF_VERSION = "1.9.0";
 export const NORMALIZATION_VERSION = "blaksoc-ocsf/1";
 
 export const OCSF_CLASSES = {
+  /** Events read in place that blakSOC has no activity mapper for (e.g. a Wazuh archive record with no rule). */
+  base_event: { class_uid: 0, category_uid: 0, class_name: "Base Event", category_name: "Uncategorized" },
   process_activity: { class_uid: 1007, category_uid: 1, class_name: "Process Activity", category_name: "System Activity" },
   vulnerability_finding: { class_uid: 2002, category_uid: 2, class_name: "Vulnerability Finding", category_name: "Findings" },
   detection_finding: { class_uid: 2004, category_uid: 2, class_name: "Detection Finding", category_name: "Findings" },
@@ -47,6 +49,7 @@ export const OBSERVABLE_TYPE_ID = {
 export const FINDING_ACTIVITY = { create: 1, update: 2, close: 3 } as const;
 export const FINDING_STATUS = { new: 1, in_progress: 2, suppressed: 3, resolved: 4, archived: 5 } as const;
 export const AUTH_ACTIVITY = { logon: 1, logoff: 2 } as const;
+export const BASE_ACTIVITY = { unknown: 0, other: 99 } as const;
 export const NETWORK_ACTIVITY = { open: 1, close: 2, reset: 3, fail: 4, refuse: 5, traffic: 6 } as const;
 export const ACTION_ID = { unknown: 0, allowed: 1, denied: 2, observed: 3, modified: 4 } as const;
 export const DISPOSITION_ID = { unknown: 0, allowed: 1, blocked: 2 } as const;
@@ -162,4 +165,12 @@ export type NetworkActivity = OcsfBase & {
   device?: OcsfDevice;
 };
 
-export type OcsfEvent = DetectionFinding | VulnerabilityFinding | Authentication | NetworkActivity;
+export type BaseEvent = OcsfBase & {
+  class_uid: 0;
+  device?: OcsfDevice;
+  user?: OcsfUser;
+  src_endpoint?: OcsfEndpoint;
+  dst_endpoint?: OcsfEndpoint;
+};
+
+export type OcsfEvent = DetectionFinding | VulnerabilityFinding | Authentication | NetworkActivity | BaseEvent;

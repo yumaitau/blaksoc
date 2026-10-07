@@ -12,6 +12,8 @@ export type Principal = {
   name: string;
   email: string;
   isBreakGlass: boolean;
+  /** "service" for an API service identity: userId is then the identity id, not a user row. */
+  kind?: "user" | "service";
 };
 
 export type TenantKind = "mssp" | "partner" | "customer";
@@ -60,7 +62,11 @@ export async function resolveAccess(principal: Principal): Promise<AccessContext
       tenantId: r.scope === "platform" ? null : r.tenantId,
       permissions: new Set(r.permissions as Permission[]),
     }));
+  return accessFromGrants(principal, grants);
+}
 
+/** Expand grants into reachable tenants (partner customers included). Shared by users and service identities. */
+export async function accessFromGrants(principal: Principal, grants: Grant[]): Promise<AccessContext> {
   const isPlatform = grants.some((g) => g.tenantId === null);
   const directTenantIds = [...new Set(grants.map((g) => g.tenantId).filter((t): t is string => !!t))];
   const none = ["00000000-0000-0000-0000-000000000000"];

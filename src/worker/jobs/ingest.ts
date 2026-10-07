@@ -14,6 +14,8 @@ import { queue, QUEUES } from "@/lib/queue";
 import { redis } from "@/lib/redis";
 import { evaluateTriggers } from "@/lib/soar/engine";
 import { wazuhLevelToSeverity } from "@/lib/providers/wazuh";
+import { logger } from "@/lib/obs/log";
+import { ingestAlerts, ingestLag, integrationPolls } from "@/lib/obs/metrics";
 
 type Log = (m: string) => void;
 
@@ -38,8 +40,12 @@ function allowedLinks<T extends { tenantId: string }>(links: T[], tierOf: (id: s
   return links.filter((l) => live.has(l.tenantId));
 }
 
-async function markHealth(row: IntegrationRow, ok: boolean, error?: string) {
+type PollKind = "alerts" | "assets" | "health";
+
+async function markHealth(row: IntegrationRow, kind: PollKind, ok: boolean, error?: string) {
   const now = new Date();
+  integrationPolls().inc({ integration: row.id, provider: row.provider, kind, outcome: ok ? "ok" : "error" });
+  if (!ok) logger.warn("integration poll failed", { integrationId: row.id, provider: row.provider, kind, error });
   await systemDb()
     .update(integrations)
     .set(ok ? { status: "healthy", lastSuccessAt: now } : { status: "error", lastError: error ?? "unknown", lastErrorAt: now })
@@ -58,13 +64,12 @@ export async function syncAllAssets(log: Log) {
         const keys = (link.selector.agentGroups ?? []).map((g) => `group:${g}`);
         const list = await provider.getAssets(keys.length ? keys : undefined);
         const mine = keys.length ? list.filter((a) => a.routingKeys.some((k) => keys.includes(k))) : list;
-        await withScope(systemScope(link.tenantId), (tx) => syncAssets(tx, link.tenantId, row.id, mine));
+        await withScope(systemScope(link.tenantId), (tx) => syncAssets(tx, link.tenantId, row.id, mine, row.provider === "demo" ? "wazuh" : row.provider));
         log(`assets ${row.name} → tenant ${link.tenantId.slice(0, 8)}: ${mine.length}`);
       }
-      await markHealth(row, true);
+      await markHealth(row, "assets", true);
     } catch (e) {
-      await markHealth(row, false, (e as Error).message);
-      log(`asset sync ${row.name} failed: ${(e as Error).message}`);
+      await markHealth(row, "assets", false, (e as Error).message);
     }
   }
 }
@@ -100,7 +105,7 @@ export async function syncAllVulnerabilities(log: Log) {
       }
       log(`vulns ${row.name}: ${vulns.length}`);
     } catch (e) {
-      log(`vuln sync ${row.name} failed: ${(e as Error).message}`);
+      logger.warn("vulnerability sync failed", { integrationId: row.id, provider: row.provider, err: e });
     }
   }
 }
@@ -111,56 +116,82 @@ export async function syncAllVulnerabilities(log: Log) {
  */
 export async function pollAlerts(log: Log) {
   const tierOf = await tierOfTenant();
-  for (const row of await eventIntegrations()) {
-    try {
-      const provider = eventProvider(row);
-      const links = await tenantLinks(row);
-      const live = new Set(collectingTenantIds(row.provider, links, tierOf));
-      // Leave the cursor where it is when nobody on this integration may collect.
-      if (!live.size) continue;
-      // Route by the provider's asset id; built from asset inventory (system-level map).
-      const sources = await systemDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
-      const agentTenant = new Map(sources.map((s) => [s.externalId, s.tenantId]));
-      const fallbackTenant = row.tenantId ?? (links.length === 1 ? links[0]!.tenantId : null);
+  for (const row of await eventIntegrations()) await pollIntegration(row, tierOf, log);
+}
 
-      let alerts;
-      let cursorKey: string | null = null;
-      let nextCursor: string | null = null;
-      if (provider instanceof DemoProvider) {
-        // Demo: a trickle of synthetic alerts so the live queue moves.
-        alerts = Math.random() < 0.5 ? provider.generate(1) : [];
-      } else {
-        cursorKey = `cursor:alerts:${row.id}`;
-        const cursor = await redis().get(cursorKey);
-        const res = await provider.getAlerts({ since: new Date(Date.now() - 24 * 3600_000), afterCursor: cursor ?? undefined, limit: 500 });
-        alerts = res.alerts;
-        nextCursor = res.cursor;
-      }
+export const cursorKey = (integrationId: string) => `cursor:alerts:${integrationId}`;
 
-      const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
-      let n = 0;
-      for (const a of alerts) {
-        const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
-        if (!tenantId || !live.has(tenantId)) continue;
-        if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(systemDb(), tenantId));
-        const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
-        if (res.created) {
-          n++;
-          await evaluateTriggers(tenantId, "alert.created", { alertId: res.alertId });
-        }
-      }
-      if (n) log(`alerts ${row.name}: +${n}`);
-      if (cursorKey && nextCursor) await redis().set(cursorKey, nextCursor);
-      await markHealth(row, true);
-    } catch (e) {
-      await markHealth(row, false, (e as Error).message);
-      log(`alert poll ${row.name} failed: ${(e as Error).message}`);
+/**
+ * Postgres holds the cursor. Redis is read only for a row that predates the column (upgrade) and
+ * written after Postgres so an older worker image still finds it on rollback.
+ */
+async function readCursor(row: IntegrationRow): Promise<string | null> {
+  if (row.pollCursor) return row.pollCursor;
+  return redis().get(cursorKey(row.id)).catch(() => null);
+}
+
+async function saveCursor(row: IntegrationRow, cursor: string): Promise<void> {
+  await systemDb().update(integrations).set({ pollCursor: cursor }).where(eq(integrations.id, row.id));
+  await redis().set(cursorKey(row.id), cursor).catch(() => undefined);
+}
+
+/** One integration's poll. Returns how many alerts it created. */
+export async function pollIntegration(row: IntegrationRow, tierOf: (id: string) => Tier, log: Log): Promise<number> {
+  try {
+    const provider = eventProvider(row);
+    const links = await tenantLinks(row);
+    const live = new Set(collectingTenantIds(row.provider, links, tierOf));
+    // Leave the cursor where it is when nobody on this integration may collect.
+    if (!live.size) return 0;
+    // Route by the provider's asset id; built from asset inventory (system-level map).
+    const sources = await systemDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
+    const agentTenant = new Map(sources.map((s) => [s.externalId, s.tenantId]));
+    const fallbackTenant = row.tenantId ?? (links.length === 1 ? links[0]!.tenantId : null);
+
+    let alerts;
+    let nextCursor: string | null = null;
+    if (provider instanceof DemoProvider) {
+      // Demo: a trickle of synthetic alerts so the live queue moves.
+      alerts = Math.random() < 0.5 ? provider.generate(1) : [];
+    } else {
+      const cursor = await readCursor(row);
+      const res = await provider.getAlerts({ since: new Date(Date.now() - 24 * 3600_000), afterCursor: cursor ?? undefined, limit: 500 });
+      alerts = res.alerts;
+      nextCursor = res.cursor;
     }
+
+    const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
+    let n = 0;
+    const labels = { integration: row.id, provider: row.provider };
+    for (const a of alerts) {
+      const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
+      if (!tenantId || !live.has(tenantId)) {
+        ingestAlerts().inc({ ...labels, outcome: "unrouted" });
+        continue;
+      }
+      if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(systemDb(), tenantId));
+      const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
+      ingestAlerts().inc({ ...labels, outcome: res.created ? "created" : "duplicate" });
+      if (res.created) {
+        n++;
+        const occurred = a.occurredAt instanceof Date ? a.occurredAt.getTime() : NaN;
+        if (Number.isFinite(occurred)) ingestLag().observe(labels, Math.max(0, Date.now() - occurred) / 1000);
+        await evaluateTriggers(tenantId, "alert.created", { alertId: res.alertId });
+      }
+    }
+    if (n) log(`alerts ${row.name}: +${n}`);
+    // Saved only after every alert in the page is stored, so a crash replays the page (deduped) instead of skipping it.
+    if (nextCursor && nextCursor !== row.pollCursor) await saveCursor(row, nextCursor);
+    await markHealth(row, "alerts", true);
+    return n;
+  } catch (e) {
+    await markHealth(row, "alerts", false, (e as Error).message);
+    return 0;
   }
 }
 
 /** Scheduled Sigma deployments: run each active query against its tenant's SIEM. */
-export async function runDetections(log: Log) {
+export async function runDetections() {
   const tierOf = await tierOfTenant();
   const deps = await systemDb()
     .select({ d: detectionDeployments, rule: sigmaRules })
@@ -198,13 +229,13 @@ export async function runDetections(log: Log) {
       }
       await systemDb().update(detectionDeployments).set({ lastRunAt: new Date(), lastHitCount: res.total }).where(eq(detectionDeployments.id, d.id));
     } catch (e) {
-      log(`detection ${rule.title} (${d.tenantId.slice(0, 8)}) failed: ${(e as Error).message}`);
+      logger.warn("detection run failed", { tenantId: d.tenantId, deploymentId: d.id, ruleId: rule.id, err: e });
     }
   }
 }
 
 /** Health probe for every enabled integration (not just SIEMs). */
-export async function probeHealth(log: Log) {
+export async function probeHealth() {
   const rows = await systemDb().select().from(integrations).where(eq(integrations.enabled, true));
   const { instantiate } = await import("@/lib/connectors/instances");
   for (const row of rows) {
@@ -212,13 +243,14 @@ export async function probeHealth(log: Log) {
       const inst = instantiate(row);
       if (inst.kind === "notify") continue;
       const h = await inst.provider.health();
+      integrationPolls().inc({ integration: row.id, provider: row.provider, kind: "health", outcome: h.ok ? "ok" : "error" });
+      if (!h.ok) logger.warn("integration health check failed", { integrationId: row.id, provider: row.provider, error: h.error });
       await systemDb()
         .update(integrations)
         .set({ health: h as never, status: h.ok ? "healthy" : "error", ...(h.ok ? { lastSuccessAt: new Date() } : { lastError: h.error ?? "health check failed", lastErrorAt: new Date() }) })
         .where(eq(integrations.id, row.id));
     } catch (e) {
-      await markHealth(row, false, (e as Error).message);
-      log(`health ${row.name}: ${(e as Error).message}`);
+      await markHealth(row, "health", false, (e as Error).message);
     }
   }
 }

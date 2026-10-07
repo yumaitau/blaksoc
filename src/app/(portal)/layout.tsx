@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
@@ -16,6 +17,7 @@ export default async function PortalLayout({ children }: { children: React.React
   const ws = await currentWorkspace(ctx);
   const ownPartner = ctx.isPlatform ? undefined : ctx.tenants.find((tenant) => tenant.kind === "partner");
   const brand = ws.tenant?.cobrand ?? ownPartner?.cobrand ?? null;
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <div className="portal-root mx-auto min-h-screen max-w-3xl px-4 py-4">
       <a className="skip-link" href="#portal-main">Skip to content</a>
@@ -34,6 +36,7 @@ export default async function PortalLayout({ children }: { children: React.React
           {can(ctx, "asset:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/agents">Agents</a> : null}
           {canRunOnboarding(ctx) ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/onboarding">{COPY.nav}</a> : null}
           {ctx.isPlatform ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/soc">SOC</a> : null}
+          <a className="inline-flex min-h-11 items-center px-2 underline" href="/account/security">Passkeys</a>
           <form action="/portal/leave" method="post">
             <button className="inline-flex min-h-11 items-center px-2 underline" type="submit">Sign out</button>
           </form>
@@ -41,7 +44,7 @@ export default async function PortalLayout({ children }: { children: React.React
       </header>
       <main id="portal-main">{children}</main>
       <p className="mt-8 text-sm text-muted">You can install this portal on your phone. After you open it once, the last incident status stays on the phone when you have no coverage.</p>
-      <script dangerouslySetInnerHTML={{ __html: REGISTER_SW }} />
+      <script nonce={nonce} dangerouslySetInnerHTML={{ __html: REGISTER_SW }} />
     </div>
   );
 }

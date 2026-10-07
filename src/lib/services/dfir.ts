@@ -10,6 +10,7 @@ import { requireCapability } from "@/lib/services/billing";
 import { artifactDigest, assertFixtureMode, huntMatch, renderCustody, storageUri } from "@/lib/dfir/fixture";
 import { ARTIFACT_LABELS, isArtifactSet, LOW_BANDWIDTH_DELAY_MS, LOW_BANDWIDTH_HOSTS } from "@/lib/dfir/sets";
 import { addTimeline } from "./incidents";
+import { logger } from "@/lib/obs/log";
 import { actor, AccessDenied, inTenant, scoped } from "./common";
 
 type Who = { userId: string | null; name: string; kind: "user" | "system" };
@@ -256,7 +257,7 @@ export async function releaseDueCollections(now = new Date()) {
       const count = await releaseScheduledCollection(row.tenantId, now);
       if (count) released.push(row.tenantId);
     } catch (err) {
-      console.error(`[dfir] release ${row.tenantId} failed: ${(err as Error).message}`);
+      logger.error("dfir release failed", { tenantId: row.tenantId, err });
     }
   }
   return released;

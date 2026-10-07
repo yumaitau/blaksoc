@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { can, type AccessContext } from "./auth/access";
+import { logger } from "./obs/log";
 import { queue, QUEUES } from "./queue";
 import { newRedis, redis } from "./redis";
 
@@ -28,7 +29,7 @@ export async function publish(event: SocEvent): Promise<void> {
       await queue(QUEUES.notify).add("event", { ...event, eventId }, { jobId: `event-${eventId}` });
     }
   } catch (err) {
-    console.warn(`[events] could not queue ${event.type} for subscribers: ${err instanceof Error ? err.message : err}`);
+    logger.warn("could not queue event for subscribers", { type: event.type, tenantId: event.tenantId, err });
   }
 }
 

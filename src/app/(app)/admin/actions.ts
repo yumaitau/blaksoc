@@ -14,6 +14,7 @@ import {
   verifyAudit,
   type SsoRegistration,
 } from "@/lib/services/admin";
+import { createServiceIdentity, revokeServiceIdentity, rotateServiceSecret, setServiceIdentityEnabled } from "@/lib/services/service-identities";
 
 const done = <T,>(v: T) => {
   revalidatePath("/admin");
@@ -83,4 +84,20 @@ export async function registerSsoAction(input: SsoRegistration) {
 
 export async function verifyAuditAction() {
   return withAccess(async (ctx) => verifyAudit(ctx));
+}
+
+export async function createServiceIdentityAction(input: { name: string; tenantId: string | null; scopes: string[] }) {
+  return withAccess(async (ctx) => done(await createServiceIdentity(ctx, input)));
+}
+
+export async function rotateServiceSecretAction(id: string) {
+  return withAccess(async (ctx) => done(await rotateServiceSecret(ctx, id)));
+}
+
+export async function setServiceIdentityEnabledAction(id: string, enabled: boolean) {
+  return withAccess(async (ctx) => done(await setServiceIdentityEnabled(ctx, id, enabled)));
+}
+
+export async function revokeServiceIdentityAction(id: string) {
+  return withAccess(async (ctx) => done(await revokeServiceIdentity(ctx, id)));
 }

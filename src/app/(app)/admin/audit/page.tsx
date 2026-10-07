@@ -13,7 +13,7 @@ import { VerifyIntegrity } from "./verify";
 
 export const metadata = { title: "Audit trail" };
 
-const ACTOR: Record<string, "default" | "intel" | "warn" | "accent"> = { user: "default", system: "accent", playbook: "intel", ai: "warn" };
+const ACTOR: Record<string, "default" | "intel" | "warn" | "accent"> = { user: "default", system: "accent", playbook: "intel", ai: "warn", service: "accent" };
 
 export default async function AuditPage({ searchParams }: { searchParams: Promise<{ tenant?: string; action?: string; days?: string }> }) {
   const ctx = await requireAccess();

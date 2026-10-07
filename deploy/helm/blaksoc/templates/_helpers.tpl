@@ -15,6 +15,30 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 - name: {{ $k }}
   value: {{ $v | quote }}
 {{- end }}
+- name: LOG_LEVEL
+  value: {{ .Values.observability.logLevel | quote }}
+{{- if .Values.observability.metrics.enabled }}
+- name: METRICS_PORT
+  value: {{ .Values.observability.metrics.port | quote }}
+{{- end }}
+{{- with .Values.observability.otlpEndpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Metrics container port for web and worker. */}}
+{{- define "blaksoc.metricsPort" -}}
+{{- if .Values.observability.metrics.enabled }}, { name: metrics, containerPort: {{ .Values.observability.metrics.port }} }{{ end -}}
+{{- end -}}
+
+{{/* NetworkPolicy ingress rule admitting the scraper to the metrics port. */}}
+{{- define "blaksoc.metricsIngress" -}}
+{{- if .Values.observability.metrics.enabled }}
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.observability.metrics.scrapeNamespace }} } }
+      ports: [{ port: {{ .Values.observability.metrics.port }} }]
+{{- end }}
 {{- end -}}
 
 {{/* Secret keys for web and worker. The migration job uses envFrom with the whole Secret. */}}
@@ -51,3 +75,46 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
       {{- end }}
     {{- end }}
 {{- end }}
+
+{{/* Archive and backup regions must be Australian (src/lib/syslog/retain.ts AU_ARCHIVE_REGIONS). */}}
+{{- define "blaksoc.assertAuRegion" -}}
+{{- if not (has .region (list "ap-southeast-2" "ap-southeast-4")) }}
+{{- fail (printf "%s must be ap-southeast-2 or ap-southeast-4, got %q" .what .region) }}
+{{- end }}
+{{- end -}}
+
+{{/* Durable archive env, worker only. No buckets: the file store on the /tmp emptyDir (dev only). */}}
+{{- define "blaksoc.archiveEnv" -}}
+{{- $s3 := .Values.archive.s3 }}
+{{- if $s3.buckets }}
+{{- $pairs := list }}
+{{- range $region, $bucket := $s3.buckets }}
+{{- include "blaksoc.assertAuRegion" (dict "what" "archive.s3.buckets key" "region" $region) }}
+{{- $pairs = append $pairs (printf "%s=%s" $region $bucket) }}
+{{- end }}
+- name: BLAKSOC_ARCHIVE_S3_BUCKETS
+  value: {{ join "," $pairs | quote }}
+- name: BLAKSOC_ARCHIVE_S3_SSE
+  value: {{ $s3.sse | default "AES256" | quote }}
+{{- with $s3.kmsKeyId }}
+- name: BLAKSOC_ARCHIVE_S3_KMS_KEY_ID
+  value: {{ . | quote }}
+{{- end }}
+{{- with $s3.endpoint }}
+- name: BLAKSOC_ARCHIVE_S3_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+{{- if ne (toString $s3.forcePathStyle) "" }}
+- name: BLAKSOC_ARCHIVE_S3_FORCE_PATH_STYLE
+  value: {{ toString $s3.forcePathStyle | quote }}
+{{- end }}
+- name: BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID
+  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID, optional: true } }
+- name: BLAKSOC_ARCHIVE_S3_SECRET_ACCESS_KEY
+  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: BLAKSOC_ARCHIVE_S3_SECRET_ACCESS_KEY, optional: true } }
+{{- end }}
+{{- end -}}
+
+{{- define "blaksoc.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}{{ .Values.serviceAccount.name | default (include "blaksoc.fullname" .) }}{{ else }}{{ .Values.serviceAccount.name | default "default" }}{{ end }}
+{{- end -}}

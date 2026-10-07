@@ -1,9 +1,10 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { assertAuRegion } from "@/lib/syslog/retain";
+import { assertArchiveKey, assertAuRegion } from "@/lib/syslog/retain";
+import { S3ArchiveStore, s3ArchiveConfigFromEnv } from "./s3-store";
 
-/** Region-keyed object store. Keys are relative paths. The file driver is the fixture for AU S3. */
+/** Region-keyed object store. Keys are relative paths. Drivers: local files (dev) and S3 (durable). */
 export interface ArchiveStore {
   put(region: string, key: string, body: string): Promise<void>;
   get(region: string, key: string): Promise<string>;
@@ -15,10 +16,7 @@ export class FileArchiveStore implements ArchiveStore {
 
   private resolve(region: string, key: string): string {
     assertAuRegion(region);
-    const parts = key.split("/");
-    if (!key || key.startsWith("/") || parts.some((part) => part === "" || part === "." || part === "..")) {
-      throw new Error("archive key");
-    }
+    const parts = assertArchiveKey(key);
     const full = path.resolve(this.root, region, ...parts);
     const base = path.resolve(this.root, region) + path.sep;
     if (!full.startsWith(base)) throw new Error("archive key");
@@ -27,8 +25,9 @@ export class FileArchiveStore implements ArchiveStore {
 
   async put(region: string, key: string, body: string): Promise<void> {
     const full = this.resolve(region, key);
-    await mkdir(path.dirname(full), { recursive: true });
-    await writeFile(full, body);
+    // Tenant syslog: owner-only, since the default root sits in the shared temp directory.
+    await mkdir(path.dirname(full), { recursive: true, mode: 0o700 });
+    await writeFile(full, body, { mode: 0o600 });
   }
 
   async get(region: string, key: string): Promise<string> {
@@ -66,12 +65,20 @@ export class FileArchiveStore implements ArchiveStore {
   }
 }
 
-let singleton: FileArchiveStore | null = null;
-
-/** Worker archive root. Chart sets BLAKSOC_ARCHIVE_DIR to the writable emptyDir. */
-export function defaultArchiveStore(): FileArchiveStore {
-  if (!singleton) {
-    singleton = new FileArchiveStore(process.env.BLAKSOC_ARCHIVE_DIR || path.join(tmpdir(), "blaksoc-archive"));
+/** S3 when `BLAKSOC_ARCHIVE_S3_BUCKETS` is set, else the file store under `BLAKSOC_ARCHIVE_DIR`. */
+export function archiveStoreFromEnv(env: Record<string, string | undefined>): ArchiveStore {
+  const s3 = s3ArchiveConfigFromEnv(env);
+  if (s3) return new S3ArchiveStore(s3);
+  if (env.NODE_ENV === "production") {
+    // The chart's default path is an emptyDir: objects die with the pod.
+    console.warn("[archive] BLAKSOC_ARCHIVE_S3_BUCKETS is unset; using the local file store, which is not durable");
   }
+  return new FileArchiveStore(env.BLAKSOC_ARCHIVE_DIR || path.join(tmpdir(), "blaksoc-archive"));
+}
+
+let singleton: ArchiveStore | null = null;
+
+export function defaultArchiveStore(): ArchiveStore {
+  if (!singleton) singleton = archiveStoreFromEnv(process.env);
   return singleton;
 }

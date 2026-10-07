@@ -22,3 +22,6 @@ export * from "./ir";
 export * from "./awareness";
 export * from "./governance";
 export * from "./kelpie";
+export * from "./api";
+export * from "./graph";
+export * from "./correlation";

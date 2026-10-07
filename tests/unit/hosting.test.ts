@@ -167,7 +167,7 @@ describe("hosting profile", () => {
       profiles: { tenants: number; objects: number; bytes: number; wallMs: string; httpAvgMs: string; httpP95Ms: string; serverRssBytes: number }[];
     };
     const doc = await readFile(path.join(root, "docs/hosting.md"), "utf8");
-    const worker = await readFile(path.join(root, "src/worker/index.ts"), "utf8");
+    const worker = await readFile(path.join(root, "src/worker/schedules.ts"), "utf8");
     expect(measured.tool).toBe("k6");
     expect(measured.profiles.map((row) => row.tenants)).toEqual([10, 50, 200]);
     for (const row of measured.profiles) {

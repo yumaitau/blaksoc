@@ -3,11 +3,13 @@ import { useState } from "react";
 import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
+import { GOOGLE_ISSUER } from "@/lib/auth/sso-policy";
 import { registerSsoAction } from "./actions";
 
 export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; name: string }[]; appUrl: string }) {
   const { pending, error, run } = useAction();
-  const [protocol, setProtocol] = useState<"oidc" | "saml">("oidc");
+  const [kind, setKind] = useState<"oidc" | "google" | "saml">("oidc");
+  const protocol = kind === "saml" ? "saml" : "oidc";
   const [f, setF] = useState({ providerId: "", domain: "", tenantId: "", issuer: "", clientId: "", clientSecret: "", entryPoint: "", cert: "", entraTenant: "" });
   const [ok, setOk] = useState(false);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -23,7 +25,7 @@ export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; na
       onSubmit={(e) => {
         e.preventDefault();
         setOk(false);
-        const common = { providerId: f.providerId.trim(), domain: f.domain.trim(), tenantId: f.tenantId || null, issuer: f.issuer.trim() };
+        const common = { providerId: f.providerId.trim(), domain: f.domain.trim(), tenantId: f.tenantId || null, issuer: kind === "google" ? GOOGLE_ISSUER : f.issuer.trim() };
         run(
           () => registerSsoAction(protocol === "oidc" ? { protocol, ...common, clientId: f.clientId.trim(), clientSecret: f.clientSecret } : { protocol, ...common, entryPoint: f.entryPoint.trim(), cert: f.cert.trim() }),
           () => {
@@ -34,9 +36,9 @@ export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; na
       }}
     >
       <div role="radiogroup" aria-label="Protocol" className="inline-flex rounded-md border border-border p-0.5">
-        {(["oidc", "saml"] as const).map((p) => (
-          <button key={p} type="button" role="radio" aria-checked={protocol === p} onClick={() => setProtocol(p)} className={`rounded px-3 py-1 text-xs font-medium ${protocol === p ? "bg-accent-soft text-accent" : "text-muted hover:text-fg"}`}>
-            {p === "oidc" ? "OIDC (Entra ID)" : "SAML 2.0"}
+        {(["oidc", "google", "saml"] as const).map((p) => (
+          <button key={p} type="button" role="radio" aria-checked={kind === p} onClick={() => setKind(p)} className={`rounded px-3 py-1 text-xs font-medium ${kind === p ? "bg-accent-soft text-accent" : "text-muted hover:text-fg"}`}>
+            {p === "oidc" ? "OIDC (Entra ID)" : p === "google" ? "Google Workspace" : "SAML 2.0"}
           </button>
         ))}
       </div>
@@ -59,7 +61,21 @@ export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; na
         </div>
       </div>
 
-      {protocol === "oidc" ? (
+      {kind === "google" ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="sso-gclient">OAuth client id</Label>
+            <Input id="sso-gclient" required value={f.clientId} onChange={set("clientId")} />
+          </div>
+          <div>
+            <Label htmlFor="sso-gsecret">OAuth client secret</Label>
+            <Input id="sso-gsecret" type="password" autoComplete="off" required value={f.clientSecret} onChange={set("clientSecret")} />
+          </div>
+          <p className="text-xs text-muted sm:col-span-2">
+            In the customer&apos;s Google Cloud project, create a Web application OAuth client with the Internal audience. Authorised redirect URI: <code className="font-mono text-fg">{base}/callback/{pid}</code>. Sign-ins must carry a Workspace <code className="font-mono">hd</code> claim for the email domain above; personal Google accounts are refused.
+          </p>
+        </div>
+      ) : kind === "oidc" ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
             <Label htmlFor="sso-entra">Entra directory (tenant) id: fills the issuer</Label>

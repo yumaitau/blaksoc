@@ -1,6 +1,8 @@
 import {
   bigserial, boolean, doublePrecision, index, integer, jsonb, pgEnum, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import type { GroupReason } from "@/lib/correlation/grouping";
 import type { Authentication, DetectionFinding, NetworkActivity } from "@/lib/ocsf/schema";
 import { user } from "./auth";
 import { sites, tenants } from "./platform";
@@ -76,6 +78,8 @@ export const integrations = pgTable("integrations", {
   lastError: text("last_error"),
   lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
   health: jsonb("health").$type<Record<string, unknown>>(),
+  /** Alert poll position. Durable so a Redis loss neither replays nor skips a provider window. */
+  pollCursor: text("poll_cursor"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -157,8 +161,13 @@ export const incidents = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     containedAt: timestamp("contained_at", { withTimezone: true }),
     closedAt: timestamp("closed_at", { withTimezone: true }),
+    /** Set on incidents automatic grouping opened (`grp:` + earliest alert id). Null otherwise. */
+    groupingKey: text("grouping_key"),
   },
-  (t) => [index("incidents_tenant_status").on(t.tenantId, t.status)],
+  (t) => [
+    index("incidents_tenant_status").on(t.tenantId, t.status),
+    uniqueIndex("incidents_grouping_key").on(t.tenantId, t.groupingKey).where(sql`${t.groupingKey} is not null`),
+  ],
 );
 
 export const alerts = pgTable(
@@ -196,6 +205,8 @@ export const alerts = pgTable(
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // Generated "search_vector" tsvector + GIN index "alerts_search" exist in the database
+    // (drizzle/0033_alert_search.sql) and are queried through alertTextMatch() only.
   },
   (t) => [
     uniqueIndex("alerts_source_ext").on(t.tenantId, t.source, t.externalId),
@@ -256,6 +267,13 @@ export const incidentAlerts = pgTable(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     incidentId: uuid("incident_id").notNull().references(() => incidents.id, { onDelete: "cascade" }),
     alertId: uuid("alert_id").notNull().references(() => alerts.id, { onDelete: "cascade" }),
+    /** `manual` (analyst or playbook) or `auto` (automatic grouping, which an analyst can undo). */
+    origin: text("origin").notNull().default("manual"),
+    /** Why automatic grouping linked the alert. */
+    reason: jsonb("reason").$type<GroupReason>(),
+    /** Alert status before grouping escalated it; restored on ungroup. */
+    priorStatus: alertStatus("prior_status"),
+    linkedAt: timestamp("linked_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.incidentId, t.alertId] })],
 );
@@ -283,7 +301,7 @@ export const incidentTimeline = pgTable(
     incidentId: uuid("incident_id").notNull().references(() => incidents.id, { onDelete: "cascade" }),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     origin: text("origin").notNull(), // machine | analyst | ai | customer
-    category: text("category").notNull(), // detection | intel | response | analyst | status
+    category: text("category").notNull(), // detection | intel | response | analyst | status | grouping
     title: text("title").notNull(),
     detail: text("detail"),
     actorId: text("actor_id"),

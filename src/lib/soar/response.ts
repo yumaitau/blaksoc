@@ -15,6 +15,7 @@ import { addTimeline } from "@/lib/services/incidents";
 import { AccessDenied } from "@/lib/services/common";
 import { RESPONSE_ACTIONS, type ResponseActionKey } from "./actions";
 import { decidePending, isPendingResult, type PendingResult } from "./pending";
+import { logger } from "@/lib/obs/log";
 
 export type RequestInput = {
   tenantId: string;
@@ -214,7 +215,7 @@ export async function queueExecute(tenantId: string, actionId: string) {
     await withScope(systemScope(tenantId), (tx) =>
       tx.update(responseActions).set({ status: "FAILED", result: { error: `execution job failed after ${MAX_RECOVERIES} recoveries` } }).where(and(eq(responseActions.id, actionId), eq(responseActions.status, "APPROVED"))),
     );
-    console.warn(`[response] gave up executing ${actionId} after ${MAX_RECOVERIES} recoveries`);
+    logger.warn("gave up executing response action", { actionId, recoveries: MAX_RECOVERIES });
   });
 }
 
@@ -224,7 +225,7 @@ async function queueResume(tenantId: string, runId: string, approvalId: string, 
     await withScope(systemScope(tenantId), (tx) =>
       tx.update(playbookRuns).set({ status: "FAILED", error: `resume failed after ${MAX_RECOVERIES} recoveries`, finishedAt: new Date() }).where(and(eq(playbookRuns.id, runId), eq(playbookRuns.status, "WAITING_APPROVAL"))),
     );
-    console.warn(`[playbook] gave up resuming run ${runId} after ${MAX_RECOVERIES} recoveries`);
+    logger.warn("gave up resuming playbook run", { runId, recoveries: MAX_RECOVERIES });
   });
 }
 
@@ -315,7 +316,7 @@ export async function expireDueApprovals(now: Date) {
     if (!res) continue;
     expired++;
     // The expiry is committed; a queue failure here is repaired by recoverStalledRuns on the next pass.
-    await afterExpiry(res).catch((err: unknown) => console.warn(`[approvals] follow-up for ${res.approvalId} failed: ${err instanceof Error ? err.message : err}`));
+    await afterExpiry(res).catch((err: unknown) => logger.warn("approval expiry follow-up failed", { approvalId: res.approvalId, err }));
   }
   const recovered = await recoverStalledRuns();
   return { expired, recovered };

@@ -1,4 +1,5 @@
 import { alertFromDetection, correlateImpossibleTravel, correlateMfaFatigue, paymentKeywords, type MfaPoint, type SignInPoint } from "@/lib/detections/bec";
+import { IMPOSSIBLE_TRAVEL, MFA_FATIGUE } from "@/lib/correlation/rules";
 import type { NormalisedAlert, NormalisedAsset } from "@/lib/providers/types";
 
 const LEGACY_APPS = ["imap", "pop", "smtp", "mapi", "other clients", "exchange activesync", "authenticated smtp"];
@@ -214,7 +215,7 @@ export function deriveCorrelations(signIns: SignInPoint[], mailboxUsers: Set<str
       userName: hit.user,
       assetExternalId: null,
       techniques: ["T1078", "T1114.003"],
-      raw: { eventType: "impossible_travel", mailboxActivity: "yes", countries: `${hit.from.country},${hit.to.country}`, ip: hit.to.ip, ruleId: undefined, grantId: undefined },
+      raw: { eventType: "impossible_travel", mailboxActivity: "yes", countries: `${hit.from.country},${hit.to.country}`, ip: hit.to.ip, country: hit.to.country, ruleId: undefined, grantId: undefined, correlation: { ruleId: IMPOSSIBLE_TRAVEL.id, ruleVersion: IMPOSSIBLE_TRAVEL.version, matches: hit.matches } },
     }));
   }
   for (const hit of correlateMfaFatigue(mfa)) {
@@ -228,7 +229,7 @@ export function deriveCorrelations(signIns: SignInPoint[], mailboxUsers: Set<str
       userName: hit.user,
       assetExternalId: null,
       techniques: ["T1621"],
-      raw: { eventType: "mfa_fatigue", outcome: "approved", deniedCount: hit.denied },
+      raw: { eventType: "mfa_fatigue", outcome: "approved", deniedCount: hit.denied, correlation: { ruleId: MFA_FATIGUE.id, ruleVersion: MFA_FATIGUE.version, matches: hit.matches } },
     }));
   }
   return out;

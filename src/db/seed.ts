@@ -9,6 +9,7 @@ import { BEC_DETECTIONS, SUSPECTED_BEC_PLAYBOOK } from "@/lib/detections/bec";
 import { attackTechniques as sigmaAttack, parseSigma, runTests } from "@/lib/detections/sigma";
 import { smeImportPlan } from "@/lib/detections/sme-pack";
 import { env } from "@/lib/env";
+import { backfillAllTenants } from "@/lib/graph/backfill";
 import { FixtureIntelProvider } from "@/lib/intel/fixture";
 import { ingestAlert } from "@/lib/pipeline/ingest";
 import { syncAssets } from "@/lib/pipeline/assets";
@@ -209,7 +210,7 @@ async function main() {
   const intel = new FixtureIntelProvider();
   for (const t of tenantRows) {
     const mine = (await provider.getAssets()).filter((a) => a.routingKeys.includes(`group:${t.group}`));
-    const map = await withScope({ tenantIds: [t.id], platform: false }, (tx) => syncAssets(tx, t.id, wz!.id, mine));
+    const map = await withScope({ tenantIds: [t.id], platform: false }, (tx) => syncAssets(tx, t.id, wz!.id, mine, "wazuh"));
     // Enrich inventory: criticality, exposure, identities, vulnerabilities.
     for (const [ext, assetId] of map) {
       const a = agents.find((x) => x.id === ext)!;
@@ -268,7 +269,7 @@ async function main() {
   }
   const m365Provider = eventProvider(m365!);
   const m365Assets = await m365Provider.getAssets();
-  await withScope({ tenantIds: [wattle!.id], platform: false }, (tx) => syncAssets(tx, wattle!.id, m365!.id, m365Assets));
+  await withScope({ tenantIds: [wattle!.id], platform: false }, (tx) => syncAssets(tx, wattle!.id, m365!.id, m365Assets, "entra"));
   const { alerts: m365Alerts } = await m365Provider.getAlerts({ since: new Date(Date.now() - 7 * 24 * 3600_000) });
   for (const a of m365Alerts) {
     await ingestAlert({ tenantId: wattle!.id, integrationId: m365!.id, source: "entra", alert: a, intel });
@@ -289,13 +290,15 @@ async function main() {
   }
   const googleProvider = eventProvider(google!);
   const googleAssets = await googleProvider.getAssets();
-  await withScope({ tenantIds: [wattle!.id], platform: false }, (tx) => syncAssets(tx, wattle!.id, google!.id, googleAssets));
+  await withScope({ tenantIds: [wattle!.id], platform: false }, (tx) => syncAssets(tx, wattle!.id, google!.id, googleAssets, "google-workspace"));
   const { alerts: googleAlerts } = await googleProvider.getAlerts({ since: new Date(Date.now() - 7 * 24 * 3600_000) });
   for (const a of googleAlerts) {
     await ingestAlert({ tenantId: wattle!.id, integrationId: google!.id, source: "google-workspace", alert: a, intel });
   }
 
   await db.execute(sql`update assets s set risk_score = coalesce((select max(a.risk_score) from alerts a where a.asset_id = s.id), 0)`);
+  // Identities above were inserted directly, not through asset sync; the backfill graphs them and links their alerts.
+  await backfillAllTenants();
 
   console.log("seed complete (demo)");
   await redis().quit();

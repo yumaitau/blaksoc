@@ -1,3 +1,8 @@
+import { toBaseEvent, toDetectionFinding, type Provenance } from "@/lib/ocsf/map";
+import {
+  clampRange, DAY_MS, decodeCursor, encodeCursor, entityFilters, pageSizeFor,
+  type DataCapabilities, type EventEntity, type EventPage, type EventSearchQuery, type SearchEvent, type SecurityDataProvider, type TenantDataScope,
+} from "./data";
 import { httpJson, type HttpOptions } from "./http";
 import type {
   AlertQuery, NormalisedAlert, NormalisedAsset, NormalisedVulnerability, ProviderHealth, ResponseActionRequest,
@@ -8,6 +13,8 @@ export type WazuhConfig = {
   apiUrl: string; // https://wazuh-manager:55000
   indexerUrl: string; // https://wazuh-indexer:9200
   alertsIndex?: string; // default wazuh-alerts-4.x-*
+  /** Optional: also search the full event archive (logall_json), e.g. wazuh-archives-4.x-*. */
+  archivesIndex?: string;
   vulnerabilitiesIndex?: string; // default wazuh-states-vulnerabilities-*
   tlsVerify?: boolean;
   caPem?: string;
@@ -45,10 +52,12 @@ export function wazuhLevelToSeverity(level: number): Severity {
 
 type WazuhAlertSource = {
   timestamp: string;
+  "@timestamp"?: string;
+  decoder?: { name?: string };
   id?: string;
   rule?: { id?: string; level?: number; description?: string; groups?: string[]; mitre?: { id?: string[] } };
   agent?: { id?: string; name?: string; ip?: string };
-  data?: Record<string, unknown> & { srcuser?: string; dstuser?: string; win?: { eventdata?: Record<string, unknown> } };
+  data?: Record<string, unknown> & { srcip?: string; dstip?: string; srcuser?: string; dstuser?: string; win?: { eventdata?: Record<string, unknown> } };
   full_log?: string;
 };
 
@@ -244,6 +253,10 @@ export class WazuhProvider implements SecurityEventProvider {
     return { ok, message: res.message ?? (ok ? "active response dispatched" : "no agents affected") };
   }
 
+  dataProvider(scope: TenantDataScope): SecurityDataProvider {
+    return new WazuhDataProvider((index, body) => this.search(index, body), this.cfg, scope);
+  }
+
   async health(): Promise<ProviderHealth> {
     const start = Date.now();
     try {
@@ -252,6 +265,172 @@ export class WazuhProvider implements SecurityEventProvider {
         this.api<{ data: { connection?: Record<string, number> } }>("/agents/summary/status"),
       ]);
       return { ok: true, latencyMs: Date.now() - start, detail: { version: info.data.api_version, host: info.data.hostname, agents: agents.data.connection } };
+    } catch (err) {
+      return { ok: false, latencyMs: Date.now() - start, detail: {}, error: (err as Error).message };
+    }
+  }
+}
+
+export const WAZUH_DATA_CAPABILITIES: DataCapabilities = {
+  search: true,
+  getEvent: true,
+  entityActivity: true,
+  ocsfClasses: [2004, 0],
+  maxRangeMs: 90 * DAY_MS,
+  paging: "cursor",
+  maxPageSize: 200,
+  freeText: "lucene",
+  filters: ["severity", "host", "user", "ip", "ruleId"],
+  tiers: ["hot"],
+};
+
+/** Wazuh rule level bands behind each blakSOC severity (inverse of wazuhLevelToSeverity). */
+const LEVEL_BANDS: Record<Severity, { gte: number; lte?: number }> = {
+  informational: { gte: 0, lte: 3 },
+  low: { gte: 4, lte: 6 },
+  medium: { gte: 7, lte: 9 },
+  high: { gte: 10, lte: 12 },
+  critical: { gte: 13 },
+};
+
+const USER_FIELDS = ["data.srcuser", "data.dstuser", "data.win.eventdata.targetUserName", "data.win.eventdata.subjectUserName"];
+const IP_FIELDS = ["agent.ip", "data.srcip", "data.dstip"];
+
+type IndexSearch = <T>(index: string, body: unknown) => Promise<T>;
+type Hit = { _id: string; _index?: string; _source: WazuhAlertSource; sort?: unknown[] };
+type SearchResponse = { timed_out?: boolean; _shards?: { failed?: number }; hits: { total?: { value: number }; hits: Hit[] } };
+
+const isSortValues = (v: unknown): v is (string | number)[] =>
+  Array.isArray(v) && v.length === 2 && v.every((x) => typeof x === "string" || typeof x === "number");
+
+const wildcardEscape = (v: string) => v.replace(/[\\*?]/g, (c) => `\\${c}`);
+
+/**
+ * Query-in-place over the Wazuh indexer for one tenant. On a shared cluster every query carries a
+ * `terms` filter on the tenant's agent ids; a tenant with no mapped agents gets no query at all.
+ */
+export class WazuhDataProvider implements SecurityDataProvider {
+  readonly kind = "wazuh";
+
+  constructor(private readonly indexSearch: IndexSearch, private readonly cfg: WazuhConfig, private readonly scope: TenantDataScope) {}
+
+  capabilities(): DataCapabilities {
+    return WAZUH_DATA_CAPABILITIES;
+  }
+
+  private indices(): string {
+    return [this.cfg.alertsIndex ?? "wazuh-alerts-4.x-*", this.cfg.archivesIndex].filter(Boolean).join(",");
+  }
+
+  /** Undefined: the tenant owns the cluster. Null: nothing on this cluster belongs to the tenant. */
+  private tenantFilter(): object | null | undefined {
+    if (this.scope.agentIds === "all") return undefined;
+    if (!this.scope.agentIds.length) return null;
+    return { terms: { "agent.id": [...this.scope.agentIds] } };
+  }
+
+  private query(q: EventSearchQuery, range: { from: Date; to: Date }, tenant: object | undefined) {
+    const filter: unknown[] = [{ range: { timestamp: { gte: range.from.toISOString(), lte: range.to.toISOString() } } }];
+    if (tenant) filter.push(tenant);
+    const f = q.filters ?? {};
+    const host = f.host?.trim();
+    const user = f.user?.trim();
+    const ip = f.ip?.trim();
+    const ruleId = f.ruleId?.trim();
+    const text = q.text?.trim();
+    if (f.severity?.length) filter.push({ bool: { should: f.severity.map((s) => ({ range: { "rule.level": LEVEL_BANDS[s] } })), minimum_should_match: 1 } });
+    if (host) {
+      const value = `*${wildcardEscape(host)}*`;
+      filter.push({ bool: { should: ["agent.name", "predecoder.hostname"].map((field) => ({ wildcard: { [field]: { value, case_insensitive: true } } })), minimum_should_match: 1 } });
+    }
+    if (user) filter.push({ bool: { should: USER_FIELDS.map((field) => ({ term: { [field]: { value: user, case_insensitive: true } } })), minimum_should_match: 1 } });
+    if (ip) filter.push({ bool: { should: IP_FIELDS.map((field) => ({ term: { [field]: ip } })), minimum_should_match: 1 } });
+    if (ruleId) filter.push({ term: { "rule.id": ruleId } });
+    if (text) filter.push({ query_string: { query: text, default_operator: "AND", lenient: true, analyze_wildcard: true } });
+    return { bool: { filter } };
+  }
+
+  private toEvent(h: Hit): SearchEvent | null {
+    const src = h._source;
+    const time = new Date(src.timestamp ?? src["@timestamp"] ?? "");
+    if (Number.isNaN(time.getTime())) return null;
+    const p: Provenance = { source: "wazuh", sourceEventId: h._id, tenantId: this.scope.tenantId, ingestedAt: time };
+    const a = src.agent;
+    const device = a?.id || a?.name ? { type_id: 0, ...(a.name ? { hostname: a.name } : {}), ...(a.id ? { uid: a.id } : {}), ...(a.ip && a.ip !== "any" ? { ip: a.ip } : {}) } : undefined;
+    const ocsf = src.rule?.id
+      ? toDetectionFinding(normaliseWazuhAlert(h._id, { ...src, timestamp: time.toISOString() }), p)
+      : toBaseEvent(
+          {
+            time,
+            message: src.full_log?.slice(0, 500) ?? `Wazuh ${src.decoder?.name ?? "event"}`,
+            severity: "informational",
+            device,
+            src: src.data?.srcip ? { ip: src.data.srcip } : undefined,
+            dst: src.data?.dstip ? { ip: src.data.dstip } : undefined,
+            unmapped: src.decoder?.name ? { decoder: src.decoder.name } : undefined,
+          },
+          p,
+        );
+    return {
+      id: h._id,
+      time: time.getTime(),
+      ocsf,
+      provenance: { integrationId: this.scope.integrationId, provider: "wazuh", tenantId: this.scope.tenantId, tier: "hot", location: h._index ?? this.indices() },
+      raw: src as Record<string, unknown>,
+    };
+  }
+
+  async search(q: EventSearchQuery): Promise<EventPage> {
+    const tenant = this.tenantFilter();
+    if (tenant === null) return { events: [], cursor: null, total: 0, notice: "No agents on this cluster are mapped to this customer yet." };
+    const caps = this.capabilities();
+    const range = clampRange(q, caps);
+    const size = pageSizeFor(q, caps);
+    const after = decodeCursor(q.cursor, isSortValues);
+    const res = await this.indexSearch<SearchResponse>(this.indices(), {
+      size,
+      sort: [{ timestamp: { order: "desc" } }, { _id: { order: "desc" } }],
+      query: this.query(q, range, tenant),
+      ...(after ? { search_after: after } : {}),
+    });
+    const hits = res.hits.hits;
+    const events = hits.map((h) => this.toEvent(h)).filter((e): e is SearchEvent => e !== null);
+    const last = hits.at(-1);
+    const problems = [
+      range.clamped ? `range limited to the last ${Math.round((caps.maxRangeMs ?? 0) / DAY_MS)} days` : null,
+      res.timed_out ? "the indexer timed out" : null,
+      res._shards?.failed ? `${res._shards.failed} shard(s) failed` : null,
+      events.length < hits.length ? `${hits.length - events.length} record(s) without a timestamp skipped` : null,
+    ].filter(Boolean);
+    return {
+      events,
+      cursor: hits.length === size && last?.sort && isSortValues(last.sort) ? encodeCursor(last.sort) : null,
+      total: res.hits.total?.value,
+      ...(problems.length ? { partial: problems.join("; ") } : {}),
+    };
+  }
+
+  async getEvent(id: string): Promise<SearchEvent | null> {
+    const tenant = this.tenantFilter();
+    if (tenant === null || !id || id.length > 512) return null;
+    const res = await this.indexSearch<SearchResponse>(this.indices(), {
+      size: 1,
+      query: { bool: { filter: [{ ids: { values: [id] } }, ...(tenant ? [tenant] : [])] } },
+    });
+    const h = res.hits.hits[0];
+    return h ? this.toEvent(h) : null;
+  }
+
+  getEntityActivity(entity: EventEntity, range: { from: Date; to: Date }, page: { pageSize?: number; cursor?: string | null } = {}): Promise<EventPage> {
+    return this.search({ ...range, ...page, filters: entityFilters(entity) });
+  }
+
+  /** Indexer reachability with the configured credentials. */
+  async health(): Promise<ProviderHealth> {
+    const start = Date.now();
+    try {
+      await this.indexSearch(this.cfg.alertsIndex ?? "wazuh-alerts-4.x-*", { size: 0, query: { match_none: {} } });
+      return { ok: true, latencyMs: Date.now() - start, detail: { indices: this.indices() } };
     } catch (err) {
       return { ok: false, latencyMs: Date.now() - start, detail: {}, error: (err as Error).message };
     }

@@ -94,6 +94,8 @@ switcher narrows the RLS scope further.
   `opencti` (platform + MITRE, CISA KEV, NVD CVE, URLhaus, MalwareBazaar, EPSS connectors) and `ai` (Ollama).
 - **Kubernetes:** `deploy/helm/blaksoc` — web (HPA, PDB), worker, pre-upgrade migration job, ingress
   tuned for SSE, NetworkPolicies, non-root read-only containers. Secrets come from an existing Secret.
+- **Backup and DR:** AU S3 syslog archive, Postgres dumps (`deploy/backup`), RPO/RTO per profile, restore
+  runbook and the quarterly drill (`pnpm drill:restore`) are in `docs/disaster-recovery.md`.
 - **Wazuh:** run the official wazuh-docker/Helm stack; see `deploy/wazuh/README.md` for accounts,
   multi-tenant agent-group routing and the isolation scripts blakSOC uses for containment.
 

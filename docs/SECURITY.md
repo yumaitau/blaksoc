@@ -5,7 +5,9 @@
 | Path | Who | Notes |
 |---|---|---|
 | Microsoft Entra ID (OIDC) | Yuma IT staff | `ENTRA_*` env; single-tenant app registration. MFA enforced by Entra Conditional Access. |
-| Organisation SSO (OIDC or SAML) | Customer users, government/enterprise IdPs | Registered per customer by platform admins only (`providersLimit` is 0 for everyone else). Users arrive with **no role** until one is assigned. |
+| Google Workspace (OIDC) | Yuma IT staff | `GOOGLE_*` env. `GOOGLE_HOSTED_DOMAIN` is required with the client id; it is sent as the `hd` hint and checked against the verified ID token, so personal Google accounts are refused. |
+| Organisation SSO (OIDC, SAML or Google Workspace) | Customer users, government/enterprise IdPs | Registered per customer by platform admins only (`providersLimit` is 0 for everyone else). The SSO `resolveUser` hook refuses an identity whose email is outside the provider's domains, and a Google identity whose `hd` claim is not one of them (`src/lib/auth/sso-policy.ts`). Users arrive with **no role** until one is assigned. |
+| Passkey (WebAuthn) | Any user with access | Added at `/account/security` from a session no older than 15 minutes (`session.freshAge`), so a stolen cookie cannot mint a lasting credential. Adds and deletions are audited (`auth.passkey.add`, `auth.passkey.delete`). A passkey does not go back to the IdP: disable the blakSOC user to stop it working until SCIM deprovisioning exists (#102). |
 | Password | Break-glass administrators only | Sign-in hook rejects password auth for any non-break-glass user. TOTP enrolment is forced before any page loads (`BREAK_GLASS_REQUIRE_MFA`). Sessions show a red banner. |
 | Demo personas | `DEMO_MODE=true` only | Never enable in production. |
 
@@ -14,6 +16,14 @@
 - Permissions (`src/lib/auth/permissions.ts`) are grouped into built-in roles; custom roles are rows in `roles`.
 - Platform-scope roles (Yuma IT) span tenants; tenant-scope roles are bound to one tenant. A tenant role assigned without a tenant is ignored, never widened.
 - Every service call checks the permission **per tenant** and builds the DB scope from only the tenants where the permission holds.
+
+## Service identities and the REST API
+
+- `/api/v1` is for machine callers only. A service identity (Admin → API clients) is bound to one tenant, or to the platform, and holds a set of scopes drawn from `permissions.ts`. Its creator needs `user:manage` there (platform `user:manage` for a platform identity) and cannot grant a scope they do not hold on that target; rotating or re-enabling applies the same ceiling, since it hands over the identity's access. Disabling and revoking need only `user:manage`.
+- The client secret (`bss_…`, 256 random bits) is shown once and stored as SHA-256, compared in constant time. `POST /api/v1/oauth/token` (OAuth client_credentials) issues an opaque bearer token (`bsa_…`) valid for 15 minutes, also stored only as SHA-256. Opaque tokens were chosen over signed JWTs: there is no signing key to manage, and every call re-reads the identity, so disabling, rotating or revoking stops outstanding tokens at once.
+- Each call builds an `AccessContext` from the identity's single grant and goes through the same `src/lib/services/*` functions, so permission checks, RLS and domain audit rows are unchanged. The actor is the identity (`actor_kind = service`). Every authenticated call also writes an `api.request` audit row (route, status, source IP); token issue and refused secrets are audited as `api.token` and `api.token_denied`. Calls rejected by the rate limit are not audited.
+- Rate limits are per identity (300 calls a minute) and per client id at the token endpoint (20 a minute), counted in Redis like sign-in.
+- The OpenAPI 3.1 document is generated from the route schemas (`pnpm openapi`, served at `/api/v1/openapi.json`); a unit test fails when `docs/openapi.json` is stale.
 
 ## Tenant isolation (defence in depth)
 
@@ -102,6 +112,33 @@ The `surface` worker job is the only scanner. It allows one active scan per tena
 ## Credential exposure
 
 A domain must pass TXT verification before a breach check runs. Each stored row has the email address, breach name, source (`hibp` or the commercial feed name), observation date, and data classes. Permitted classes are `email`, `username`, and `password-hash`. Plaintext passwords are removed before insert and are not a permitted class. The same email, breach, and source are stored once. Commercial infostealer rows use `filterByEntitlement()` and are dropped when the tenant is not licensed for that feed.
+
+## Browser hardening
+
+`src/proxy.ts` sets a per-request Content-Security-Policy on every page and API response (except
+better-auth's own `/api/auth/*` protocol endpoints): scripts only
+with the request's nonce (`'strict-dynamic'`, no `'unsafe-inline'` or `'unsafe-eval'` in production),
+same-origin `connect-src` (SSE) and `worker-src` (portal service worker), `frame-ancestors 'none'`,
+`form-action 'self'`, `base-uri 'none'`, `object-src 'none'`. Every page renders per request so Next.js can
+stamp the nonce on its scripts (`src/app/layout.tsx`); an inline script must read `x-nonce` from the request
+headers (see `src/app/(portal)/layout.tsx`). Other headers (HSTS, `X-Frame-Options`, `nosniff`,
+`Referrer-Policy`, `Permissions-Policy`) are in `next.config.ts`.
+
+## Supply chain
+
+CI builds the app and both images and validates the chart on every PR (`.github/workflows/ci.yml`), runs
+CodeQL, gitleaks over full history and `pnpm audit --prod` at high severity. Release images are scanned with
+Trivy, signed with cosign keyless, and published with SPDX and CycloneDX SBOMs and the scan report
+(`.github/workflows/release.yml`). Verify an image before deploying it:
+
+```sh
+cosign verify ghcr.io/yumaitau/blaksoc-web@<digest> \
+  --certificate-identity-regexp '^https://github.com/yumaitau/blaksoc/.github/workflows/release.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Threats, trust boundaries and open risks: [`threat-model.md`](threat-model.md). Disclosure policy:
+[`/SECURITY.md`](../SECURITY.md).
 
 ## Hardening checklist
 

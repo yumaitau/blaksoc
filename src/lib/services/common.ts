@@ -26,4 +26,7 @@ export async function inTenant<T>(ctx: AccessContext, permission: Permission, te
   return withScope(dbScope(ctx, [tenantId]), fn);
 }
 
-export const actor = (ctx: AccessContext) => ({ actorId: ctx.principal.userId, actorKind: "user" as const });
+export const actor = (ctx: AccessContext) => ({ actorId: ctx.principal.userId, actorKind: ctx.principal.kind === "service" ? ("service" as const) : ("user" as const) });
+
+/** Value for a column that references "user": null when a service identity acts. */
+export const userRef = (ctx: AccessContext) => (ctx.principal.kind === "service" ? null : ctx.principal.userId);

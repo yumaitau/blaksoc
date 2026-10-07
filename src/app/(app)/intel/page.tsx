@@ -14,6 +14,7 @@ import { intelMatchesFor } from "@/lib/services/alerts";
 import { coveredAttackTechniques, listAdvisories, listFeeds, searchIntel, sightingQueue } from "@/lib/services/intel";
 import { cn, fmtDateTime } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
+import { logger } from "@/lib/obs/log";
 import { EntitlementToggles, FeedToggle, ShareSightingButton, TagRelevance } from "./intel-controls";
 
 export const metadata = { title: "Threat intelligence" };
@@ -172,7 +173,7 @@ async function Search({ ctx, q }: { ctx: AccessContext; q: string }) {
     try {
       res = await searchIntel(ctx, q);
     } catch (err) {
-      console.error("[intel.search]", err);
+      logger.error("intel search failed", { err });
       failure = "OpenCTI did not respond. Check the integration health, then try again.";
     }
   }

@@ -1,0 +1,89 @@
+{{- if .Values.backup.enabled }}
+{{- $b := .Values.backup }}
+{{- if not $b.bucket }}{{ fail "backup.enabled needs backup.bucket" }}{{ end }}
+{{- include "blaksoc.assertAuRegion" (dict "what" "backup.region" "region" $b.region) }}
+# Logical Postgres backup: pg_dump -Fc into an emptyDir, then upload to the AU bucket and prune.
+# The script is deploy/backup/pg-backup.sh. See docs/disaster-recovery.md for restore and PITR.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "blaksoc.fullname" . }}-backup
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+data:
+  pg-backup.sh: |-
+{{ .Files.Get "files/pg-backup.sh" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "blaksoc.fullname" . }}-backup
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ $b.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ $b.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels: {{- include "blaksoc.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "blaksoc.serviceAccountName" . }}
+          securityContext: {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          # Dump first (postgres image), upload second (aws-cli image, server-side encrypted).
+          initContainers:
+            - name: dump
+              image: {{ $b.pgImage }}
+              command: ["sh", "/scripts/pg-backup.sh", "dump"]
+              env:
+                - name: BACKUP_DIR
+                  value: /backup
+                - name: BACKUP_DATABASE_URL
+                  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: DATABASE_ADMIN_URL } }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+              securityContext: {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts: [{ name: backup, mountPath: /backup }, { name: scripts, mountPath: /scripts }, { name: tmp, mountPath: /tmp }]
+          containers:
+            - name: upload
+              image: {{ $b.uploadImage }}
+              command: ["sh", "/scripts/pg-backup.sh", "upload"]
+              env:
+                - { name: HOME, value: /tmp }
+                - { name: BACKUP_DIR, value: /backup }
+                - { name: BACKUP_BUCKET, value: {{ $b.bucket | quote }} }
+                - { name: BACKUP_REGION, value: {{ $b.region | quote }} }
+                - { name: BACKUP_PREFIX, value: {{ $b.prefix | quote }} }
+                - { name: BACKUP_KEEP, value: {{ $b.keep | quote }} }
+                - { name: BACKUP_SSE, value: {{ $b.sse | quote }} }
+                {{- with $b.kmsKeyId }}
+                - { name: BACKUP_KMS_KEY_ID, value: {{ . | quote }} }
+                {{- end }}
+                {{- with $b.endpoint }}
+                - { name: BACKUP_ENDPOINT, value: {{ . | quote }} }
+                {{- end }}
+                # Optional static keys; without them the AWS default chain (IRSA, Pod Identity) applies.
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: BACKUP_AWS_ACCESS_KEY_ID, optional: true } }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: BACKUP_AWS_SECRET_ACCESS_KEY, optional: true } }
+              resources: {{- toYaml $b.resources | nindent 16 }}
+              securityContext: {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts: [{ name: backup, mountPath: /backup }, { name: scripts, mountPath: /scripts }, { name: tmp, mountPath: /tmp }]
+          volumes:
+            - { name: backup, emptyDir: {} }
+            - { name: tmp, emptyDir: {} }
+            - name: scripts
+              configMap: { name: {{ include "blaksoc.fullname" . }}-backup }
+          {{- with .Values.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations: {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
