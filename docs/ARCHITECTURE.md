@@ -20,6 +20,7 @@ scoreAlert()  SIEM severity + asset criticality + exposure + identity privilege 
 ocsfForAlert() + validateOcsf()  Detection Finding (+ Network Activity / Authentication source record)
       ▼
 alerts / observables / intel_matches rows (RLS scope = that tenant)  →  Redis pub/sub → SSE
+      +  entity graph: alert, device, user, observable, indicator entities and edges (same transaction)
       ▼
 evaluateTriggers("alert.created")  →  playbook runs  →  approval gates  →  response actions
 ```
@@ -47,6 +48,58 @@ and blakSOC stores only what it needs locally (CVE scoring context, advisories, 
 Alerts are stored with an OCSF Detection Finding and, where blakSOC maps the source record, that record in its
 OCSF activity class. Provenance (source, source event id, tenant, ingestion time, normaliser version) is in OCSF
 `metadata`; the vendor payload stays in `alerts.raw`. See [ocsf.md](ocsf.md).
+
+## Entity graph
+
+Postgres tables under the same forced RLS as everything else (`src/db/schema/graph.ts`, `src/lib/graph`).
+No graph database: revisit only with a measured need.
+
+- `entities`: one row per (tenant, type, canonical key). Types: user, identity, device, ip, domain, url, file,
+  process, cloud_resource, indicator, threat_actor, campaign, email, alert. Keys are normalised per type
+  (`canonicalKey`): devices on short hostname (the asset dedup key), users lowercased, files as `sha256:<hex>`.
+  Identifiers (jsonb), source systems and first/last seen merge on upsert.
+- `entity_aliases`: alternate identifiers (asset id, MAC, FQDN, provider source id, account name) → entity.
+  First claim wins.
+- `entity_relationships`: directed, typed edges, unique on (tenant, from, to, type), with first/last seen,
+  count, provenance and the record that created the edge. `observed` means a record states the relationship;
+  `inferred` means blakSOC derived it (a user name matched to an identity, a user acting on a device without
+  a sign-in record). Once any record states an edge it stays `observed`.
+- `entity_relationship_evidence`: every record (alert, asset, intel match) that asserted an edge. An edge's
+  count only moves when a new evidence row lands, so re-ingest and backfill are idempotent.
+
+Aliases and edges reference entities by (id, tenant_id), so the database rejects a row joining two tenants.
+
+| Edge | From → to | Written by | Provenance |
+|---|---|---|---|
+| `alerted_on` | alert → device, user, ip, domain, url, file, email | ingest | observed |
+| `logged_into` | user → device | ingest | observed on a successful sign-in; inferred when the user merely acted on the device; none for a failed sign-in |
+| `communicated_with` | ip → ip | ingest (OCSF Network Activity) | observed |
+| `matched` | alert → indicator | ingest (intel match) | observed |
+| `indicates` | indicator → ip, domain, url, file, email | ingest (intel match) | observed |
+| `attributed_to` | indicator → threat actor, campaign | ingest (intel match) | observed |
+| `has_ip` | device → ip | asset sync | observed |
+| `same_as` | user → identity | ingest and asset sync (account-name match) | inferred |
+
+Writers: `ingestAlert` and `syncAssets` record facts inside their own transaction behind a savepoint, so a
+failed graph write is logged and never costs the alert or asset. `pnpm db:graph-backfill [tenantId]`
+(`src/lib/graph/backfill.ts`) rebuilds a tenant from stored assets and alerts; the demo seed runs it.
+
+Traversal (`traverse`, `src/lib/graph/traverse.ts`): breadth-first from one entity, one indexed query per hop,
+edges followed in both directions, depth capped at 3, optional entity-type and relationship-type filters, and a
+row limit (default 200, max 1000) that keeps entities on the most recent edges first. Returns the entities
+reached with their hop count and the edges among them, with provenance. Per-hop queries rather than one
+recursive CTE: a CTE cannot share a visited set across branches, so a hub is re-expanded on every path. It runs
+in the caller's RLS scope and filters by tenant, so another tenant's entity id returns nothing.
+
+Measured traversal latency (depth 3, Postgres 16, Apple M4, warm cache):
+
+| Data | Graph size | Limit | p50 | p95 |
+|---|---|---|---|---|
+| Demo seed (one `pnpm db:seed`), every user and identity as start, 22 × 10 runs | 159 entities, 205 edges | 200 | 1.8 ms | 2.9 ms |
+| Synthetic busy user: 2,000 alerts, 50 devices, 10,350 edges (`tests/integration/graph.test.ts`) | 10,350 edges | 200 | 17.0 ms | 23.6 ms |
+| Same | 10,350 edges | 1000 | 29.4 ms | 37.0 ms |
+
+The integration test fails if p50 at limit 200 exceeds 500 ms.
 
 ## Risk scores are explainable by construction
 
@@ -88,6 +141,7 @@ Most providers finish a response action in the call. Endpoint agents that act on
 | `/soc/alerts`, `/soc/alerts/[id]` | Unified queue (saved views, bulk actions) and alert detail with risk factors + intel |
 | `/soc/incidents`, `/soc/incidents/[id]` | Case management with visual timeline, evidence, tasks, containment |
 | `/soc/approvals` | Human approval gates |
+| `/soc/entities/[id]` | Entity: identifiers, aliases, neighbours by relationship with provenance and evidence, reach within 3 hops |
 | `/assets`, `/assets/[id]` | Deduplicated asset inventory |
 | `/vulnerabilities` | "What should this customer patch first?" with evidence |
 | `/intel` | Australian threat intelligence, OpenCTI search/tagging, sightings, feeds & licences |
@@ -107,7 +161,8 @@ Server components read through `src/lib/services/*`; mutations are server action
 Platform: `tenants`, `sites`, `roles`, `role_assignments`, `saved_views`, auth tables.
 Security: `alerts`, `observables`, `alert_observables`, `intel_matches`, `assets`, `asset_sources`,
 `vulnerabilities`, `incidents`, `incident_alerts`, `incident_links`, `incident_timeline`, `incident_notes`,
-`incident_tasks`, `evidence`. Detection: `sigma_rules`, `sigma_rule_versions`, `sigma_rule_tests`,
+`incident_tasks`, `evidence`. Graph: `entities`, `entity_aliases`, `entity_relationships`,
+`entity_relationship_evidence`. Detection: `sigma_rules`, `sigma_rule_versions`, `sigma_rule_tests`,
 `detection_deployments`. SOAR: `playbooks`, `playbook_runs`, `playbook_run_steps`, `approvals`,
 `response_actions`. AI: `ai_conversations`, `ai_messages`, `ai_invocations`. Reports: `reports`.
 Global reference (no tenant data): `cve_intel`, `attack_techniques`, `intel_feeds`, `advisories`, `intel_tags`.

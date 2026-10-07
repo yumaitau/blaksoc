@@ -147,7 +147,11 @@ DECLARE
     'awareness_clicks',
     'data_governance',
     'governance_changes',
-    'kelpie_cases'
+    'kelpie_cases',
+    'entities',
+    'entity_aliases',
+    'entity_relationships',
+    'entity_relationship_evidence'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];

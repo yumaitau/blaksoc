@@ -58,7 +58,7 @@ export async function syncAllAssets(log: Log) {
         const keys = (link.selector.agentGroups ?? []).map((g) => `group:${g}`);
         const list = await provider.getAssets(keys.length ? keys : undefined);
         const mine = keys.length ? list.filter((a) => a.routingKeys.some((k) => keys.includes(k))) : list;
-        await withScope(systemScope(link.tenantId), (tx) => syncAssets(tx, link.tenantId, row.id, mine));
+        await withScope(systemScope(link.tenantId), (tx) => syncAssets(tx, link.tenantId, row.id, mine, row.provider === "demo" ? "wazuh" : row.provider));
         log(`assets ${row.name} → tenant ${link.tenantId.slice(0, 8)}: ${mine.length}`);
       }
       await markHealth(row, true);

@@ -39,7 +39,7 @@ export async function syncVeeamBackups(tenantId: string, now = new Date()): Prom
         lastSeen: item.lastSuccessAt,
         routingKeys: [],
         raw: { failedJobs: item.system.failedJobs, immutable: item.system.immutable, offlineCopy: item.system.offlineCopy },
-      }))))
+      })), row.provider))
     : new Map<string, string>();
 
   await withScope(systemScope(tenantId), async (tx) => {

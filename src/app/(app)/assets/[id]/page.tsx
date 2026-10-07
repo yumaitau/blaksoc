@@ -7,6 +7,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { getAsset } from "@/lib/services/assets";
+import { entityLinks } from "@/lib/services/entities";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { AgentStatus, Criticality, Exposure } from "../asset-bits";
 import { EditAsset } from "./edit-asset";
@@ -51,6 +52,7 @@ export default async function AssetPage({ params }: { params: Promise<{ id: stri
   const openVulns = d.vulnerabilities.filter((v) => v.status === "open");
   const openAlerts = d.alerts.filter((x) => x.status !== "RESOLVED" && x.status !== "FALSE_POSITIVE");
   const alertHref = (alertId: string) => (ctx.isPlatform ? `/soc/alerts/${alertId}` : null);
+  const graph = ctx.isPlatform && can(ctx, "alert:read", a.tenantId) ? await entityLinks(ctx, a.tenantId, { assetId: a.id }) : {};
 
   return (
     <div className="space-y-5">
@@ -58,7 +60,12 @@ export default async function AssetPage({ params }: { params: Promise<{ id: stri
         eyebrow={`Asset · ${a.kind.replaceAll("_", " ")}`}
         title={a.name}
         description={[d.tenantName, a.hostname && a.hostname !== a.name ? a.hostname : null, a.os].filter(Boolean).join(" · ")}
-        actions={<Link href="/assets" className="text-sm text-accent hover:underline">← All assets</Link>}
+        actions={
+          <>
+            {graph.asset ? <Link href={`/soc/entities/${graph.asset}`} className="text-sm text-accent hover:underline">Entity graph →</Link> : null}
+            <Link href="/assets" className="text-sm text-accent hover:underline">← All assets</Link>
+          </>
+        }
       />
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
