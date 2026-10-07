@@ -1,5 +1,5 @@
 import {
-  Bug, Building2, ChartColumn, FileText, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow,
+  Bug, Building2, ChartColumn, FileText, Fingerprint, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow,
 } from "lucide-react";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { Wordmark } from "./brand";
@@ -44,7 +44,12 @@ export function AppShell({ ctx, workspace, brand, children }: { ctx: AccessConte
               <div className="truncate text-sm font-medium">{ctx.principal.name}</div>
               <div className="truncate text-[11px] capitalize text-faint">{roleNames || "no role"}</div>
             </div>
-            <SignOutButton compact />
+            <div className="flex items-center">
+              <a href="/account/security" aria-label="Passkeys" title="Passkeys" className="inline-flex size-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-fg">
+                <Fingerprint className="size-4" />
+              </a>
+              <SignOutButton compact />
+            </div>
           </div>
           {ctx.principal.isBreakGlass ? <div className="mt-2 rounded bg-danger/15 px-2 py-1 text-[11px] font-medium text-danger">Break-glass session</div> : null}
         </div>

@@ -5,7 +5,9 @@
 | Path | Who | Notes |
 |---|---|---|
 | Microsoft Entra ID (OIDC) | Yuma IT staff | `ENTRA_*` env; single-tenant app registration. MFA enforced by Entra Conditional Access. |
-| Organisation SSO (OIDC or SAML) | Customer users, government/enterprise IdPs | Registered per customer by platform admins only (`providersLimit` is 0 for everyone else). Users arrive with **no role** until one is assigned. |
+| Google Workspace (OIDC) | Yuma IT staff | `GOOGLE_*` env. `GOOGLE_HOSTED_DOMAIN` is required with the client id; it is sent as the `hd` hint and checked against the verified ID token, so personal Google accounts are refused. |
+| Organisation SSO (OIDC, SAML or Google Workspace) | Customer users, government/enterprise IdPs | Registered per customer by platform admins only (`providersLimit` is 0 for everyone else). The SSO `resolveUser` hook refuses an identity whose email is outside the provider's domains, and a Google identity whose `hd` claim is not one of them (`src/lib/auth/sso-policy.ts`). Users arrive with **no role** until one is assigned. |
+| Passkey (WebAuthn) | Any user with access | Added at `/account/security` from a session no older than 15 minutes (`session.freshAge`), so a stolen cookie cannot mint a lasting credential. Adds and deletions are audited (`auth.passkey.add`, `auth.passkey.delete`). A passkey does not go back to the IdP: disable the blakSOC user to stop it working until SCIM deprovisioning exists (#102). |
 | Password | Break-glass administrators only | Sign-in hook rejects password auth for any non-break-glass user. TOTP enrolment is forced before any page loads (`BREAK_GLASS_REQUIRE_MFA`). Sessions show a red banner. |
 | Demo personas | `DEMO_MODE=true` only | Never enable in production. |
 

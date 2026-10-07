@@ -34,6 +34,7 @@ export default async function PortalLayout({ children }: { children: React.React
           {can(ctx, "asset:read") ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/portal/agents">Agents</a> : null}
           {canRunOnboarding(ctx) ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/onboarding">{COPY.nav}</a> : null}
           {ctx.isPlatform ? <a className="inline-flex min-h-11 items-center px-2 underline" href="/soc">SOC</a> : null}
+          <a className="inline-flex min-h-11 items-center px-2 underline" href="/account/security">Passkeys</a>
           <form action="/portal/leave" method="post">
             <button className="inline-flex min-h-11 items-center px-2 underline" type="submit">Sign out</button>
           </form>

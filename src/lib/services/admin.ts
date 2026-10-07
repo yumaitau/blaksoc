@@ -3,6 +3,7 @@ import { db, systemDb } from "@/db/client";
 import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, dbScope, systemScope, tenantRoleGrantDenial, type AccessContext } from "@/lib/auth/access";
+import { googleEndpoints } from "@/lib/auth/sso-policy";
 import { audit, verifyAuditChain } from "@/lib/audit";
 import { TrainingIsolationError } from "@/lib/training/isolation";
 import { actor, AccessDenied } from "./common";
@@ -213,7 +214,7 @@ export async function registerSsoProvider(ctx: AccessContext, input: SsoRegistra
   const common = { providerId: input.providerId, issuer: input.issuer, domain: input.domain.toLowerCase(), tenantId: input.tenantId ?? undefined };
   const body =
     input.protocol === "oidc"
-      ? { ...common, oidcConfig: { clientId: input.clientId, clientSecret: input.clientSecret, scopes: ["openid", "email", "profile"], pkce: true, ...entraEndpoints(input.issuer) } }
+      ? { ...common, oidcConfig: { clientId: input.clientId, clientSecret: input.clientSecret, scopes: ["openid", "email", "profile"], pkce: true, ...entraEndpoints(input.issuer), ...googleEndpoints(input.issuer) } }
       : { ...common, samlConfig: { entryPoint: input.entryPoint, cert: input.cert, spMetadata: {} } };
   try {
     await auth.api.registerSSOProvider({ body, headers: requestHeaders });

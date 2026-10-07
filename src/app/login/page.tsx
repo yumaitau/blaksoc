@@ -21,6 +21,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <LoginForm
           next={next?.startsWith("/") && !next.startsWith("//") ? next : "/"}
           entraEnabled={!!(e.ENTRA_CLIENT_ID && e.ENTRA_CLIENT_SECRET)}
+          googleEnabled={!!(e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET && e.GOOGLE_HOSTED_DOMAIN)}
           demo={e.DEMO_MODE === "true"}
           error={error}
         />
