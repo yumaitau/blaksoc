@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs and enrols the Wazuh agent on an EC2 host (Ubuntu/Debian or Amazon Linux). Safe to re-run.
-# Runs as root over SSM Run Command, prefixed with exports of WAZUH_REGISTRATION_PASSWORD (from
-# blaksoc-wazuh-credentials; Run Command does not resolve ssm-secure references) and WAZUH_AGENT_NAME.
+# Runs as root over SSM: the BlakSOC-WazuhAgent document (State Manager enrols every managed instance,
+# including new ones) or Run Command. Needs WAZUH_REGISTRATION_PASSWORD from blaksoc-wazuh-credentials;
+# WAZUH_AGENT_NAME defaults to the Name tag or instance id.
 # EC2 hosts use wazuh-internal.soc.yumait.au, a public record holding the manager's private address,
 # because hosts on Tailscale resolve through MagicDNS and never see a Route 53 private zone.
 # Hosts outside AWS use agents.soc.yumait.au (the NLB). The agent version is pinned to the manager's.
@@ -9,7 +10,16 @@ set -euo pipefail
 VERSION=4.14.8
 MANAGER=${WAZUH_MANAGER:-wazuh-internal.soc.yumait.au}
 GROUP=${WAZUH_AGENT_GROUP:-yumait-aws}
-: "${WAZUH_REGISTRATION_PASSWORD:?}" "${WAZUH_AGENT_NAME:?}"
+: "${WAZUH_REGISTRATION_PASSWORD:?}"
+if [ -z "${WAZUH_AGENT_NAME:-}" ]; then
+  # From State Manager there is no per-host argument: use the Name tag when instance tags are exposed in
+  # metadata, else the instance id (unique and stable), else the hostname.
+  imds_token=$(curl -sf -m 2 -X PUT http://169.254.169.254/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)
+  imds() { curl -sf -m 2 -H "X-aws-ec2-metadata-token: $imds_token" "http://169.254.169.254/latest/meta-data/$1" || true; }
+  WAZUH_AGENT_NAME=$(imds tags/instance/Name)
+  [ -n "$WAZUH_AGENT_NAME" ] || WAZUH_AGENT_NAME=$(imds instance-id)
+  [ -n "$WAZUH_AGENT_NAME" ] || WAZUH_AGENT_NAME=$(hostname)
+fi
 
 if [ -s /var/ossec/etc/client.keys ] && systemctl is-active -q wazuh-agent && grep -q "<address>$MANAGER</address>" /var/ossec/etc/ossec.conf; then
   echo "wazuh-agent already enrolled and running"

@@ -234,3 +234,25 @@ describe("grouping a large burst", () => {
     expect(await runGrouping(tenantC, now)).toEqual({ plans: 0, linked: 0, opened: 0 });
   }, 120_000);
 });
+
+describe("which alerts open incidents", () => {
+  let tenantD = "";
+  beforeAll(async () => {
+    const [d] = await adminDb().insert(tenants).values({ name: "Correlation D", slug: `corr-d-${run}`, kind: "customer", sectors: ["SMB"], deploymentMode: "shared", settings: DEFAULT_TENANT_SETTINGS }).returning();
+    tenantD = d!.id;
+  });
+  afterAll(async () => {
+    if (tenantD) await adminDb().delete(tenants).where(eq(tenants.id, tenantD));
+  });
+
+  it("opens an incident for one high alert and leaves medium alerts in the queue", async () => {
+    const high = m365("solo-high", 1, "mailbox_rule", "Suspicious mailbox rule", ["T1114.003"]);
+    const medium = { ...m365("solo-medium", 1, "mailbox_rule", "Benchmark check failed", ["T1114.003"]), severity: "medium" as const };
+    const h = await ingestAlert({ tenantId: tenantD, integrationId: null, source: "entra", alert: high, intel: null });
+    const m = await ingestAlert({ tenantId: tenantD, integrationId: null, source: "entra", alert: medium, intel: null });
+    expect(await runGrouping(tenantD, now)).toMatchObject({ opened: 1, linked: 1 });
+    const rows = await adminDb().select({ id: alerts.id, incidentId: alerts.incidentId }).from(alerts).where(inArray(alerts.id, [h.alertId, m.alertId]));
+    expect(rows.find((r) => r.id === h.alertId)!.incidentId).toBeTruthy();
+    expect(rows.find((r) => r.id === m.alertId)!.incidentId).toBeNull();
+  });
+});

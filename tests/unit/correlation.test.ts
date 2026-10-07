@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { evaluateRule, evaluateRules, matches, validateRule, type CorrelationEvent, type CorrelationRule } from "@/lib/correlation/engine";
 import { alertFromFinding, contributingIds, eventFromAlert, type AlertForCorrelation } from "@/lib/correlation/events";
 import { MAX_REASON_EDGES, planGroups, type GroupableAlert } from "@/lib/correlation/grouping";
-import { ACCOUNT_TAKEOVER, BUILTIN_RULES, SOURCE_FANOUT, USER_RISK_ACCUMULATION } from "@/lib/correlation/rules";
+import { ACCOUNT_TAKEOVER, BUILTIN_RULES, HOST_RISK_ACCUMULATION, SOURCE_FANOUT, USER_RISK_ACCUMULATION } from "@/lib/correlation/rules";
 
 const MIN = 60_000;
 const T0 = Date.parse("2026-10-01T00:00:00.000Z");
@@ -291,5 +291,15 @@ describe("grouping a busy host", () => {
     expect(plans[0]!.alertIds).toHaveLength(6000);
     expect(plans[0]!.reason.edges).toHaveLength(MAX_REASON_EDGES);
     expect(plans[0]!.reason.edgeCount).toBe(5999);
+  });
+});
+
+describe("risk accumulation signal", () => {
+  it("does not count benchmark (SCA) or informational alerts", () => {
+    const at = (i: number) => T0 + i * MIN;
+    const noise = Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, at: at(i), fields: { host: "web-01", risk_score: 25, category: i % 2 ? "sca" : "pam", severity: i % 2 ? "medium" : "informational" } }));
+    expect(evaluateRule(HOST_RISK_ACCUMULATION, noise)).toEqual([]);
+    const real = Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, at: at(100 + i), fields: { host: "web-01", risk_score: 25, category: "audit", severity: "medium" } }));
+    expect(evaluateRule(HOST_RISK_ACCUMULATION, [...noise, ...real])).toHaveLength(1);
   });
 });

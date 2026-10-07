@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, notExists, or, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { systemDb } from "@/db/client";
 import {
@@ -26,6 +26,11 @@ const MAX_EVENTS = 5000;
 export const GROUP_WINDOW = 6 * HOUR;
 const GROUP_LOOKBACK = 48 * HOUR;
 const OPEN_ALERT = ["NEW", "TRIAGING", "INVESTIGATING"] as const;
+/**
+ * Alerts that open or join an incident automatically: high and critical, and every correlation finding. Lower
+ * severities stay in the alert queue; grouping them filled incidents (and Kelpie cases) with benchmark noise.
+ */
+export const AUTO_INCIDENT_SEVERITIES = ["high", "critical"] as const;
 
 /** Look-back a rule needs so a re-run reproduces its findings (window, suppression, corroboration). */
 function span(rule: CorrelationRule): number {
@@ -145,6 +150,7 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
       .from(alerts)
       .where(and(
         eq(alerts.tenantId, tenantId), gte(alerts.occurredAt, since), lte(alerts.occurredAt, now), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT]),
+        or(inArray(alerts.severity, [...AUTO_INCIDENT_SEVERITIES]), eq(alerts.source, CORRELATION_SOURCE)),
         notExists(tx.select({ one: sql`1` }).from(incidentGroupExclusions).where(eq(incidentGroupExclusions.alertId, alerts.id))),
       ))
       .orderBy(desc(alerts.occurredAt))
@@ -165,7 +171,8 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
         id: a.id, occurredAt: a.occurredAt.getTime(), userName: a.userName, assetId: a.assetId, techniques: a.techniques, incidentId: a.incidentId,
         relatedIds: a.source === CORRELATION_SOURCE ? contributingIds(a.raw) : undefined,
       })),
-      { windowMs: GROUP_WINDOW, tactics: Object.fromEntries(tactics.map((t) => [t.id, t.tactics])) },
+      // One qualifying alert is enough to open an incident; related ones join it.
+      { windowMs: GROUP_WINDOW, tactics: Object.fromEntries(tactics.map((t) => [t.id, t.tactics])), minAlerts: 1 },
     );
   });
 
