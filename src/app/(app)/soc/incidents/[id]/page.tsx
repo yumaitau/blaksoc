@@ -21,7 +21,7 @@ import { isResponseAction, RESPONSE_ACTIONS } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { cn, fmtDateTime, fmtTime, timeAgo } from "@/lib/utils";
 import { CollectionPanel } from "./collection-panel";
-import { CaseForm, EvidenceForm, NoteForm, TaskList, TimelineEventForm } from "./incident-forms";
+import { CaseForm, EvidenceForm, NoteForm, TaskList, TimelineEventForm, UngroupButton } from "./incident-forms";
 
 export const metadata = { title: "Incident" };
 
@@ -57,6 +57,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
   const obligation = await getObligation(ctx, inc.id);
   const active = !["CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"].includes(inc.status);
   const breached = active && inc.slaDueAt && inc.slaDueAt.getTime() < new Date().getTime();
+  const autoGrouped = data.alerts.filter((a) => a.origin === "auto");
 
   // Group the timeline by Sydney calendar day, preserving chronological order.
   const days: { day: string; events: typeof data.timeline }[] = [];
@@ -172,7 +173,10 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Alerts</CardTitle><span className="num text-xs text-muted">{data.alerts.length}</span></CardHeader>
+            <CardHeader>
+              <span className="flex items-center gap-2"><CardTitle>Alerts</CardTitle><span className="num text-xs text-muted">{data.alerts.length}</span></span>
+              {editable && autoGrouped.length > 1 ? <UngroupButton incidentId={inc.id} label={`Ungroup all ${autoGrouped.length} auto-grouped`} /> : null}
+            </CardHeader>
             {data.alerts.length === 0 ? <CardContent><p className="text-sm text-muted">No alerts linked.</p></CardContent> : (
               <Table>
                 <THead>
@@ -183,7 +187,16 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
                     <TR key={a.id}>
                       <TD><SeverityBadge severity={a.severity} /></TD>
                       <TD><RiskScore score={a.riskScore} /></TD>
-                      <TD className="max-w-sm"><Link href={`/soc/alerts/${a.id}`} className="block truncate font-medium hover:text-accent">{a.title}</Link></TD>
+                      <TD className="max-w-sm">
+                        <Link href={`/soc/alerts/${a.id}`} className="block truncate font-medium hover:text-accent">{a.title}</Link>
+                        {a.origin === "auto" ? (
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted" title={a.groupReason?.summary}>
+                            <Badge variant="outline">Auto-grouped</Badge>
+                            <span className="truncate">{a.groupReason?.summary}</span>
+                            {editable ? <UngroupButton incidentId={inc.id} alertIds={[a.id]} label="Ungroup" /> : null}
+                          </span>
+                        ) : null}
+                      </TD>
                       <TD className="max-w-36 truncate text-xs">{a.assetName ?? <span className="text-faint">—</span>}</TD>
                       <TD className="max-w-32 truncate text-xs">{a.userName ?? <span className="text-faint">—</span>}</TD>
                       <TD><IntelVerdict verdict={a.intelVerdict} compact /></TD>

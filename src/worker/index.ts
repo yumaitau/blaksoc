@@ -13,6 +13,7 @@ import { archiveDueSyslog } from "@/lib/services/syslog";
 import { runDueHealth } from "@/lib/services/health";
 import { syncKelpie } from "@/lib/services/kelpie";
 import { runDueSurface } from "@/lib/services/surface";
+import { runCorrelationAll } from "@/lib/services/correlation";
 import { assertHostingEnv } from "@/lib/hosting/profile";
 import { deliverToIntegration, eventJobPayload, fanOutEvent } from "@/lib/connectors/subscriptions";
 import type { Notification } from "@/lib/connectors/notify";
@@ -63,7 +64,10 @@ const handlers: Record<QueueName, Handler> = {
       return createSighting(tenantId, matchId);
     }
   },
-  [QUEUES.detection]: async () => runDetections(log("detection")),
+  [QUEUES.detection]: async (job) => {
+    if (job.name === "correlate") return runCorrelationAll(log("correlation"));
+    return runDetections(log("detection"));
+  },
   [QUEUES.report]: async (job) => {
     if (job.name === "board") return runDueBoardSummaries();
   },
@@ -96,6 +100,7 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.sync, name: "dfir-release", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "kelpie", every: 60_000 },
   { queue: QUEUES.detection, name: "run", every: 5 * 60_000 },
+  { queue: QUEUES.detection, name: "correlate", every: 60_000 },
   { queue: QUEUES.intel, name: "cve", every: 6 * 60 * 60_000 },
   { queue: QUEUES.intel, name: "advisories", every: 60 * 60_000 },
   { queue: QUEUES.notify, name: "escalate", every: 60_000 },

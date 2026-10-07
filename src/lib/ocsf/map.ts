@@ -27,6 +27,7 @@ const PRODUCTS: Record<string, OcsfProduct> = {
   "google-workspace": { name: "Google Workspace", vendor_name: "Google" },
   syslog: { name: "Syslog", vendor_name: "blakSOC" },
   "blaksoc-sigma": { name: "blakSOC Sigma detections", vendor_name: "Yuma IT" },
+  "blaksoc-correlation": { name: "blakSOC correlation engine", vendor_name: "Yuma IT" },
   asm: { name: "blakSOC attack surface", vendor_name: "Yuma IT" },
   "credential-exposure": { name: "blakSOC credential exposure", vendor_name: "Yuma IT" },
   demo: { name: "blakSOC demo provider", vendor_name: "Yuma IT" },

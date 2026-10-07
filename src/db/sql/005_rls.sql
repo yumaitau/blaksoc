@@ -151,7 +151,8 @@ DECLARE
     'entities',
     'entity_aliases',
     'entity_relationships',
-    'entity_relationship_evidence'
+    'entity_relationship_evidence',
+    'correlation_findings','correlation_rule_settings','correlation_cursors','incident_group_exclusions'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];
