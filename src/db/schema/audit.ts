@@ -10,7 +10,7 @@ export const auditLog = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
     actorId: text("actor_id"),
-    actorKind: text("actor_kind").notNull(), // user | system | playbook | ai
+    actorKind: text("actor_kind").notNull(), // user | system | playbook | ai | service
     tenantId: uuid("tenant_id"),
     action: text("action").notNull(),
     targetType: text("target_type"),

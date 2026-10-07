@@ -10,9 +10,11 @@ import { PERMISSIONS } from "@/lib/auth/permissions";
 import { requireAccess } from "@/lib/auth/session";
 import { env } from "@/lib/env";
 import { listRoles, listSsoProviders, listTenants, listUsers } from "@/lib/services/admin";
+import { listServiceIdentities, serviceScopeCeiling } from "@/lib/services/service-identities";
 import { cn, fmtDateTime } from "@/lib/utils";
 import { CreateTenantForm, TenantSettingsForm } from "./customer-forms";
 import { CreateRoleForm } from "./role-form";
+import { CreateServiceIdentityForm, ServiceIdentityControls } from "./service-forms";
 import { SsoRegisterForm } from "./sso-form";
 import { AssignRoleForm, DisableButton, RevokeButton } from "./user-forms";
 
@@ -22,6 +24,7 @@ const TABS = [
   { key: "customers", label: "Customers" },
   { key: "users", label: "Users & access" },
   { key: "roles", label: "Roles" },
+  { key: "service", label: "API clients" },
   { key: "identity", label: "Identity providers" },
 ] as const;
 type Tab = (typeof TABS)[number]["key"];
@@ -88,6 +91,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       {tab === "customers" ? <Customers ctx={ctx} p={p} selected={sp.tenant} /> : null}
       {tab === "users" ? <Users ctx={ctx} p={p} /> : null}
       {tab === "roles" ? <Roles p={p} /> : null}
+      {tab === "service" ? <ServiceIdentities ctx={ctx} p={p} /> : null}
       {tab === "identity" ? <Identity ctx={ctx} p={p} /> : null}
     </div>
   );
@@ -286,6 +290,69 @@ async function Roles({ p }: { p: P }) {
       ) : (
         <Denied>Only platform administrators with user management can create custom roles.</Denied>
       )}
+    </div>
+  );
+}
+
+async function ServiceIdentities({ ctx, p }: { ctx: AccessContext; p: P }) {
+  if (!p.users) return <Denied>Service identities are managed with the user management permission.</Denied>;
+  const rows = await listServiceIdentities(ctx);
+  // Each target offers only the scopes the caller holds there (the grant ceiling).
+  const targets = [
+    ...(p.platformUsers ? [{ id: null, name: "Platform (all customers)", scopes: [...serviceScopeCeiling(ctx, null)] }] : []),
+    ...ctx.tenants.filter((t) => can(ctx, "user:manage", t.id)).map((t) => ({ id: t.id, name: t.name, scopes: [...serviceScopeCeiling(ctx, t.id)] })),
+  ].map((t) => ({ ...t, scopes: PERMISSIONS.filter((perm) => t.scopes.includes(perm)) }));
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Service identities</CardTitle>
+            <CardDescription>Machine clients of the <Link href="/api/v1/openapi.json" className="text-accent hover:underline">/api/v1 REST API</Link>. Every call is checked, tenant-scoped and audited like a user&apos;s.</CardDescription>
+          </div>
+          <span className="text-xs text-muted">{rows.length} identities</span>
+        </CardHeader>
+        {rows.length === 0 ? (
+          <div className="p-4"><EmptyState title="No service identities">Create one below to give an integration scoped, short-lived API access.</EmptyState></div>
+        ) : (
+          <Table>
+            <THead>
+              <TR className="hover:bg-transparent"><TH>Name</TH><TH>Bound to</TH><TH>Scopes</TH><TH>State</TH><TH>Last used</TH><TH /></TR>
+            </THead>
+            <TBody>
+              {rows.map((r) => (
+                <TR key={r.id} className={cn("align-top", (r.revokedAt || !r.enabled) && "opacity-60")}>
+                  <TD>
+                    <div className="font-medium">{r.name}</div>
+                    <div className="font-mono text-[11px] text-muted select-all">{r.id}</div>
+                  </TD>
+                  <TD className="text-xs">{r.tenantId ? r.tenantName ?? "—" : <Badge variant="accent">platform</Badge>}</TD>
+                  <TD className="max-w-72">
+                    <div className="flex flex-wrap gap-1">{r.scopes.map((s) => <Badge key={s} variant="outline" className="font-mono">{s}</Badge>)}</div>
+                  </TD>
+                  <TD>
+                    {r.revokedAt ? <Badge variant="danger">revoked</Badge> : r.enabled ? <Badge variant="ok">active</Badge> : <Badge variant="warn">disabled</Badge>}
+                    <div className="mt-1 whitespace-nowrap text-[11px] text-faint">secret {fmtDateTime(r.secretRotatedAt)}</div>
+                  </TD>
+                  <TD className="whitespace-nowrap text-xs text-muted">{r.lastUsedAt ? fmtDateTime(r.lastUsedAt) : "never"}</TD>
+                  <TD><ServiceIdentityControls id={r.id} name={r.name} enabled={r.enabled} revoked={!!r.revokedAt} /></TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
+        )}
+      </Card>
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Create a service identity</CardTitle>
+            <CardDescription>The client secret is shown once. Tokens last 15 minutes; disabling, rotating or revoking stops them at once.</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {targets.length ? <CreateServiceIdentityForm targets={targets} /> : <p className="text-sm text-muted">No tenant in your scope where you hold user management.</p>}
+        </CardContent>
+      </Card>
     </div>
   );
 }

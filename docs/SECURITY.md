@@ -17,6 +17,14 @@
 - Platform-scope roles (Yuma IT) span tenants; tenant-scope roles are bound to one tenant. A tenant role assigned without a tenant is ignored, never widened.
 - Every service call checks the permission **per tenant** and builds the DB scope from only the tenants where the permission holds.
 
+## Service identities and the REST API
+
+- `/api/v1` is for machine callers only. A service identity (Admin → API clients) is bound to one tenant, or to the platform, and holds a set of scopes drawn from `permissions.ts`. Its creator needs `user:manage` there (platform `user:manage` for a platform identity) and cannot grant a scope they do not hold on that target; rotating or re-enabling applies the same ceiling, since it hands over the identity's access. Disabling and revoking need only `user:manage`.
+- The client secret (`bss_…`, 256 random bits) is shown once and stored as SHA-256, compared in constant time. `POST /api/v1/oauth/token` (OAuth client_credentials) issues an opaque bearer token (`bsa_…`) valid for 15 minutes, also stored only as SHA-256. Opaque tokens were chosen over signed JWTs: there is no signing key to manage, and every call re-reads the identity, so disabling, rotating or revoking stops outstanding tokens at once.
+- Each call builds an `AccessContext` from the identity's single grant and goes through the same `src/lib/services/*` functions, so permission checks, RLS and domain audit rows are unchanged. The actor is the identity (`actor_kind = service`). Every authenticated call also writes an `api.request` audit row (route, status, source IP); token issue and refused secrets are audited as `api.token` and `api.token_denied`. Calls rejected by the rate limit are not audited.
+- Rate limits are per identity (300 calls a minute) and per client id at the token endpoint (20 a minute), counted in Redis like sign-in.
+- The OpenAPI 3.1 document is generated from the route schemas (`pnpm openapi`, served at `/api/v1/openapi.json`); a unit test fails when `docs/openapi.json` is stale.
+
 ## Tenant isolation (defence in depth)
 
 1. Explicit `tenant_id` filters in every service query.

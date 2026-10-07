@@ -37,7 +37,7 @@ export function resetScanBudget() {
   surfaceBudget.used.length = 0;
 }
 
-type Who = { actorId: string | null; actorKind: "user" | "system" };
+type Who = { actorId: string | null; actorKind: "user" | "system" | "service" };
 
 export async function rememberDomains(tx: DbOrTx, who: Who, tenantId: string, names: string[], source: "onboarding" | "settings") {
   const saved: { id: string; name: string; token: string }[] = [];

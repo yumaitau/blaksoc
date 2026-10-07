@@ -4,7 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 /**
  * Optimistic gate only: bounces requests without a session cookie to /login. Real
  * authorisation happens server-side in every page, action and route handler.
- * Machine endpoints (syslog ingest) authenticate with bearer tokens and are not gated here.
+ * Machine endpoints (syslog ingest, the /api/v1 service API) authenticate with bearer tokens and are not gated here.
  */
 export function proxy(request: NextRequest) {
   if (!getSessionCookie(request)) {
@@ -16,5 +16,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api/auth|api/health|api/ingest|login|access-pending|_next/static|_next/image|favicon.ico|icon.svg|icon-192.png|icon-512.png|manifest.webmanifest|sw.js).*)"],
+  matcher: ["/((?!api/auth|api/health|api/ingest|api/v1/|login|access-pending|_next/static|_next/image|favicon.ico|icon.svg|icon-192.png|icon-512.png|manifest.webmanifest|sw.js).*)"],
 };
