@@ -11,8 +11,9 @@ export type Logger = { [L in Level]: (msg: string, fields?: Fields) => void } & 
 
 const ORDER: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-// Normalised key (lower case, letters and digits only) that names a credential.
-const SECRET_KEY = /(password|passwd|passphrase|secret|authorization|cookie|apikey|privatekey|encryptionkey|credential|signature)|token$/;
+// Normalised key (lower case, letters and digits only) that names a credential: contains one of these
+// words, or ends in "token" (accesstoken, idtoken; not "tokenizer").
+const SECRET_WORD = /password|passwd|passphrase|secret|authorization|cookie|apikey|privatekey|encryptionkey|credential|signature/;
 const SECRET_EXACT = new Set(["key", "dsn", "otp", "totp", "connectionstring"]);
 // Raw provider events and alert bodies: tenant telemetry, never operational data.
 const PAYLOAD_KEY = new Set(["raw", "rawevent", "rawlog", "rawpayload", "payload", "body", "requestbody", "responsebody", "line", "lines", "alert", "alerts", "finding", "sourceevent", "notification"]);
@@ -69,7 +70,7 @@ export function redact(value: unknown, depth = 0, seen = new WeakSet<object>()):
   const out: Fields = {};
   for (const [k, v] of entries) {
     const norm = k.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (SECRET_KEY.test(norm) || SECRET_EXACT.has(norm)) out[k] = "[redacted]";
+    if (SECRET_WORD.test(norm) || norm.endsWith("token") || SECRET_EXACT.has(norm)) out[k] = "[redacted]";
     else if (PAYLOAD_KEY.has(norm)) out[k] = "[omitted]";
     else out[k] = redact(v, depth + 1, seen);
   }

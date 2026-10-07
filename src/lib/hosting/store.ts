@@ -25,8 +25,9 @@ export class FileArchiveStore implements ArchiveStore {
 
   async put(region: string, key: string, body: string): Promise<void> {
     const full = this.resolve(region, key);
-    await mkdir(path.dirname(full), { recursive: true });
-    await writeFile(full, body);
+    // Tenant syslog: owner-only, since the default root sits in the shared temp directory.
+    await mkdir(path.dirname(full), { recursive: true, mode: 0o700 });
+    await writeFile(full, body, { mode: 0o600 });
   }
 
   async get(region: string, key: string): Promise<string> {

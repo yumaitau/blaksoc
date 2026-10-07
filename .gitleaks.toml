@@ -10,3 +10,7 @@ regexes = [
   '''ci-only-secret-change-me''',
   '''ZGV2LW9ubHkta2V5LWNoYW5nZS1tZS0zMi1ieXRlcyE=''',
 ]
+
+[[allowlists]]
+description = "Redaction test fixtures: fake JWT and secrets the logger must strip"
+paths = ['''^tests/unit/log\.test\.ts$''']

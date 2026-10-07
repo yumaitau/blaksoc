@@ -42,7 +42,7 @@ export async function startS3Stub(opts: { buckets: Record<string, string>; objec
       const key = rest.map(decodeURIComponent).join("/");
       const method = req.method ?? "GET";
       const auth = req.headers.authorization ?? "";
-      const region = /Credential=[^/]+\/\d{8}\/([^/]+)\/s3\//.exec(auth)?.[1] ?? null;
+      const region = /^AWS4-HMAC-SHA256 Credential=[^/]+\/\d{8}\/([^/]+)\/s3\//.exec(auth)?.[1] ?? null;
       requests.push({ method, bucket, key, region });
       if (!auth.startsWith("AWS4-HMAC-SHA256")) return error(res, 403, "AccessDenied", method);
       if (!(bucket in opts.buckets)) return error(res, 404, "NoSuchBucket", method);
@@ -64,7 +64,7 @@ export async function startS3Stub(opts: { buckets: Record<string, string>; objec
         res.writeHead(200, XML);
         return res.end(
           `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">` +
-            `<Name>${bucket}</Name><Prefix>${xmlEscape(prefix)}</Prefix><KeyCount>${page.length}</KeyCount><MaxKeys>${pageSize}</MaxKeys>` +
+            `<Name>${xmlEscape(bucket)}</Name><Prefix>${xmlEscape(prefix)}</Prefix><KeyCount>${page.length}</KeyCount><MaxKeys>${pageSize}</MaxKeys>` +
             `<IsTruncated>${truncated}</IsTruncated>` +
             page.map((k) => `<Contents><Key>${xmlEscape(k)}</Key><Size>${Buffer.byteLength(objects.get(`${bucket}/${k}`)!.body, "latin1")}</Size></Contents>`).join("") +
             (truncated ? `<NextContinuationToken>${start + pageSize}</NextContinuationToken>` : "") +
