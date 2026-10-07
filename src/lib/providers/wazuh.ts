@@ -98,6 +98,9 @@ type WazuhAgent = {
   os?: { name?: string; version?: string; platform?: string };
 };
 
+/** Wazuh 4.14 rejects a bare `os` in `select`; only named sub-fields are accepted. */
+export const AGENT_SELECT = "id,name,ip,status,group,lastKeepAlive,os.name,os.version,os.platform";
+
 function normaliseAgent(a: WazuhAgent): NormalisedAsset {
   const osName = [a.os?.name, a.os?.version].filter(Boolean).join(" ") || null;
   const server = /server/i.test(osName ?? "") || a.os?.platform === "ubuntu" || a.os?.platform === "rhel";
@@ -196,7 +199,7 @@ export class WazuhProvider implements SecurityEventProvider {
     const groups = (routingKeys ?? []).filter((k) => k.startsWith("group:")).map((k) => k.slice(6));
     const out: NormalisedAsset[] = [];
     for (let offset = 0; ; offset += 500) {
-      const qs = new URLSearchParams({ limit: "500", offset: String(offset), select: "id,name,ip,status,group,lastKeepAlive,os" });
+      const qs = new URLSearchParams({ limit: "500", offset: String(offset), select: AGENT_SELECT });
       if (groups.length === 1) qs.set("group", groups[0]!);
       const res = await this.api<{ data: { affected_items: WazuhAgent[]; total_affected_items: number } }>(`/agents?${qs}`);
       out.push(...res.data.affected_items.filter((a) => a.id !== "000").map(normaliseAgent));
