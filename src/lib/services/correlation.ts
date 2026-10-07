@@ -110,6 +110,9 @@ async function persistFinding(tenantId: string, rule: CorrelationRule, f: Correl
  * Group the tenant's open, unlinked alerts into incidents (see planGroups). Each plan is applied in its own
  * transaction and re-checked there, so an analyst acting between plan and apply wins.
  */
+/** Alerts linked per transaction when applying a group. */
+export const GROUP_BATCH = 100;
+
 export async function runGrouping(tenantId: string, now = new Date()): Promise<{ plans: number; linked: number; opened: number }> {
   const plans = await withScope(systemScope(tenantId), async (tx) => {
     const since = new Date(now.getTime() - GROUP_LOOKBACK);
@@ -146,10 +149,18 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
   let linked = 0;
   let opened = 0;
   for (const plan of plans) {
-    const res = await withScope(systemScope(tenantId), (tx) => applyPlan(tx, tenantId, plan));
-    if (!res) continue;
-    linked += plan.alertIds.length;
-    if (res.opened) opened++;
+    // A group can hold thousands of alerts (a new host's first benchmark scan). One transaction per batch
+    // keeps locks short: a single long transaction held up a deploy's migration and everything queued behind it.
+    // The first batch opens the incident; later ones link to it. A rerun skips alerts already linked.
+    let incidentId = plan.incidentId;
+    for (let i = 0; i < plan.alertIds.length; i += GROUP_BATCH) {
+      const part = { ...plan, incidentId, alertIds: plan.alertIds.slice(i, i + GROUP_BATCH) };
+      const res = await withScope(systemScope(tenantId), (tx) => applyPlan(tx, tenantId, part));
+      if (!res) break;
+      if (res.opened) opened++;
+      incidentId = res.incidentId;
+      linked += part.alertIds.length;
+    }
   }
   return { plans: plans.length, linked, opened };
 }
