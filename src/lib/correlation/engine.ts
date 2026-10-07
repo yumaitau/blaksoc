@@ -324,10 +324,32 @@ function sequenceCandidates(c: SequenceClause, all: CorrelationEvent[]): Candida
   return out;
 }
 
+/**
+ * A candidate whose detail is built on first read. Window rules test every event as an anchor, and on a busy
+ * entity (one host's benchmark scan: thousands of alerts in a window) building every window's event list and
+ * note up front used gigabytes, nearly all of it for candidates that suppression then drops.
+ */
+function lazyCandidate(anchorId: string, lastAt: number, build: () => { firstAt: number; matches: ClauseMatch[]; summary: string }): Candidate {
+  let built: ReturnType<typeof build> | undefined;
+  const get = () => (built ??= build());
+  return {
+    anchorId,
+    lastAt,
+    get firstAt() { return get().firstAt; },
+    get matches() { return get().matches; },
+    get summary() { return get().summary; },
+  };
+}
+
+/**
+ * Sliding window per anchor event. `value` decides the threshold cheaply from the window bounds; `detail`
+ * builds the evidence only for a candidate that is read.
+ */
 function windowCandidates(
   c: CountClause | RiskClause,
   all: CorrelationEvent[],
-  measure: (w: CorrelationEvent[]) => { value: number; note: string; events: CorrelationEvent[] },
+  value: (m: CorrelationEvent[], lo: number, hi: number) => number,
+  detail: (w: CorrelationEvent[]) => { note: string; events: CorrelationEvent[] },
 ): Candidate[] {
   const m = c.match ? all.filter((e) => matches(e, c.match!)) : all;
   const out: Candidate[] = [];
@@ -335,29 +357,52 @@ function windowCandidates(
   for (let i = 0; i < m.length; i++) {
     const e = m[i]!;
     while (m[start]!.at < e.at - c.within) start++;
-    const r = measure(m.slice(start, i + 1));
-    if (r.value < c.threshold) continue;
-    out.push({ anchorId: e.id, firstAt: r.events[0]?.at ?? e.at, lastAt: e.at, matches: [{ clause: c.id, label: c.label, events: r.events.map(ref), note: r.note }], summary: r.note });
+    const lo = start;
+    const hi = i + 1;
+    if (value(m, lo, hi) < c.threshold) continue;
+    out.push(lazyCandidate(e.id, e.at, () => {
+      const r = detail(m.slice(lo, hi));
+      return { firstAt: r.events[0]?.at ?? e.at, matches: [{ clause: c.id, label: c.label, events: r.events.map(ref), note: r.note }], summary: r.note };
+    }));
   }
   return out;
 }
 
 function countCandidates(c: CountClause, all: CorrelationEvent[]): Candidate[] {
-  return windowCandidates(c, all, (w) => {
-    if (!c.distinct) return { value: w.length, note: `${w.length} events within ${duration(c.within)} (threshold ${c.threshold})`, events: w };
-    const values = [...new Set(w.map((e) => norm(get(e, c.distinct!))).filter(Boolean))].sort();
-    return { value: values.length, note: `${values.length} distinct ${c.distinct} within ${duration(c.within)} (threshold ${c.threshold}): ${values.join(", ")}`, events: w };
-  });
+  const distinct = (w: CorrelationEvent[]) => [...new Set(w.map((e) => norm(get(e, c.distinct!))).filter(Boolean))].sort();
+  return windowCandidates(
+    c,
+    all,
+    (m, lo, hi) => (c.distinct ? distinct(m.slice(lo, hi)).length : hi - lo),
+    (w) => {
+      if (!c.distinct) return { note: `${w.length} events within ${duration(c.within)} (threshold ${c.threshold})`, events: w };
+      const values = distinct(w);
+      return { note: `${values.length} distinct ${c.distinct} within ${duration(c.within)} (threshold ${c.threshold}): ${values.join(", ")}`, events: w };
+    },
+  );
 }
 
 function riskCandidates(c: RiskClause, all: CorrelationEvent[]): Candidate[] {
   const field = c.field ?? "risk_score";
   const points = (e: CorrelationEvent) => Math.max(0, Number(get(e, field)) || 0);
-  return windowCandidates(c, all, (w) => {
-    const scored = w.filter((e) => points(e) > 0);
-    const total = scored.reduce((s, e) => s + points(e), 0);
-    return { value: total, note: `${field} total ${total} within ${duration(c.within)} (threshold ${c.threshold}): ${scored.map((e) => `${e.id}=${points(e)}`).join(", ")}`, events: scored };
-  });
+  // Prefix sums over the matched events, so each window's total is one subtraction.
+  let prefix: number[] = [];
+  return windowCandidates(
+    c,
+    all,
+    (m, lo, hi) => {
+      if (prefix.length !== m.length + 1) {
+        prefix = [0];
+        for (const e of m) prefix.push(prefix[prefix.length - 1]! + points(e));
+      }
+      return prefix[hi]! - prefix[lo]!;
+    },
+    (w) => {
+      const scored = w.filter((e) => points(e) > 0);
+      const total = scored.reduce((sum, e) => sum + points(e), 0);
+      return { note: `${field} total ${total} within ${duration(c.within)} (threshold ${c.threshold}): ${scored.map((e) => `${e.id}=${points(e)}`).join(", ")}`, events: scored };
+    },
+  );
 }
 
 function absenceCandidates(c: AbsenceClause, all: CorrelationEvent[], now: number | undefined): Candidate[] {

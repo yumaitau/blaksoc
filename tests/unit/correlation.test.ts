@@ -265,3 +265,17 @@ describe("automatic grouping", () => {
     expect(plans).toEqual([]);
   });
 });
+
+describe("busy entities", () => {
+  it("evaluates a window rule over thousands of events on one host without building every window", () => {
+    // A new host's benchmark scan: thousands of scored alerts inside one risk window. Building each anchor's
+    // evidence eagerly took gigabytes of heap in production; only the emitted finding should be built.
+    const events = Array.from({ length: 5000 }, (_, i) => ({ id: `e${i}`, at: T0 + i * 10_000, fields: { host: "web-01", risk_score: 25, summary: `check ${i}` } }));
+    const rule = { ...USER_RISK_ACCUMULATION, id: "host-risk", groupBy: ["host"] };
+    const started = performance.now();
+    const findings = evaluateRule(rule, events);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(findings.length).toBeGreaterThanOrEqual(1);
+    expect(findings[0]!.explanation[0]).toContain("host web-01");
+  });
+});
