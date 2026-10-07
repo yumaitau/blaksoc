@@ -105,6 +105,33 @@ The `surface` worker job is the only scanner. It allows one active scan per tena
 
 A domain must pass TXT verification before a breach check runs. Each stored row has the email address, breach name, source (`hibp` or the commercial feed name), observation date, and data classes. Permitted classes are `email`, `username`, and `password-hash`. Plaintext passwords are removed before insert and are not a permitted class. The same email, breach, and source are stored once. Commercial infostealer rows use `filterByEntitlement()` and are dropped when the tenant is not licensed for that feed.
 
+## Browser hardening
+
+`src/proxy.ts` sets a per-request Content-Security-Policy on every page and API response (except
+better-auth's own `/api/auth/*` protocol endpoints): scripts only
+with the request's nonce (`'strict-dynamic'`, no `'unsafe-inline'` or `'unsafe-eval'` in production),
+same-origin `connect-src` (SSE) and `worker-src` (portal service worker), `frame-ancestors 'none'`,
+`form-action 'self'`, `base-uri 'none'`, `object-src 'none'`. Every page renders per request so Next.js can
+stamp the nonce on its scripts (`src/app/layout.tsx`); an inline script must read `x-nonce` from the request
+headers (see `src/app/(portal)/layout.tsx`). Other headers (HSTS, `X-Frame-Options`, `nosniff`,
+`Referrer-Policy`, `Permissions-Policy`) are in `next.config.ts`.
+
+## Supply chain
+
+CI builds the app and both images and validates the chart on every PR (`.github/workflows/ci.yml`), runs
+CodeQL, gitleaks over full history and `pnpm audit --prod` at high severity. Release images are scanned with
+Trivy, signed with cosign keyless, and published with SPDX and CycloneDX SBOMs and the scan report
+(`.github/workflows/release.yml`). Verify an image before deploying it:
+
+```sh
+cosign verify ghcr.io/yumaitau/blaksoc-web@<digest> \
+  --certificate-identity-regexp '^https://github.com/yumaitau/blaksoc/.github/workflows/release.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Threats, trust boundaries and open risks: [`threat-model.md`](threat-model.md). Disclosure policy:
+[`/SECURITY.md`](../SECURITY.md).
+
 ## Hardening checklist
 
 - Set strong `BETTER_AUTH_SECRET`, `BLAKSOC_ENCRYPTION_KEY`, DB/Redis passwords; rotate via your secret manager.
