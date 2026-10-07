@@ -328,3 +328,10 @@ describe("grouping correlation findings", () => {
     expect(plans.map((p) => p.alertIds)).toEqual([["brute", "host-risk", "user-risk"], ["elsewhere"]]);
   });
 });
+
+describe("singleton incidents", () => {
+  it("describe a lone qualifying alert plainly", () => {
+    const [plan] = planGroups([{ id: "solo", occurredAt: T0, userName: null, assetId: "host-1", techniques: [], incidentId: null }], { windowMs: 6 * 60 * MIN, tactics: {}, minAlerts: 1 });
+    expect(plan!.reason.summary).toBe("single alert; no related alerts within 6h");
+  });
+});

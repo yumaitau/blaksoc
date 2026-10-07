@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Create or update the BlakSOC-WazuhAgent SSM document and the State Manager association that runs it on
 every managed Linux instance (new ones as they register, all of them daily). Usage: wazuh-agent-ssm.py
-The enrolment password is read from Secrets Manager and stored as the association's parameter, which AWS
-administrators can read; it only allows agent enrolment. Never printed."""
-import json, pathlib, re, subprocess
+The association passes the enrolment password as a reference to the SSM parameter /blaksoc/wazuh/enrollment, which
+Systems Manager resolves when the command runs, so CloudTrail and the command history record only the reference."""
+import json, pathlib, subprocess
 
 REGION = "ap-southeast-2"
 DOC = "BlakSOC-WazuhAgent"
 aws = ["aws", "--region", REGION]
 here = pathlib.Path(__file__).resolve().parent
 body = (here / "wazuh-agent.sh").read_text().split("\n", 1)[1]
-pw = json.loads(subprocess.check_output(aws + ["secretsmanager", "get-secret-value", "--secret-id", "blaksoc-wazuh-credentials", "--query", "SecretString", "--output", "text"], text=True))["ENROLLMENT_PASSWORD"]
-assert re.fullmatch(r"[A-Za-z0-9]+", pw)
+PASSWORD_REF = "{{ssm:/blaksoc/wazuh/enrollment}}"
 
 content = {
     "schemaVersion": "2.2",
@@ -32,7 +31,7 @@ else:
 print("document", "updated" if exists else "created")
 
 assoc = json.loads(subprocess.check_output(aws + ["ssm", "list-associations", "--association-filter-list", f"key=Name,value={DOC}", "--query", "Associations[].AssociationId"], text=True))
-params = json.dumps({"EnrollmentPassword": [pw]})
+params = json.dumps({"EnrollmentPassword": [PASSWORD_REF]})
 common = ["--parameters", params, "--schedule-expression", "rate(1 day)", "--targets", "Key=InstanceIds,Values=*", "--max-concurrency", "5", "--max-errors", "100%", "--association-name", "blaksoc-wazuh-agent"]
 if assoc:
     subprocess.run(aws + ["ssm", "update-association", "--association-id", assoc[0], "--name", DOC, "--document-version", "$DEFAULT"] + common, check=True, stdout=subprocess.DEVNULL)

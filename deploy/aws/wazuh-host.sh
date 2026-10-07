@@ -73,7 +73,9 @@ PY
 fi
 
 # Agent enrolment needs the password; agent traffic itself uses per-agent keys.
-install -m 0640 /dev/null config/authd.pass
+# Overwritten in place: the manager bind-mounts this single file, and a replaced file (new inode) would leave
+# the running container on the old password.
+[ -f config/authd.pass ] || install -m 0640 /dev/null config/authd.pass
 printf '%s\n' "$ENROLLMENT_PASSWORD" > config/authd.pass
 python3 - <<'PY'
 import pathlib, re
@@ -126,7 +128,9 @@ curl -sk -u "admin:$INDEXER_PASSWORD" -X POST "https://localhost:9200/_plugins/_
 # Local rules (blakSOC tuning), applied through the API once the manager answers.
 API_URL=https://localhost:55000
 for _ in $(seq 1 60); do curl -sk -o /dev/null "$API_URL" && break; sleep 5; done
-T=$(curl -sk -u "wazuh-wui:$API_PASSWORD" -X POST "$API_URL/security/user/authenticate?raw=true")
+T=$(curl -fsk -u "wazuh-wui:$API_PASSWORD" -X POST "$API_URL/security/user/authenticate?raw=true") || T=""
+# A JWT, not an error body: without it every call below would fail quietly and the run would look applied.
+[ "${#T}" -gt 100 ] || { echo "Wazuh API authentication failed; rules, group configuration and retention not applied" >&2; exit 1; }
 current=$(curl -sk -H "Authorization: Bearer $T" "$API_URL/rules/files/local_rules.xml?raw=true")
 if ! grep -q 'id="100100"' <<<"$current"; then
   # Docker attaching a container's veth to a bridge puts it in promiscuous mode (rule 80710) on every

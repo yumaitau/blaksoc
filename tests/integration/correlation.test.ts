@@ -255,4 +255,15 @@ describe("which alerts open incidents", () => {
     expect(rows.find((r) => r.id === h.alertId)!.incidentId).toBeTruthy();
     expect(rows.find((r) => r.id === m.alertId)!.incidentId).toBeNull();
   });
+
+  it("raises the incident's severity when a more severe related alert joins it", async () => {
+    const critical = { ...m365("solo-critical", 0.5, "mailbox_rule", "Mailbox forwarding to external domain", ["T1114.003"]), severity: "critical" as const };
+    const c = await ingestAlert({ tenantId: tenantD, integrationId: null, source: "entra", alert: critical, intel: null });
+    await runGrouping(tenantD, now);
+    const [row] = await adminDb().select({ incidentId: alerts.incidentId }).from(alerts).where(eq(alerts.id, c.alertId));
+    const [inc] = await adminDb().select().from(incidents).where(eq(incidents.id, row!.incidentId!));
+    expect(inc!.severity).toBe("critical");
+    const timeline = await adminDb().select({ title: incidentTimeline.title }).from(incidentTimeline).where(eq(incidentTimeline.incidentId, inc!.id));
+    expect(timeline.map((t) => t.title)).toContain("Severity raised high → critical by a grouped alert");
+  });
 });

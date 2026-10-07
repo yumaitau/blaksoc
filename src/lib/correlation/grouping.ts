@@ -168,7 +168,8 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
       summary: "",
     };
     const common = [...reason.tactics, ...reason.techniques];
-    reason.summary = [
+    // One qualifying alert with nothing related yet: there is no shared entity or technique to describe.
+    reason.summary = !groupEdges.length ? `single alert; no related alerts within ${Math.round(opts.windowMs / 3_600_000)}h` : [
       `same ${reason.entities.join(", ")}`,
       `within ${Math.round(opts.windowMs / 3_600_000)}h`,
       common.length ? `shared ATT&CK ${common.join(", ")}` : null,

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs and enrols the Wazuh agent on an EC2 host (Ubuntu/Debian or Amazon Linux). Safe to re-run.
 # Runs as root over SSM: the BlakSOC-WazuhAgent document (State Manager enrols every managed instance,
-# including new ones) or Run Command. Needs WAZUH_REGISTRATION_PASSWORD from blaksoc-wazuh-credentials;
+# including new ones) or Run Command. WAZUH_REGISTRATION_PASSWORD comes from the SSM parameter reference
+# {{ssm:/blaksoc/wazuh/enrollment}}, resolved by Systems Manager, so the value never sits in a command payload.
 # WAZUH_AGENT_NAME defaults to the Name tag or instance id.
 # EC2 hosts use wazuh-internal.soc.yumait.au, a public record holding the manager's private address,
 # because hosts on Tailscale resolve through MagicDNS and never see a Route 53 private zone.

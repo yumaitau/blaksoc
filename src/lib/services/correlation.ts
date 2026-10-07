@@ -15,6 +15,11 @@ import { ingestAlert } from "@/lib/pipeline/ingest";
 import { evaluateTriggers } from "@/lib/soar/engine";
 import { actor, AccessDenied, inTenant } from "./common";
 import { addTimeline, createIncidentFromAlerts, linkAlerts } from "./incidents";
+import { kelpieIntegration, kelpieLink } from "./kelpie";
+import { instantiate } from "@/lib/connectors/instances";
+import { kelpieSeverity } from "@/lib/kelpie/map";
+import { logger } from "@/lib/obs/log";
+import type { Severity } from "@/lib/providers/types";
 
 const HOUR = 3_600_000;
 /** First run for a tenant starts this far back. */
@@ -136,6 +141,29 @@ const slimRaw = (() => {
   return sql<unknown>`${sql.raw(build(tree))}`;
 })();
 
+const SEVERITY_RANK: Record<Severity, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/**
+ * Kelpie owns a case's severity once it exists, and syncKelpie only reads it back. A raise caused by new
+ * evidence is pushed straight away; later analyst changes in Kelpie still win. Best effort: the next sync
+ * shows the case as it is, and a failure here never stops grouping.
+ */
+async function raiseKelpieSeverity(tenantId: string, incidentId: string, severity: Severity, why: string) {
+  try {
+    const target = await withScope(systemScope(tenantId), async (tx) => {
+      const row = await kelpieIntegration(tx, tenantId);
+      const link = row ? await kelpieLink(tx, incidentId) : null;
+      return row && link?.caseId ? { row, caseId: link.caseId } : null;
+    });
+    if (!target) return;
+    const inst = instantiate(target.row);
+    if (inst.kind !== "cases") return;
+    await inst.provider.updateSeverity(target.caseId, kelpieSeverity(severity), `blakSOC grouped a ${severity} alert into this case: ${why}`);
+  } catch (err) {
+    logger.warn("kelpie severity push failed", { tenantId, incidentId, err });
+  }
+}
+
 /** Alerts linked per transaction when applying a group. */
 export const GROUP_BATCH = 100;
 
@@ -188,6 +216,7 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
       const res = await withScope(systemScope(tenantId), (tx) => applyPlan(tx, tenantId, part));
       if (!res) break;
       if (res.opened) opened++;
+      if (res.raisedTo) await raiseKelpieSeverity(tenantId, res.incidentId, res.raisedTo, plan.reason.summary);
       incidentId = res.incidentId;
       linked += part.alertIds.length;
     }
@@ -195,7 +224,7 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
   return { plans: plans.length, linked, opened };
 }
 
-async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ incidentId: string; opened: boolean } | null> {
+async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ incidentId: string; opened: boolean; raisedTo: Severity | null } | null> {
   const rows = await tx.select().from(alerts).where(and(eq(alerts.tenantId, tenantId), inArray(alerts.id, plan.alertIds), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT])));
   if (rows.length !== plan.alertIds.length) return null;
   let incidentId = plan.incidentId;
@@ -214,13 +243,24 @@ async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ i
   for (const a of rows) {
     await tx.update(incidentAlerts).set({ origin: "auto", reason: plan.reason, priorStatus: a.status }).where(and(eq(incidentAlerts.incidentId, incidentId), eq(incidentAlerts.alertId, a.id)));
   }
+  // An incident joined by a later batch, or by a new alert, takes the most severe alert's severity.
+  let raisedTo: Severity | null = null;
+  if (plan.incidentId) {
+    const [inc] = await tx.select({ severity: incidents.severity }).from(incidents).where(eq(incidents.id, incidentId));
+    const top = rows.reduce<Severity>((m, a) => (SEVERITY_RANK[a.severity as Severity] > SEVERITY_RANK[m] ? (a.severity as Severity) : m), inc!.severity as Severity);
+    if (SEVERITY_RANK[top] > SEVERITY_RANK[inc!.severity as Severity]) {
+      await tx.update(incidents).set({ severity: top, updatedAt: new Date() }).where(eq(incidents.id, incidentId));
+      await addTimeline(tx, { tenantId, incidentId, origin: "machine", category: "status", title: `Severity raised ${inc!.severity} → ${top} by a grouped alert`, detail: plan.reason.summary });
+      raisedTo = top;
+    }
+  }
   await addTimeline(tx, {
     tenantId, incidentId, origin: "machine", category: "grouping",
     title: plan.incidentId ? `Grouped ${rows.length} related alert${rows.length === 1 ? "" : "s"} automatically` : `Opened by automatic grouping of ${rows.length} alerts`,
     detail: plan.reason.summary,
   });
   await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "incident.auto_group", targetType: "incident", targetId: incidentId, detail: { alertIds: plan.alertIds, groupingKey: plan.groupingKey, reason: plan.reason.summary } });
-  return { incidentId, opened: !plan.incidentId };
+  return { incidentId, opened: !plan.incidentId, raisedTo };
 }
 
 /** Scheduled entry point: every tenant with recent alerts. One tenant failing never stops the rest. */
