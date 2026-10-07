@@ -12,9 +12,10 @@ import { GET as getIncidentRoute } from "@/app/api/v1/incidents/[id]/route";
 import { GET as listIncidentsRoute } from "@/app/api/v1/incidents/route";
 import { POST as tokenRoute } from "@/app/api/v1/oauth/token/route";
 import { adminDb } from "@/db/client";
-import { alerts, auditLog, incidentNotes, incidents, serviceIdentities, serviceTokens, tenants, user } from "@/db/schema";
+import { alerts, auditLog, incidentNotes, incidents, partnerConsents, roleAssignments, serviceIdentities, serviceTokens, tenants, user } from "@/db/schema";
+import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { hashSecret } from "@/lib/api/tokens";
-import { resolveAccess, type AccessContext } from "@/lib/auth/access";
+import { can, resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { redis } from "@/lib/redis";
 import { AccessDenied } from "@/lib/services/common";
 import {
@@ -211,5 +212,57 @@ describe("revocation and expiry", () => {
     expect((await listAlertsRoute(new Request(`${BASE}/alerts`, bearer(again)))).status).toBe(401);
     expect((await token(reader.id, reader.clientSecret)).status).toBe(401);
     await expect(setServiceIdentityEnabled(wattleAdmin, reader.id, true)).rejects.toThrow(/revoked/);
+  });
+});
+
+describe("partner-held access", () => {
+  const stamp = `svc${Date.now().toString(36)}`;
+  const userId = `${stamp}-partner-admin`;
+  let partner: string, customer: string;
+
+  beforeAll(async () => {
+    const [p] = await adminDb().insert(tenants).values({ name: "Svc Partner", slug: `${stamp}-p`, kind: "partner", sectors: ["SMB"], deploymentMode: "shared", settings: DEFAULT_TENANT_SETTINGS }).returning();
+    const [c] = await adminDb().insert(tenants).values({ name: "Svc Customer", slug: `${stamp}-c`, kind: "customer", parentId: p!.id, sectors: ["SMB"], deploymentMode: "shared", settings: DEFAULT_TENANT_SETTINGS }).returning();
+    partner = p!.id;
+    customer = c!.id;
+    await adminDb().insert(partnerConsents).values({ customerTenantId: customer, partnerTenantId: partner, consentedBy: "test", statement: "test consent" });
+    await adminDb().insert(user).values({ id: userId, name: userId, email: `${userId}@example.invalid`, emailVerified: true });
+    await adminDb().insert(roleAssignments).values({ userId, roleKey: "partner_admin", tenantId: partner });
+  });
+
+  afterAll(async () => {
+    await adminDb().delete(serviceIdentities).where(inArray(serviceIdentities.tenantId, [partner, customer]));
+    await adminDb().delete(tenants).where(eq(tenants.id, customer));
+    await adminDb().delete(tenants).where(eq(tenants.id, partner));
+    await adminDb().delete(user).where(eq(user.id, userId));
+  });
+
+  it("cannot mint a customer credential that would outlive the customer's consent", async () => {
+    const ctx = await ctxFor(`${userId}@example.invalid`);
+    // The partner does manage the customer while consent stands...
+    expect(can(ctx, "user:manage", customer)).toBe(true);
+    // ...but a client secret bound to the customer would keep working after consent is revoked.
+    await expect(createServiceIdentity(ctx, { name: "partner bot", tenantId: customer, scopes: ["alert:read"] })).rejects.toBeInstanceOf(AccessDenied);
+    const own = await createServiceIdentity(ctx, { name: "partner bot", tenantId: partner, scopes: ["alert:read"] });
+    expect(own.clientSecret).toBeTruthy();
+  });
+});
+
+describe("token issue racing a rotation", () => {
+  it("does not issue a token for a secret rotated after it was checked", async () => {
+    const id = await createServiceIdentity(admin, { name: "race", tenantId: wattle, scopes: ["alert:read"] });
+    created.push(id.id);
+    // Simulate the rotate committing between the secret check and the insert: change the stored
+    // hash under the issuer by rotating while the old secret is presented.
+    const [before] = await adminDb().select().from(serviceIdentities).where(eq(serviceIdentities.id, id.id));
+    const rotated = rotateServiceSecret(admin, id.id);
+    const issued = issueServiceToken({ clientId: id.id, clientSecret: id.clientSecret });
+    const [, token_] = await Promise.all([rotated, issued]);
+    const [after] = await adminDb().select().from(serviceIdentities).where(eq(serviceIdentities.id, id.id));
+    expect(after!.secretHash).not.toBe(before!.secretHash);
+    // Whichever order they ran in, no token from the old secret survives the rotation.
+    const live = await adminDb().select().from(serviceTokens).where(eq(serviceTokens.identityId, id.id));
+    if (token_) expect(live.some((t) => t.tokenHash === hashSecret(token_.accessToken))).toBe(false);
+    expect(live).toHaveLength(0);
   });
 });

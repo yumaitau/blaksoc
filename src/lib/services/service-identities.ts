@@ -3,7 +3,7 @@ import { systemDb } from "@/db/client";
 import { withScope, type DbScope } from "@/db/scope";
 import { serviceIdentities, serviceTokens, tenants } from "@/db/schema";
 import { hashSecret, newSecret, SECRET_PREFIX, secretMatches, TOKEN_PREFIX, TOKEN_TTL_SECONDS } from "@/lib/api/tokens";
-import { accessFromGrants, assertCan, can, dbScope, permissionsFor, type AccessContext } from "@/lib/auth/access";
+import { accessFromGrants, assertCan, can, dbScope, type AccessContext } from "@/lib/auth/access";
 import { PERMISSIONS, type Permission } from "@/lib/auth/permissions";
 import { audit } from "@/lib/audit";
 import { actor, AccessDenied, userRef } from "./common";
@@ -16,11 +16,13 @@ const platformManager = (ctx: AccessContext) => ctx.grants.some((g) => g.tenantI
 /**
  * Scopes `ctx` may put on an identity bound to `tenantId` (null = platform). Like role grants,
  * nobody hands out what they do not hold; a platform identity draws only on platform-wide grants.
+ * Grants a partner holds over a customer do not count: that access lasts only while the customer
+ * consents, and a client secret handed out under it would outlive a revoked consent.
  */
 export function serviceScopeCeiling(ctx: AccessContext, tenantId: string | null): Set<Permission> {
-  if (tenantId) return permissionsFor(ctx, tenantId);
   const out = new Set<Permission>();
-  for (const g of ctx.grants) if (g.tenantId === null) g.permissions.forEach((p) => out.add(p));
+  if (tenantId && !ctx.tenantIds.includes(tenantId)) return out;
+  for (const g of ctx.grants) if (g.tenantId === null || g.tenantId === tenantId) g.permissions.forEach((p) => out.add(p));
   return out;
 }
 
@@ -29,8 +31,10 @@ function assertManage(ctx: AccessContext, tenantId: string | null) {
   else if (!platformManager(ctx)) throw new AccessDenied("platform user:manage required");
 }
 
+/** Create, rotate and enable hand out a credential, so they need user:manage held directly or platform-wide. */
 function assertCeiling(ctx: AccessContext, tenantId: string | null, scopes: readonly string[]) {
   const ceiling = serviceScopeCeiling(ctx, tenantId);
+  if (!ceiling.has("user:manage")) throw new AccessDenied("user:manage on this tenant (not through a partner) is required");
   const extra = scopes.filter((s) => !ceiling.has(s as Permission));
   if (extra.length) throw new AccessDenied(`cannot grant scopes you do not hold: ${extra.join(", ")}`);
 }
@@ -146,11 +150,17 @@ export async function issueServiceToken(input: { clientId: string; clientSecret:
   const accessToken = newSecret(TOKEN_PREFIX);
   const expiresAt = new Date(now.getTime() + TOKEN_TTL_SECONDS * 1000);
   const scopes = row.scopes.filter(isPermission);
-  await systemDb().transaction(async (tx) => {
+  const issued = await systemDb().transaction(async (tx) => {
+    // Locks out a concurrent rotate, disable or revoke: either it commits first and the check below
+    // fails, or it waits and then deletes this token with the rest.
+    const [current] = await tx.select().from(serviceIdentities).where(eq(serviceIdentities.id, row.id)).for("update");
+    if (!current || current.secretHash !== row.secretHash || !current.enabled || current.revokedAt) return false;
     await tx.delete(serviceTokens).where(and(eq(serviceTokens.identityId, row.id), lt(serviceTokens.expiresAt, now)));
     await tx.insert(serviceTokens).values({ tokenHash: hashSecret(accessToken), identityId: row.id, tenantId: row.tenantId, expiresAt });
     await audit(tx, { actorId: row.id, actorKind: "service", tenantId: row.tenantId, action: "api.token", targetType: "service_identity", targetId: row.id, ip: input.ip, detail: { expiresAt: expiresAt.toISOString() } });
+    return true;
   });
+  if (!issued) return null;
   return { accessToken, expiresIn: TOKEN_TTL_SECONDS, scopes };
 }
 

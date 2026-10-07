@@ -300,7 +300,8 @@ async function ServiceIdentities({ ctx, p }: { ctx: AccessContext; p: P }) {
   // Each target offers only the scopes the caller holds there (the grant ceiling).
   const targets = [
     ...(p.platformUsers ? [{ id: null, name: "Platform (all customers)", scopes: [...serviceScopeCeiling(ctx, null)] }] : []),
-    ...ctx.tenants.filter((t) => can(ctx, "user:manage", t.id)).map((t) => ({ id: t.id, name: t.name, scopes: [...serviceScopeCeiling(ctx, t.id)] })),
+    // Only tenants the caller manages directly: partner-held access cannot mint a customer credential.
+    ...ctx.tenants.map((t) => ({ id: t.id, name: t.name, scopes: [...serviceScopeCeiling(ctx, t.id)] })).filter((t) => t.scopes.includes("user:manage")),
   ].map((t) => ({ ...t, scopes: PERMISSIONS.filter((perm) => t.scopes.includes(perm)) }));
   return (
     <div className="space-y-4">

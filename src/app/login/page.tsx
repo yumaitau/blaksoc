@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/soc/brand";
 import { env } from "@/lib/env";
+import { safeNextPath } from "@/lib/auth/next-path";
 import { getSessionState } from "@/lib/auth/session";
 import { LoginForm } from "./login-form";
 
@@ -19,7 +20,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <p className="text-sm text-muted">One SOC. One interface. Open components underneath.</p>
         </div>
         <LoginForm
-          next={next?.startsWith("/") && !next.startsWith("//") ? next : "/"}
+          next={safeNextPath(next)}
           entraEnabled={!!(e.ENTRA_CLIENT_ID && e.ENTRA_CLIENT_SECRET)}
           googleEnabled={!!(e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET && e.GOOGLE_HOSTED_DOMAIN)}
           demo={e.DEMO_MODE === "true"}

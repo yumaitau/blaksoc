@@ -8,6 +8,7 @@ import { clientIpFromForwarded, parseTrustedProxies } from "@/lib/net/client-ip"
 import { redis } from "@/lib/redis";
 import { KelpieManaged } from "@/lib/services/kelpie";
 import { authenticateServiceToken } from "@/lib/services/service-identities";
+import { logger } from "@/lib/obs/log";
 import { parseBearer } from "./tokens";
 
 /** Per service identity, across replicas. */
@@ -17,7 +18,7 @@ export const TOKEN_RATE: RateRule = { window: 60, max: 20 };
 
 let store: ReturnType<typeof sharedRateLimitStore> | undefined;
 export function rateStore() {
-  store ??= sharedRateLimitStore(redis, (err) => console.warn(`[api] rate limit fell back to per-process counting: ${err instanceof Error ? err.message : err}`));
+  store ??= sharedRateLimitStore(redis, (err) => logger.warn("api rate limit fell back to per-process counting", { err }));
   return store;
 }
 
@@ -66,7 +67,7 @@ export async function serviceCall(req: Request, route: string, fn: (ctx: AccessC
     else if (err instanceof SyntaxError) res = json(400, { error: "invalid_request", message: "body must be JSON" });
     else if (err instanceof KelpieManaged) res = json(409, { error: "conflict", message: err.message });
     else {
-      console.error("[api]", err);
+      logger.error("api request failed", { err });
       res = json(500, { error: "server_error" });
     }
   }
