@@ -1,5 +1,6 @@
-import { APPLICABILITY_QUESTIONS, DRAFT_KINDS, DRAFT_LABELS, NOT_ADVICE, NOT_REVIEWED, REFERRALS, REFERRAL_LABELS } from "@/lib/obligations/model";
+import { APPLICABILITY_QUESTIONS, CLOCK_INFO, DRAFT_KINDS, DRAFT_LABELS, NOT_ADVICE, NOT_REVIEWED, REFERRALS, REFERRAL_LABELS } from "@/lib/obligations/model";
 import type { getObligation } from "@/lib/services/obligations";
+import { ReportingClocks } from "./reporting-clocks";
 
 const inputCls = "mt-1 w-full min-h-11 rounded-md border border-border bg-transparent px-3 text-base";
 
@@ -10,8 +11,12 @@ const ERRORS: Record<string, string> = {
   referral: "Choose a referral.",
   policy: "The insurer referral needs a policy number, 80 characters or fewer.",
   draft: "Choose which draft to save.",
-  missing: "Start the assessment clock first.",
-  exists: "An assessment clock is already running for this incident.",
+  missing: "Start the assessment clock first, or start the clock this needs.",
+  exists: "That clock is already running for this incident.",
+  clock: "Choose a reporting clock.",
+  time: "Enter a real time that is not in the future, and choose its time zone.",
+  applicability: "The applicability answers say this duty does not apply. Change the answers first if that is wrong.",
+  reference: "Keep the report reference to 120 characters or fewer.",
   generic: "That did not save. Try again.",
 };
 
@@ -22,10 +27,10 @@ export function ObligationsPanel({ incidentId, view, canWrite, error }: { incide
   return (
     <section className="space-y-4 border-t border-border pt-4" aria-labelledby="obligations">
       <h2 id="obligations" className="text-base font-semibold">Reporting duties</h2>
-      <p className="text-sm">This tracks a 30-day assessment clock. It does not notify the OAIC, the people affected, or anyone else. {NOT_ADVICE}</p>
+      <p className="text-sm">This tracks the 30-day breach assessment clock and, where they apply, the SOCI and ransomware payment reporting clocks. It does not notify the OAIC, the ASD, the people affected, or anyone else. {NOT_ADVICE}</p>
       <p className="text-sm text-muted">{NOT_REVIEWED} The clock ends 30 days after midnight UTC on the start date you enter. The Privacy Act expects an assessment within 30 calendar days after the day the organisation becomes aware of grounds to suspect an eligible data breach. Check that date with a lawyer if you are unsure.</p>
       {error ? <p className="text-sm text-muted">{ERRORS[error] ?? ERRORS.generic}</p> : null}
-      {!view ? <p className="text-sm text-muted">No assessment clock yet.</p> : (
+      {!view ? <p className="text-sm text-muted">No assessment clock yet. The SOCI and ransomware payment clocks can start once the applicability questions are answered.</p> : (
         <div className="space-y-3">
           <p className="text-sm">Started {view.case.startedAt.toISOString().slice(0, 10)}. Due {view.case.dueAt.toISOString().slice(0, 10)}. Legal review: {view.case.legalReview ? "requested" : "not requested"}.</p>
           <p className="text-sm">
@@ -53,10 +58,11 @@ export function ObligationsPanel({ incidentId, view, canWrite, error }: { incide
               {view.reminders.map((row) => <li key={`${row.key}-${row.at}`}>Day {row.key}: {row.status} by {row.channel} to {row.destination} at {row.at.slice(0, 16)}.</li>)}
             </ul>
           )}
+          <ReportingClocks incidentId={incidentId} view={view} canWrite={canWrite} />
           <h3 className="text-sm font-semibold">Drafts</h3>
           {view.drafts.length === 0 ? <p className="text-sm text-muted">No drafts. Saving a draft does not send it.</p> : view.drafts.map((draft) => (
             <article key={draft.id} className="space-y-1">
-              <h4 className="text-sm font-semibold">{DRAFT_LABELS[draft.kind as keyof typeof DRAFT_LABELS] ?? draft.kind}. Not sent. {draft.authorName} at {draft.createdAt.toISOString().slice(0, 16)}.</h4>
+              <h4 className="text-sm font-semibold">{DRAFT_LABELS[draft.kind as keyof typeof DRAFT_LABELS] ?? CLOCK_INFO[draft.kind as keyof typeof CLOCK_INFO]?.label ?? draft.kind}. Not sent. {draft.authorName} at {draft.createdAt.toISOString().slice(0, 16)}.</h4>
               <pre className="whitespace-pre-wrap text-sm">{draft.body}</pre>
             </article>
           ))}
@@ -90,6 +96,19 @@ export function ObligationsPanel({ incidentId, view, canWrite, error }: { incide
       ) : null}
       {canWrite && view ? (
         <div className="space-y-6">
+          <form className="space-y-3" action={action} method="post">
+            <input type="hidden" name="intent" value="applicability" />
+            {APPLICABILITY_QUESTIONS.map((question) => (
+              <label key={question.key} className="block text-sm">{question.label}
+                <select className={inputCls} name={question.key} required defaultValue={view.case.applicability[question.key]}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                  <option value="unsure">Unsure</option>
+                </select>
+              </label>
+            ))}
+            <button className="inline-flex min-h-11 items-center rounded-md border border-border px-4 text-sm" type="submit">Change applicability answers</button>
+          </form>
           <form className="space-y-3" action={action} method="post">
             <input type="hidden" name="intent" value="harm" />
             <label className="block text-sm">Is serious harm likely?

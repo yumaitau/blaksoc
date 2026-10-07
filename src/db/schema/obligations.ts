@@ -1,4 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import type { ClockKind } from "@/lib/obligations/clock";
 import type { Applicability, BreachDecision, ReferralKey } from "@/lib/obligations/model";
 import type { PackMark } from "@/lib/obligations/report";
 import { incidents } from "./security";
@@ -40,3 +41,24 @@ export const obligationDrafts = pgTable("obligation_drafts", {
   authorName: text("author_name").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** SOCI and ransomware payment reporting clocks. One per kind per incident; reminders stop once reported. */
+export const reportingClocks = pgTable(
+  "reporting_clocks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    incidentId: uuid("incident_id").notNull().references(() => incidents.id, { onDelete: "cascade" }),
+    caseId: uuid("case_id").notNull().references(() => obligationCases.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<ClockKind>().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+    timeZone: text("time_zone").notNull(),
+    startedBy: text("started_by").notNull(),
+    reportedAt: timestamp("reported_at", { withTimezone: true }),
+    reportedBy: text("reported_by"),
+    reportRef: text("report_ref"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("reporting_clocks_incident_kind").on(t.incidentId, t.kind)],
+);

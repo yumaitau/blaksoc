@@ -132,7 +132,7 @@ DECLARE
     'incident_notes','incident_tasks','evidence','vulnerabilities','detection_deployments',
     'playbook_runs','playbook_run_steps','approvals','response_actions','ai_conversations',
     'ai_messages','ai_invocations','reports','tenant_feed_entitlements','tenant_plans','usage_daily',
-    'escalation_policies','notification_deliveries','e8_assessments','e8_tasks','obligation_cases','obligation_drafts',
+    'escalation_policies','notification_deliveries','e8_assessments','e8_tasks','obligation_cases','obligation_drafts','reporting_clocks',
     'monitored_domains','email_posture_checks','dmarc_reports','credential_exposures',
     'enrolment_tokens','coverage_tasks','health_baselines','board_briefs',
     'syslog_sources','syslog_events','syslog_archive',
