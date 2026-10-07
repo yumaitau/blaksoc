@@ -2,9 +2,10 @@
 # Two runtime targets from one build: `web` (Next.js standalone) and `worker`
 # (BullMQ jobs + migrations). Both run as non-root on a minimal Node base.
 
-ARG NODE_VERSION=22-alpine
+# Base pinned by digest for reproducible builds; Dependabot (docker ecosystem) bumps it.
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS base
 
-FROM node:${NODE_VERSION} AS deps
+FROM base AS deps
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
@@ -15,13 +16,13 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build && pnpm build:worker
 
-FROM node:${NODE_VERSION} AS prod-deps
+FROM base AS prod-deps
 WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile --prod
 
-FROM node:${NODE_VERSION} AS web
+FROM base AS web
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 # Numeric ids so Kubernetes can verify runAsNonRoot (the chart pins the same ids).
@@ -35,7 +36,7 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/api/health/live || exit 1
 CMD ["node", "server.js"]
 
-FROM node:${NODE_VERSION} AS worker
+FROM base AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup -S -g 101 blaksoc && adduser -S -u 100 -G blaksoc blaksoc

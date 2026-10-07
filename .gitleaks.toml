@@ -1,0 +1,12 @@
+# Secret scanning config for `gitleaks git` (see .github/workflows/security.yml).
+# Default rules, minus the CI-only fixture values that are deliberately committed in the test env.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "CI and local test fixtures, not real credentials"
+regexTarget = "line"
+regexes = [
+  '''ci-only-secret-change-me''',
+  '''ZGV2LW9ubHkta2V5LWNoYW5nZS1tZS0zMi1ieXRlcyE=''',
+]

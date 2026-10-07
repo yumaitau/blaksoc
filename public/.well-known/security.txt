@@ -1,0 +1,7 @@
+# blakSOC security contact (RFC 9116). Disclosure policy: SECURITY.md in the repository.
+# TODO: add the real security@ mailbox as the first Contact line, e.g. "Contact: mailto:security@<domain>",
+# keep it in sync with SECURITY.md, and renew Expires before it lapses (at most one year ahead).
+Contact: https://github.com/yumaitau/blaksoc/security/advisories/new
+Expires: 2027-09-30T00:00:00.000Z
+Preferred-Languages: en
+Policy: https://github.com/yumaitau/blaksoc/blob/main/SECURITY.md
