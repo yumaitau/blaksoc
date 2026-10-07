@@ -8,7 +8,7 @@ import { withScope } from "@/db/scope";
 import { systemScope, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { evaluateRules, type CorrelationFinding, type CorrelationRule } from "@/lib/correlation/engine";
-import { alertFromFinding, contributingIds, CORRELATION_SOURCE, eventFromAlert } from "@/lib/correlation/events";
+import { alertFromFinding, contributingIds, CORRELATION_SOURCE, EVENT_RAW_PATHS, eventFromAlert } from "@/lib/correlation/events";
 import { planGroups, type GroupPlan } from "@/lib/correlation/grouping";
 import { BUILTIN_RULES, ruleById } from "@/lib/correlation/rules";
 import { ingestAlert } from "@/lib/pipeline/ingest";
@@ -55,7 +55,7 @@ export async function runCorrelation(tenantId: string, now = new Date()): Promis
           .select({
             id: alerts.id, source: alerts.source, ruleId: alerts.ruleId, title: alerts.title, category: alerts.category, severity: alerts.severity, riskScore: alerts.riskScore,
             userName: alerts.userName, assetId: alerts.assetId, hostname: sql<string | null>`coalesce(${assets.hostname}, ${assets.name})`, attackTechniques: alerts.attackTechniques,
-            raw: alerts.raw, occurredAt: alerts.occurredAt,
+            raw: slimRaw, occurredAt: alerts.occurredAt,
           })
           .from(alerts)
           .leftJoin(assets, eq(assets.id, alerts.assetId))
@@ -110,13 +110,36 @@ async function persistFinding(tenantId: string, rule: CorrelationRule, f: Correl
  * Group the tenant's open, unlinked alerts into incidents (see planGroups). Each plan is applied in its own
  * transaction and re-checked there, so an analyst acting between plan and apply wins.
  */
+/**
+ * The raw fields correlation reads, built in the database. Up to MAX_EVENTS whole Wazuh payloads ran the
+ * worker out of heap on a busy tenant's backlog.
+ */
+const slimRaw = (() => {
+  type Tree = { [key: string]: Tree | string[] };
+  const tree: Tree = {};
+  for (const path of EVENT_RAW_PATHS) {
+    const parts = path.split(".");
+    let node = tree;
+    parts.forEach((part, i) => {
+      if (i === parts.length - 1) node[part] = parts;
+      else node = (node[part] ??= {}) as Tree;
+    });
+  }
+  // Keys and paths are the constants above, so building the expression as text is safe.
+  const build = (node: Tree): string =>
+    `jsonb_build_object(${Object.entries(node).map(([k, v]) => `'${k}', ${Array.isArray(v) ? `"alerts"."raw" #> '{${v.join(",")}}'` : build(v)}`).join(", ")})`;
+  return sql<unknown>`${sql.raw(build(tree))}`;
+})();
+
 /** Alerts linked per transaction when applying a group. */
 export const GROUP_BATCH = 100;
 
 export async function runGrouping(tenantId: string, now = new Date()): Promise<{ plans: number; linked: number; opened: number }> {
   const plans = await withScope(systemScope(tenantId), async (tx) => {
     const since = new Date(now.getTime() - GROUP_LOOKBACK);
-    const cols = { id: alerts.id, occurredAt: alerts.occurredAt, userName: alerts.userName, assetId: alerts.assetId, techniques: alerts.attackTechniques, source: alerts.source, raw: alerts.raw };
+    // Only correlated alerts carry the matches grouping reads; nothing else needs its payload.
+    const raw = sql<unknown>`case when ${alerts.source} = ${CORRELATION_SOURCE} then jsonb_build_object('correlation', ${alerts.raw} -> 'correlation') end`;
+    const cols = { id: alerts.id, occurredAt: alerts.occurredAt, userName: alerts.userName, assetId: alerts.assetId, techniques: alerts.attackTechniques, source: alerts.source, raw };
     const candidates = await tx
       .select({ ...cols, incidentId: sql<string | null>`null` })
       .from(alerts)
