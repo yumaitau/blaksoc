@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { systemDb } from "@/db/client";
 import { assetSources, assets, detectionDeployments, integrations, integrationTenantLinks, sigmaRules, vulnerabilities } from "@/db/schema";
 import { withScope } from "@/db/scope";
@@ -13,11 +13,44 @@ import { syncAssets } from "@/lib/pipeline/assets";
 import { queue, QUEUES } from "@/lib/queue";
 import { redis } from "@/lib/redis";
 import { evaluateTriggers } from "@/lib/soar/engine";
+import type { Severity } from "@/lib/providers/types";
 import { wazuhLevelToSeverity } from "@/lib/providers/wazuh";
 import { logger } from "@/lib/obs/log";
 import { ingestAlerts, ingestLag, integrationPolls } from "@/lib/obs/metrics";
 
 type Log = (m: string) => void;
+
+/** Vulnerability rows per upsert statement. */
+const VULN_BATCH = 500;
+
+const SEVERITY_RANK: Record<Severity, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+/**
+ * Lowest severity stored per provider unless the integration's `minSeverity` says otherwise. Wazuh's
+ * informational events (session opened, sudo, login success) were 95% of the volume and feed no detection;
+ * they stay searchable in Wazuh for its retention period.
+ */
+const DEFAULT_MIN_SEVERITY: Partial<Record<string, Severity>> = { wazuh: "low" };
+
+/** Batched upserts, one short transaction each, instead of one round trip per row. Rows must be unique by key. */
+export async function storeVulnerabilities(tenantId: string, list: (typeof vulnerabilities.$inferInsert)[]) {
+  for (let i = 0; i < list.length; i += VULN_BATCH) {
+    await withScope(systemScope(tenantId), (tx) =>
+      tx
+        .insert(vulnerabilities)
+        .values(list.slice(i, i + VULN_BATCH))
+        .onConflictDoUpdate({
+          target: [vulnerabilities.tenantId, vulnerabilities.assetId, vulnerabilities.cve, vulnerabilities.packageName],
+          set: { lastSeen: new Date(), cvss: sql`excluded.cvss`, packageVersion: sql`excluded.package_version` },
+        }),
+    );
+  }
+}
+
+export function minSeverityFor(row: IntegrationRow): Severity {
+  const configured = (row.config as { minSeverity?: unknown }).minSeverity;
+  if (typeof configured === "string" && configured in SEVERITY_RANK) return configured as Severity;
+  return DEFAULT_MIN_SEVERITY[row.provider] ?? "informational";
+}
 
 async function eventIntegrations(): Promise<IntegrationRow[]> {
   const rows = await systemDb().select().from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, ["siem", "endpoint", "identity"])));
@@ -84,23 +117,19 @@ export async function syncAllVulnerabilities(log: Log) {
       const sources = await systemDb().select().from(assetSources).where(eq(assetSources.integrationId, row.id));
       const byExt = new Map(sources.map((s) => [s.externalId, s]));
       const vulns = await provider.getVulnerabilities();
-      const byTenant = new Map<string, typeof vulns>();
+      // Keyed like the table's unique index: one upsert statement may not touch the same row twice.
+      const byTenant = new Map<string, Map<string, typeof vulnerabilities.$inferInsert>>();
       for (const v of vulns) {
         const s = byExt.get(v.assetExternalId);
         if (!s) continue;
-        byTenant.set(s.tenantId, [...(byTenant.get(s.tenantId) ?? []), v]);
+        const rows = byTenant.get(s.tenantId) ?? new Map();
+        byTenant.set(s.tenantId, rows);
+        const packageName = v.packageName ?? "";
+        rows.set(`${s.assetId}|${v.cve}|${packageName}`, { tenantId: s.tenantId, assetId: s.assetId, cve: v.cve, title: v.title, packageName, packageVersion: v.packageVersion, fixedVersion: v.fixedVersion, cvss: v.cvss, source: row.provider });
       }
-      for (const [tenantId, list] of byTenant) {
+      for (const [tenantId, rows] of byTenant) {
         if (!collectionAllowed(tierOf(tenantId), row.provider)) continue;
-        await withScope(systemScope(tenantId), async (tx) => {
-          for (const v of list) {
-            const assetId = byExt.get(v.assetExternalId)!.assetId;
-            await tx
-              .insert(vulnerabilities)
-              .values({ tenantId, assetId, cve: v.cve, title: v.title, packageName: v.packageName ?? "", packageVersion: v.packageVersion, fixedVersion: v.fixedVersion, cvss: v.cvss, source: row.provider })
-              .onConflictDoUpdate({ target: [vulnerabilities.tenantId, vulnerabilities.assetId, vulnerabilities.cve, vulnerabilities.packageName], set: { lastSeen: new Date(), cvss: v.cvss, packageVersion: v.packageVersion } });
-          }
-        });
+        await storeVulnerabilities(tenantId, [...rows.values()]);
         await queue(QUEUES.intel).add("rescore", { tenantId });
       }
       log(`vulns ${row.name}: ${vulns.length}`);
@@ -163,7 +192,12 @@ export async function pollIntegration(row: IntegrationRow, tierOf: (id: string) 
     const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
     let n = 0;
     const labels = { integration: row.id, provider: row.provider };
+    const floor = SEVERITY_RANK[minSeverityFor(row)];
     for (const a of alerts) {
+      if (SEVERITY_RANK[a.severity] < floor) {
+        ingestAlerts().inc({ ...labels, outcome: "below_threshold" });
+        continue;
+      }
       const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
       if (!tenantId || !live.has(tenantId)) {
         ingestAlerts().inc({ ...labels, outcome: "unrouted" });

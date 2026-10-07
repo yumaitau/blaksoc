@@ -30,9 +30,9 @@ export type PurgeCounts = Partial<Record<Severity, number>>;
  * Delete one tenant's alerts past retention, with the graph nodes and evidence that point at them (other rows
  * cascade or are nulled by foreign keys). Writes one audit row with the counts when anything was removed.
  */
-export async function purgeTenantAlerts(tenantId: string, now = new Date()): Promise<PurgeCounts> {
+export async function purgeTenantAlerts(tenantId: string, now = new Date(), retention: Partial<Record<Severity, number>> = ALERT_RETENTION_DAYS): Promise<PurgeCounts> {
   const counts: PurgeCounts = {};
-  for (const [severity, days] of Object.entries(ALERT_RETENTION_DAYS) as [Severity, number][]) {
+  for (const [severity, days] of Object.entries(retention) as [Severity, number][]) {
     const cutoff = new Date(now.getTime() - days * DAY);
     for (;;) {
       const removed = await withScope(systemScope(tenantId), async (tx) => {
@@ -57,7 +57,7 @@ export async function purgeTenantAlerts(tenantId: string, now = new Date()): Pro
   const total = Object.values(counts).reduce((s, n) => s + (n ?? 0), 0);
   if (total) {
     await withScope(systemScope(tenantId), (tx) =>
-      audit(tx, { actorId: null, actorKind: "system", tenantId, action: "retention.purge_alerts", targetType: "tenant", targetId: tenantId, detail: { deleted: counts, retentionDays: ALERT_RETENTION_DAYS, before: now.toISOString() } }),
+      audit(tx, { actorId: null, actorKind: "system", tenantId, action: "retention.purge_alerts", targetType: "tenant", targetId: tenantId, detail: { deleted: counts, retentionDays: retention, before: now.toISOString() } }),
     );
   }
   return counts;

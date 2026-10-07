@@ -82,6 +82,8 @@ export const CONNECTORS: ConnectorDefinition[] = [
       vulnerabilitiesIndex: z.string().optional(),
       activeResponse: z.record(z.string(), z.union([z.string(), z.object({ windows: z.string().optional(), default: z.string() })])).optional(),
       region: z.enum(["ap-southeast-2", "ap-southeast-4"]),
+      /** Lowest severity stored in blakSOC; lower alerts stay in Wazuh. Defaults to low. */
+      minSeverity: z.enum(["informational", "low", "medium", "high", "critical"]).optional(),
       ...tls,
     }),
     secrets: z.object({ apiUser: z.string().min(1), apiPassword: z.string().min(1), indexerUser: z.string().min(1), indexerPassword: z.string().min(1) }),
