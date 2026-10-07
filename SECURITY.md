@@ -11,7 +11,7 @@ Report privately through either channel:
 
 - GitHub private vulnerability reporting:
   <https://github.com/yumaitau/blaksoc/security/advisories/new>
-- Email: `TODO-security-contact@example.invalid` <!-- TODO: replace with the real security@ mailbox (and a PGP key URL if one exists) before publishing; keep public/.well-known/security.txt in sync. -->
+- Email: <security@yumait.com.au>
 
 Include what you can of:
 

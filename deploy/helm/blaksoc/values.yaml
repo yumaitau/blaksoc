@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/yuma-it/blaksoc
+  repository: ghcr.io/yumaitau/blaksoc   # -web and -worker are appended; release.yml publishes both
   tag: ""            # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 imagePullSecrets: []

@@ -52,7 +52,7 @@ services:
     volumes: [redisdata:/data]
 
   migrate:
-    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yumaitau/blaksoc}-worker:${BLAKSOC_VERSION:-local}
     build: { context: ../.., target: worker }
     command: ["sh", "-c", "node dist/db/migrate.mjs && node dist/db/seed.mjs"]
     # Only the migration job gets owner credentials; web and worker use the app and system roles.
@@ -65,7 +65,7 @@ services:
     restart: "no"
 
   web:
-    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-web:${BLAKSOC_VERSION:-latest}
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yumaitau/blaksoc}-web:${BLAKSOC_VERSION:-local}
     build: { context: ../.., target: web }
     restart: unless-stopped
     environment: *app-env
@@ -73,7 +73,7 @@ services:
     depends_on: { migrate: { condition: service_completed_successfully }, redis: { condition: service_started } }
 
   worker:
-    image: ${BLAKSOC_IMAGE:-ghcr.io/yuma-it/blaksoc}-worker:${BLAKSOC_VERSION:-latest}
+    image: ${BLAKSOC_IMAGE:-ghcr.io/yumaitau/blaksoc}-worker:${BLAKSOC_VERSION:-local}
     restart: unless-stopped
     environment: *app-env
     volumes: [archive:/var/lib/blaksoc/archive]
