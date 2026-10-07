@@ -95,6 +95,17 @@ Kelpie case. Incidents open automatically only for high and critical alerts and 
 Wazuh local rule 100100 (installed by `wazuh-host.sh`) silences promiscuous-mode alerts from Docker `veth`
 interfaces.
 
+Noise controls:
+
+- blakSOC stores Wazuh alerts from `low` up (`minSeverity` on the integration). Informational events (sessions,
+  sudo, login success) stay in Wazuh for 90 days (ISM policy `blaksoc-alerts-90d`).
+- The `yumait-aws` agent group's shared configuration (`deploy/wazuh/agent-yumait-aws.conf`, applied by
+  `wazuh-host.sh`) skips inode checks on `/boot/efi`: it is FAT, and Linux renumbers its inodes.
+
+Intel: OpenCTI on `threatsieve-opencti-production` runs public feed connectors next to ThreatSieve's (MITRE ATT&CK,
+CISA KEV, abuse.ch ThreatFox, URLhaus and SSL blacklist, OpenCTI datasets). They are defined in ThreatSieve's
+`infra/opencti/compose.yaml` and use the non-admin connector token; none needs an API key.
+
 Reach the Wazuh dashboard or OpenCTI with SSM port forwarding, for example:
 
 ```bash

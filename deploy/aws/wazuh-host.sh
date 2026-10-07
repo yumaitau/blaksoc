@@ -140,4 +140,17 @@ if ! grep -q 'id="100100"' <<<"$current"; then
 </group>' | curl -sk -H "Authorization: Bearer $T" -H "Content-Type: application/octet-stream" -X PUT "$API_URL/rules/files/local_rules.xml?overwrite=true" --data-binary @- | jq -c '{rules: .message}'
   curl -sk -H "Authorization: Bearer $T" -X PUT "$API_URL/manager/restart" | jq -c '{restart: .message}'
 fi
+
+# Shared agent configuration for EC2 hosts (deploy/wazuh/agent-yumait-aws.conf, inlined so this script stays
+# self-contained over SSM). Agents pick it up on their next sync.
+curl -sk -H "Authorization: Bearer $T" -H "Content-Type: application/json" -X POST "$API_URL/groups" -d '{"group_id":"yumait-aws"}' >/dev/null
+cat <<'XML' | curl -sk -H "Authorization: Bearer $T" -H "Content-Type: application/xml" -X PUT "$API_URL/groups/yumait-aws/configuration" --data-binary @- | jq -c '{agent_conf: .message}'
+<agent_config>
+  <!-- blakSOC: /boot/efi is FAT; Linux assigns its inode numbers dynamically, so inode changes there are noise.
+       Content, size, owner and permissions are still checked. -->
+  <syscheck>
+    <directories check_all="yes" check_inode="no">/boot/efi</directories>
+  </syscheck>
+</agent_config>
+XML
 docker compose -f docker-compose.yml -f blaksoc-overlay.yml ps --format '{{.Service}} {{.State}}'
