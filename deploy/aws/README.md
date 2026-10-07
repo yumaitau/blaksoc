@@ -70,6 +70,10 @@ The scripts run as root through SSM Run Command and can be re-run:
 
 - `wazuh-host.sh`: wazuh-docker single-node `v4.14.8`. Replaces the published default passwords before
   first start, turns on enrolment passwords, and sets the indexer `node.attr.region`.
+- `wazuh-agent-ssm.py`: creates the `BlakSOC-WazuhAgent` SSM document and the State Manager association
+  `blaksoc-wazuh-agent`, which runs `wazuh-agent.sh` on every SSM-managed Linux instance when it registers
+  and daily after that. New EC2 hosts are enrolled without any action, provided they run the SSM agent with
+  an instance profile that allows it. Re-run the script after changing `wazuh-agent.sh`.
 - `wazuh-agent.sh`: installs and enrols the pinned agent on an EC2 host (Ubuntu or Amazon Linux) into group
   `yumait-aws`. Prefix it with exports of `WAZUH_REGISTRATION_PASSWORD` and `WAZUH_AGENT_NAME` (the Name tag)
   when sending it with `AWS-RunShellScript`. EC2 hosts point at `wazuh-internal.soc.yumait.au`, a public
@@ -82,6 +86,14 @@ blakSOC's Wazuh API user (`blaksoc`) holds `agents_readonly`, `cluster_readonly`
 `wazuh-states-vulnerabilities-*` plus node info for the region check. The integrations are `Wazuh (AWS)`,
 linked to the `Yuma IT Internal` tenant by agent group `yumait-aws`, and `OpenCTI (ThreatSieve)` at platform
 level.
+
+Cases go to Kelpie (`kelpie` namespace, `https://kelpie-app.yumait.au`): the `Yuma IT Internal` tenant has a
+Kelpie integration whose token (`blaksoc-kelpie-token`, Yuma IT organisation, `cases:*`, `comments:write`,
+`observables:write`, 365 days) belongs to an organisation admin. Every open incident in that tenant becomes a
+Kelpie case. Incidents open automatically only for high and critical alerts and correlation findings
+(`AUTO_INCIDENT_SEVERITIES` in `src/lib/services/correlation.ts`); lower severities stay in the alert queue.
+Wazuh local rule 100100 (installed by `wazuh-host.sh`) silences promiscuous-mode alerts from Docker `veth`
+interfaces.
 
 Reach the Wazuh dashboard or OpenCTI with SSM port forwarding, for example:
 
@@ -100,6 +112,12 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 | ACM validation | CNAME | from the certificate | DNS only |
 
 ## Known gaps
+
+- Helm upgrades need cluster-admin on `yumait-prod`: the release's hooks manage External Secrets objects,
+  which namespace-scoped EKS access policies do not cover. The Agent Vault IAM user has namespace-scoped
+  admin on `blaksoc` and `kelpie` only, so image-only releases were rolled out with `kubectl set image`;
+  run the next `helm upgrade` with cluster-admin credentials to bring the release record in line.
+- The `r7g.large` Wazuh host stays below `m7g.xlarge` until the account's vCPU quota increase is granted.
 
 - The Wazuh indexer and API certificates name `wazuh.indexer` and `localhost`, so the Wazuh integration
   connects to `172.31.49.40` with `tlsVerify: false`. Traffic stays in the VPC and the ports admit only the VPC
