@@ -312,3 +312,19 @@ describe("source fan-out signal", () => {
     expect(evaluateRule(SOURCE_FANOUT, attacks)).toHaveLength(1);
   });
 });
+
+describe("grouping correlation findings", () => {
+  it("puts a finding in the same incident as other alerts on its entity, without a shared technique", () => {
+    const base = { userName: null, incidentId: null };
+    const plans = planGroups(
+      [
+        { ...base, id: "brute", occurredAt: T0, userName: "kim", assetId: "host-1", techniques: ["T1110"] },
+        { ...base, id: "user-risk", occurredAt: T0 + MIN, userName: "kim", assetId: null, techniques: [], relatedIds: ["low-1", "low-2"] },
+        { ...base, id: "host-risk", occurredAt: T0 + MIN, assetId: "host-1", techniques: [], relatedIds: ["low-1"] },
+        { ...base, id: "elsewhere", occurredAt: T0 + MIN, assetId: "host-2", techniques: ["T1110"] },
+      ],
+      { windowMs: 6 * 60 * MIN, tactics: {}, minAlerts: 1 },
+    );
+    expect(plans.map((p) => p.alertIds)).toEqual([["brute", "host-risk", "user-risk"], ["elsewhere"]]);
+  });
+});
