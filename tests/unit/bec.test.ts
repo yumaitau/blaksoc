@@ -36,13 +36,48 @@ describe("MFA fatigue", () => {
       point("d3", "2026-09-29T00:20:00.000Z", true),
       point("ok", "2026-09-29T00:30:00.000Z", false),
     ]);
-    expect(hits).toEqual([{ id: "mfa:ok", user: "reception@wattle.example", denied: 3, successId: "ok", at: "2026-09-29T00:30:00.000Z" }]);
+    expect(hits).toMatchObject([{ id: "mfa:ok", user: "reception@wattle.example", denied: 3, successId: "ok", at: "2026-09-29T00:30:00.000Z" }]);
+    // Now an engine rule: the hit says which prompts met which clause.
+    expect(hits[0]!.matches.map((m) => [m.clause, m.events.map((e) => e.id)])).toEqual([
+      ["fatigue.denied", ["d1", "d2", "d3"]],
+      ["fatigue.approved", ["ok"]],
+    ]);
     const short = correlateMfaFatigue([
       point("d1", "2026-09-29T00:00:00.000Z", true),
       point("d2", "2026-09-29T00:10:00.000Z", true),
       point("ok", "2026-09-29T00:20:00.000Z", false),
     ]);
     expect(short).toEqual([]);
+  });
+
+  it("counts every denial in the hour before the approval, and ignores denials outside it", () => {
+    const hits = correlateMfaFatigue([
+      point("old", "2026-09-28T22:00:00.000Z", true),
+      point("d1", "2026-09-29T00:00:00.000Z", true),
+      point("d2", "2026-09-29T00:05:00.000Z", true),
+      point("d3", "2026-09-29T00:10:00.000Z", true),
+      point("d4", "2026-09-29T00:15:00.000Z", true),
+      point("ok", "2026-09-29T00:30:00.000Z", false),
+    ]);
+    expect(hits.map((h) => [h.id, h.denied])).toEqual([["mfa:ok", 4]]);
+  });
+});
+
+describe("impossible travel on the engine", () => {
+  const p = (id: string, country: string, at: string): SignInPoint => ({ id, user: "finance@wattle.example", country, ip: "203.0.113.10", at });
+
+  it("pairs only consecutive sign-ins, like the hand-written correlator did", () => {
+    const hits = correlateImpossibleTravel(
+      [p("a", "AU", "2026-09-29T00:00:00.000Z"), p("b", "US", "2026-09-29T00:30:00.000Z"), p("c", "US", "2026-09-29T01:00:00.000Z"), p("d", "NZ", "2026-09-29T01:10:00.000Z")],
+      new Set(["finance@wattle.example"]),
+    );
+    expect(hits.map((h) => h.id)).toEqual(["travel:a:b", "travel:c:d"]);
+    expect(hits[0]!.matches.map((m) => m.clause)).toEqual(["travel.from", "travel.to", "mailbox"]);
+  });
+
+  it("needs a known country on both sides and a positive gap", () => {
+    expect(correlateImpossibleTravel([p("a", "", "2026-09-29T00:00:00.000Z"), p("b", "US", "2026-09-29T00:30:00.000Z")], new Set(["finance@wattle.example"]))).toEqual([]);
+    expect(correlateImpossibleTravel([p("a", "AU", "2026-09-29T00:00:00.000Z"), p("b", "US", "2026-09-29T00:00:00.000Z")], new Set(["finance@wattle.example"]))).toEqual([]);
   });
 });
 

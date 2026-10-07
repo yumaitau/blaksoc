@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import {
-  alerts, approvals, assets, evidence, incidentAlerts, incidentLinks, incidentNotes, incidents, incidentTasks, incidentTimeline,
+  alerts, approvals, assets, evidence, incidentAlerts, incidentGroupExclusions, incidentLinks, incidentNotes, incidents, incidentTasks, incidentTimeline,
   responseActions, roleAssignments, roles, tenants, user, type TenantSettings,
 } from "@/db/schema";
 import { can, type AccessContext } from "@/lib/auth/access";
@@ -54,7 +54,7 @@ export async function getIncident(ctx: AccessContext, id: string) {
     const soc = can(ctx, "alert:triage", row.incident.tenantId);
     const [alertRows, links, timeline, notes, tasks, ev, actions, pending] = await Promise.all([
       tx
-        .select({ id: alerts.id, title: alerts.title, severity: alerts.severity, riskScore: alerts.riskScore, status: alerts.status, occurredAt: alerts.occurredAt, assetName: assets.name, userName: alerts.userName, intelVerdict: alerts.intelVerdict, attackTechniques: alerts.attackTechniques })
+        .select({ id: alerts.id, title: alerts.title, severity: alerts.severity, riskScore: alerts.riskScore, status: alerts.status, occurredAt: alerts.occurredAt, assetName: assets.name, userName: alerts.userName, intelVerdict: alerts.intelVerdict, attackTechniques: alerts.attackTechniques, origin: incidentAlerts.origin, groupReason: incidentAlerts.reason })
         .from(incidentAlerts)
         .innerJoin(alerts, eq(alerts.id, incidentAlerts.alertId))
         .leftJoin(assets, eq(assets.id, alerts.assetId))
@@ -98,7 +98,7 @@ async function tenantSettings(tx: Tx, tenantId: string): Promise<TenantSettings>
 /** Alert → Incident and Multiple Alerts → Incident. All alerts must belong to one tenant. */
 export async function createIncidentFromAlerts(
   ctx: AccessContext | null,
-  input: { tenantId: string; alertIds: string[]; title?: string; description?: string; ownerId?: string | null },
+  input: { tenantId: string; alertIds: string[]; title?: string; description?: string; ownerId?: string | null; actorKind?: "playbook" | "system" },
   txOverride?: Tx,
 ) {
   const run = async (tx: Tx) => {
@@ -126,7 +126,7 @@ export async function createIncidentFromAlerts(
     const incident = inc!;
     await linkAlerts(tx, incident.id, input.tenantId, rows);
     await addTimeline(tx, { tenantId: input.tenantId, incidentId: incident.id, origin: ctx ? "analyst" : "machine", category: "status", title: "Incident opened", actorId: ctx?.principal.userId ?? null });
-    await audit(tx, { actorId: ctx?.principal.userId ?? null, actorKind: ctx ? "user" : "playbook", tenantId: input.tenantId, action: "incident.create", targetType: "incident", targetId: incident.id, detail: { alertIds: input.alertIds } });
+    await audit(tx, { actorId: ctx?.principal.userId ?? null, actorKind: ctx ? "user" : (input.actorKind ?? "playbook"), tenantId: input.tenantId, action: "incident.create", targetType: "incident", targetId: incident.id, detail: { alertIds: input.alertIds } });
     return incident;
   };
   const incident = txOverride ? await run(txOverride) : ctx ? await inTenant(ctx, "incident:write", input.tenantId, run) : (() => { throw new Error("system callers must pass a transaction"); })();
@@ -136,7 +136,7 @@ export async function createIncidentFromAlerts(
   return incident;
 }
 
-async function linkAlerts(tx: Tx, incidentId: string, tenantId: string, rows: (typeof alerts.$inferSelect)[]) {
+export async function linkAlerts(tx: Tx, incidentId: string, tenantId: string, rows: (typeof alerts.$inferSelect)[]) {
   for (const a of rows) {
     await tx.insert(incidentAlerts).values({ tenantId, incidentId, alertId: a.id }).onConflictDoNothing();
     await tx.update(alerts).set({ incidentId, status: a.status === "NEW" || a.status === "TRIAGING" ? "ESCALATED" : a.status }).where(eq(alerts.id, a.id));
@@ -153,6 +153,73 @@ async function linkAlerts(tx: Tx, incidentId: string, tenantId: string, rows: (t
     }
     if (a.userName) await tx.insert(incidentLinks).values({ tenantId, incidentId, kind: "identity", refId: a.userName.toLowerCase(), label: a.userName }).onConflictDoNothing();
   }
+}
+
+/** Incident links an alert would add (see linkAlerts). */
+function linksOf(a: typeof alerts.$inferSelect): string[] {
+  const out: string[] = [];
+  for (const m of a.intel?.matches ?? []) {
+    if (m.verdict === "benign") continue;
+    out.push(`intel:${m.openctiId}`, `observable:${m.observable.type}:${m.observable.value}`);
+  }
+  if (a.assetId) out.push(`asset:${a.assetId}`);
+  if (a.userName) out.push(`identity:${a.userName.toLowerCase()}`);
+  return out;
+}
+
+/**
+ * Undo automatic grouping for some or all of an incident's auto-linked alerts: drop the links, give each alert back
+ * the status grouping replaced (unless an analyst has moved it since), remove incident links only those alerts
+ * brought, and keep grouping away from them from now on. An incident grouping opened closes once it is empty.
+ */
+export async function ungroupAlerts(ctx: AccessContext, incidentId: string, alertIds?: string[]) {
+  const inc = await getIncidentHead(ctx, incidentId);
+  const result = await inTenant(ctx, "incident:write", inc.tenantId, async (tx) => {
+    const where = [eq(incidentAlerts.incidentId, incidentId), eq(incidentAlerts.origin, "auto")];
+    if (alertIds?.length) where.push(inArray(incidentAlerts.alertId, alertIds));
+    const links = await tx.select().from(incidentAlerts).where(and(...where));
+    if (!links.length || (alertIds?.length && links.length !== new Set(alertIds).size)) throw new AccessDenied("only automatically grouped alerts can be ungrouped");
+    const ids = links.map((l) => l.alertId);
+    await tx.delete(incidentAlerts).where(and(eq(incidentAlerts.incidentId, incidentId), inArray(incidentAlerts.alertId, ids)));
+
+    const removed = await tx.select().from(alerts).where(inArray(alerts.id, ids)).orderBy(asc(alerts.occurredAt));
+    const now = new Date();
+    for (const a of removed) {
+      const prior = links.find((l) => l.alertId === a.id)!.priorStatus;
+      const [other] = await tx.select({ incidentId: incidentAlerts.incidentId }).from(incidentAlerts).where(eq(incidentAlerts.alertId, a.id)).limit(1);
+      await tx
+        .update(alerts)
+        .set({ status: a.status === "ESCALATED" && prior ? prior : a.status, incidentId: a.incidentId === incidentId ? (other?.incidentId ?? null) : a.incidentId, updatedAt: now })
+        .where(eq(alerts.id, a.id));
+      await tx
+        .insert(incidentGroupExclusions)
+        .values({ alertId: a.id, tenantId: inc.tenantId, incidentId, actorId: ctx.principal.userId })
+        .onConflictDoUpdate({ target: incidentGroupExclusions.alertId, set: { incidentId, actorId: ctx.principal.userId, createdAt: now } });
+    }
+
+    const remaining = await tx.select().from(alerts).innerJoin(incidentAlerts, eq(incidentAlerts.alertId, alerts.id)).where(eq(incidentAlerts.incidentId, incidentId));
+    const kept = new Set(remaining.flatMap((r) => linksOf(r.alerts)));
+    for (const key of new Set(removed.flatMap(linksOf))) {
+      if (kept.has(key)) continue;
+      const [kind, ...rest] = key.split(":");
+      await tx.delete(incidentLinks).where(and(eq(incidentLinks.incidentId, incidentId), eq(incidentLinks.kind, kind!), eq(incidentLinks.refId, rest.join(":"))));
+    }
+
+    await addTimeline(tx, {
+      tenantId: inc.tenantId, incidentId, origin: "analyst", category: "grouping", actorId: ctx.principal.userId,
+      title: `Ungrouped ${ids.length} alert${ids.length === 1 ? "" : "s"}`, detail: removed.map((a) => a.title).join("; "),
+    });
+    // Kelpie owns status for a connected tenant; the case there is closed by the analyst.
+    const close = !!inc.groupingKey && remaining.length === 0 && inc.status !== "CLOSED" && !(await kelpieIntegration(tx, inc.tenantId));
+    await tx.update(incidents).set({ updatedAt: now, ...(close ? { status: "CLOSED" as const, closedAt: now } : {}) }).where(eq(incidents.id, incidentId));
+    if (close) {
+      await addTimeline(tx, { tenantId: inc.tenantId, incidentId, origin: "analyst", category: "status", title: `Status ${inc.status} → CLOSED`, detail: "Every alert automatic grouping added was ungrouped.", actorId: ctx.principal.userId });
+    }
+    await audit(tx, { ...actor(ctx), tenantId: inc.tenantId, action: "incident.ungroup", targetType: "incident", targetId: incidentId, detail: { alertIds: ids, closed: close } });
+    return { alertIds: ids, closed: close };
+  });
+  await publish({ type: "incident.updated", tenantId: inc.tenantId, id: incidentId });
+  return result;
 }
 
 export async function addAlertsToIncident(ctx: AccessContext, incidentId: string, alertIds: string[]) {

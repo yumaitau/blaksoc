@@ -7,7 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { addIncidentEvidence, addIncidentNote, addIncidentTask, addIncidentTimelineEvent, saveIncidentCase, setIncidentTaskDone } from "../actions";
+import { addIncidentEvidence, addIncidentNote, addIncidentTask, addIncidentTimelineEvent, saveIncidentCase, setIncidentTaskDone, ungroupIncidentAlerts } from "../actions";
 
 type CaseFields = {
   status: string;
@@ -219,6 +219,17 @@ export function TaskList({ incidentId, tasks, editable }: { incidentId: string; 
       ) : null}
       <ActionError error={error} />
     </div>
+  );
+}
+
+/** Removes automatically grouped alerts from the incident; grouping then leaves them alone. */
+export function UngroupButton({ incidentId, alertIds, label }: { incidentId: string; alertIds?: string[]; label: string }) {
+  const { pending, error, run } = useAction();
+  return (
+    <span className="inline-flex flex-col items-end gap-1">
+      <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => run(() => ungroupIncidentAlerts(incidentId, alertIds))}>{label}</Button>
+      <ActionError error={error} />
+    </span>
   );
 }
 

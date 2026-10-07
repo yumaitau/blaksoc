@@ -25,7 +25,7 @@ evaluateTriggers("alert.created")  →  playbook runs  →  approval gates  → 
 ```
 
 Scheduled jobs (`src/worker/index.ts`, `SCHEDULES`): alert poll 30s, in-flight response action status 30s,
-Kelpie sync and escalations 1m, integration health and tenant health 5m, Sigma deployments 5m, approval expiry 5m,
+Kelpie sync, escalations, and correlation + incident grouping 1m, integration health and tenant health 5m, Sigma deployments 5m, approval expiry 5m,
 asset sync, DFIR release and attested surface scans 15m, vulnerability sync, syslog archive, ACSC/CISA advisories and
 board summaries 1h, CISA KEV + FIRST EPSS + OpenCTI CVE context 6h.
 
@@ -63,6 +63,27 @@ every 5 minutes against that tenant's agents and feeds hits back through the nor
 (`source = blaksoc-sigma`). A customer with no shared-SIEM link that owns a provider able to run Sigma itself
 (`deployDetection`, e.g. Tawny) gets the raw YAML pushed there instead; that provider's own alerts carry the hits. ATT&CK coverage compares enabled rules and active deployments against observed
 alerts and incidents per technique.
+
+## Correlation and incident grouping
+
+Correlation rules (`src/lib/correlation/rules.ts`) are typed definitions: entity keys to group by, a time window,
+and one clause: an ordered **sequence** (steps with alternatives, per-step counts, "new value" and "differs from
+step" conditions), a **count** threshold (optionally of distinct values), an **absence** (A not followed by B,
+decided once the window closes) or **risk accumulation** (summed alert risk), plus optional corroborating
+`require` clauses. The evaluator (`src/lib/correlation/engine.ts`) is pure like the risk engine: each finding
+lists exactly which events met which clause, and its dedupe key (rule, entity, anchor event) is stable across runs.
+
+`source` rules run inside a provider over raw records (Entra impossible travel and MFA fatigue run in the M365
+provider). `alerts` rules (account takeover, user/host risk accumulation, source-IP fan-out) run every minute
+per tenant over stored alerts, from a cursor minus each rule's look-back. New findings go through the normal
+ingest path (`source = blaksoc-correlation`, so scoring, OCSF, SSE and playbooks apply) and a
+`correlation_findings` row records rule id, version and clause matches. Tenants can switch rules off.
+
+Grouping (`src/lib/correlation/grouping.ts`) then links open alerts that share a user or asset inside 6 hours and
+share an ATT&CK technique or tactic, or that a correlated alert was built from. A group joins the open incident
+one of its alerts is in, or opens a new one (`incidents.grouping_key`). Links carry `origin = auto`, the reason and
+the alert's prior status. An analyst can ungroup: links go, statuses come back, an emptied auto incident closes,
+the timeline records it, and grouping leaves those alerts alone afterwards.
 
 ## SOAR
 
@@ -108,7 +129,8 @@ Platform: `tenants`, `sites`, `roles`, `role_assignments`, `saved_views`, auth t
 Security: `alerts`, `observables`, `alert_observables`, `intel_matches`, `assets`, `asset_sources`,
 `vulnerabilities`, `incidents`, `incident_alerts`, `incident_links`, `incident_timeline`, `incident_notes`,
 `incident_tasks`, `evidence`. Detection: `sigma_rules`, `sigma_rule_versions`, `sigma_rule_tests`,
-`detection_deployments`. SOAR: `playbooks`, `playbook_runs`, `playbook_run_steps`, `approvals`,
+`detection_deployments`, `correlation_findings`, `correlation_rule_settings`, `correlation_cursors`,
+`incident_group_exclusions`. SOAR: `playbooks`, `playbook_runs`, `playbook_run_steps`, `approvals`,
 `response_actions`. AI: `ai_conversations`, `ai_messages`, `ai_invocations`. Reports: `reports`.
 Global reference (no tenant data): `cve_intel`, `attack_techniques`, `intel_feeds`, `advisories`, `intel_tags`.
 Audit: `audit_log` (append-only, hash-chained).
