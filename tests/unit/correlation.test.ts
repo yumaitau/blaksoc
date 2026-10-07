@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateRule, evaluateRules, matches, validateRule, type CorrelationEvent, type CorrelationRule } from "@/lib/correlation/engine";
 import { alertFromFinding, contributingIds, eventFromAlert, type AlertForCorrelation } from "@/lib/correlation/events";
-import { planGroups, type GroupableAlert } from "@/lib/correlation/grouping";
+import { MAX_REASON_EDGES, planGroups, type GroupableAlert } from "@/lib/correlation/grouping";
 import { ACCOUNT_TAKEOVER, BUILTIN_RULES, SOURCE_FANOUT, USER_RISK_ACCUMULATION } from "@/lib/correlation/rules";
 
 const MIN = 60_000;
@@ -277,5 +277,19 @@ describe("busy entities", () => {
     expect(performance.now() - started).toBeLessThan(2000);
     expect(findings.length).toBeGreaterThanOrEqual(1);
     expect(findings[0]!.explanation[0]).toContain("host web-01");
+  });
+});
+
+describe("grouping a busy host", () => {
+  it("joins thousands of related alerts with a bounded reason", () => {
+    // Every pair in the window used to become a stored edge: millions for one benchmark scan.
+    const alerts: GroupableAlert[] = Array.from({ length: 6000 }, (_, i) => ({ id: `s${String(i).padStart(5, "0")}`, occurredAt: T0 + i * 15_000, userName: null, assetId: "host-1", techniques: ["T1078"], incidentId: null }));
+    const started = performance.now();
+    const plans = planGroups(alerts, { windowMs: 6 * 60 * MIN, tactics: { T1078: ["initial-access"] } });
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]!.alertIds).toHaveLength(6000);
+    expect(plans[0]!.reason.edges).toHaveLength(MAX_REASON_EDGES);
+    expect(plans[0]!.reason.edgeCount).toBe(5999);
   });
 });

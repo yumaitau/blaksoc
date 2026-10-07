@@ -27,9 +27,18 @@ export type GroupReason = {
   windowMs: number;
   firstAt: string;
   lastAt: string;
+  /** The edges that joined the group (a spanning set, plus correlation links), at most MAX_REASON_EDGES. */
   edges: GroupEdge[];
+  /** All joining edges, when more than the ones kept. */
+  edgeCount: number;
   summary: string;
 };
+
+/**
+ * Edges kept on a reason. The reason is stored on every linked alert, so a scan of thousands of alerts on one
+ * host must not carry thousands of edges each.
+ */
+export const MAX_REASON_EDGES = 50;
 
 export type GroupPlan = {
   /** Deterministic key for a new incident (`grp:` + earliest alert id); null when joining an existing incident. */
@@ -95,6 +104,9 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
   const consider = (i: number, j: number) => {
     const [a, b] = [alerts[i]!, alerts[j]!];
     const correlated = info[i]!.related.has(b.id) || info[j]!.related.has(a.id);
+    // Already connected: the pair changes no group. Recording every related pair in a window was quadratic
+    // (gigabytes for one host's benchmark scan). Correlation links are few and always kept as evidence.
+    if (!correlated && find(i) === find(j)) return;
     const entities = shared(info[i]!.entities, info[j]!.entities);
     if (!entities.length) return;
     const techniques = shared(info[i]!.techniques, info[j]!.techniques);
@@ -123,7 +135,9 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
   const groups = new Map<number, number[]>();
   alerts.forEach((_, i) => {
     const root = find(i);
-    groups.set(root, [...(groups.get(root) ?? []), i]);
+    const members = groups.get(root);
+    if (members) members.push(i);
+    else groups.set(root, [i]);
   });
 
   const plans: GroupPlan[] = [];
@@ -145,7 +159,8 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
       windowMs: opts.windowMs,
       firstAt: new Date(first.occurredAt).toISOString(),
       lastAt: new Date(last.occurredAt).toISOString(),
-      edges: groupEdges,
+      edges: groupEdges.slice(0, MAX_REASON_EDGES),
+      edgeCount: groupEdges.length,
       summary: "",
     };
     const common = [...reason.tactics, ...reason.techniques];
