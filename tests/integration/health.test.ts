@@ -3,7 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
 import { withScope } from "@/db/scope";
-import { alerts, assets, detectionDeployments, dmarcReports, healthBaselines, integrations, monitoredDomains, sigmaRules, sites, tenants } from "@/db/schema";
+import { alerts, assets, detectionDeployments, dmarcReports, healthBaselines, integrations, integrationTenantLinks, monitoredDomains, sigmaRules, sites, tenants } from "@/db/schema";
 import type { AccessContext } from "@/lib/auth/access";
 import { systemScope } from "@/lib/auth/access";
 import { buildReport } from "@/lib/reports/generate";
@@ -12,6 +12,7 @@ import { HealthError, runHealthForTenant, setHealthPolicy, setSiteSilentHours } 
 import { AccessDenied } from "@/lib/services/common";
 
 const created: string[] = [];
+const sharedIntegrations: string[] = [];
 const now = new Date("2026-06-01T00:00:00.000Z");
 const ago = (hours: number) => new Date(now.getTime() - hours * 3_600_000);
 
@@ -55,6 +56,7 @@ async function openHealth(tenantId: string) {
 }
 
 afterAll(async () => {
+  if (sharedIntegrations.length) await adminDb().delete(integrations).where(inArray(integrations.id, sharedIntegrations));
   if (created.length) await adminDb().delete(tenants).where(inArray(tenants.id, created));
 });
 
@@ -192,6 +194,26 @@ describe("telemetry health", () => {
     expect(resolvedOld?.status).toBe("RESOLVED");
     const [freshRow] = await adminDb().select().from(alerts).where(eq(alerts.externalId, `health:dmarc:${freshDomain!.id}`));
     expect(freshRow).toBeUndefined();
+  });
+
+  it("raises an alert when an owned or shared integration keeps failing, and clears it on success", async () => {
+    const tenant = await freshTenant();
+    const [wazuh] = await adminDb().insert(integrations).values({ tenantId: tenant.id, category: "siem", provider: "wazuh", name: "Clinic Wazuh", enabled: true, status: "error", lastSuccessAt: ago(2) }).returning();
+    await adminDb().insert(integrations).values({ tenantId: tenant.id, category: "siem", provider: "tawny", name: "Blip", enabled: true, status: "error", lastSuccessAt: new Date(now.getTime() - 10 * 60_000) });
+    await adminDb().insert(integrations).values({ tenantId: tenant.id, category: "siem", provider: "wazuh", name: "Off", enabled: false, status: "error", lastSuccessAt: null });
+    const [shared] = await adminDb().insert(integrations).values({ tenantId: null, category: "siem", provider: "wazuh", name: "Shared cluster", enabled: true, status: "error", lastSuccessAt: null }).returning();
+    sharedIntegrations.push(shared!.id);
+    await adminDb().insert(integrationTenantLinks).values({ integrationId: shared!.id, tenantId: tenant.id, selector: {} });
+
+    await runHealthForTenant(tenant.id, now);
+    await runHealthForTenant(tenant.id, now);
+    const open = await openHealth(tenant.id);
+    expect(open.map((row) => row.externalId).sort()).toEqual([`health:integration:${wazuh!.id}`, `health:integration:${shared!.id}`].sort());
+    expect(open.find((row) => row.externalId === `health:integration:${shared!.id}`)?.title).toBe("Integration failing: Shared cluster");
+
+    await adminDb().update(integrations).set({ status: "healthy", lastSuccessAt: now }).where(inArray(integrations.id, [wazuh!.id, shared!.id]));
+    await runHealthForTenant(tenant.id, now);
+    expect(await openHealth(tenant.id)).toHaveLength(0);
   });
 
   it("shows degraded customers on the MSSP roll-up and a Coverage section on the weekly report", async () => {

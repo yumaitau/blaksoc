@@ -8,6 +8,7 @@ import { instantiate } from "@/lib/connectors/instances";
 import { env } from "@/lib/env";
 import { checkGovernedAi } from "@/lib/governance/policy";
 import { governanceProfile } from "@/lib/services/governance";
+import { aiCalls } from "@/lib/obs/metrics";
 import { checkAiPolicy, redactPii, type PolicyDecision } from "./policy";
 import { toolsFor, type ToolContext } from "./tools";
 import type { AIProvider, ChatMessage } from "./types";
@@ -83,7 +84,11 @@ export async function runAssistant(ctx: AccessContext, input: { tenantId: string
     await tx.insert(aiMessages).values({ tenantId: input.tenantId, conversationId: conversationId!, role: "user", content: input.message });
     await tx.insert(aiInvocations).values({ tenantId: input.tenantId, userId: ctx.principal.userId, provider: provider.id, model: provider.model, region: provider.residency.region, purpose: "assistant", policyDecision: decision.allowed ? "allowed" : `denied: ${decision.reason}` });
   });
-  if (!decision.allowed) throw new Error(`AI policy blocked this request: ${decision.reason}`);
+  const aiLabels = { provider: provider.id, purpose: "assistant" };
+  if (!decision.allowed) {
+    aiCalls().inc({ ...aiLabels, outcome: "denied" });
+    throw new Error(`AI policy blocked this request: ${decision.reason}`);
+  }
 
   const scrub = (s: string) => (tenant.settings.ai.redactPii ? redactPii(s) : s);
   const toolCtx: ToolContext = { ctx, tenantId: input.tenantId, allowWrites: !!input.allowWrites };
@@ -97,7 +102,10 @@ export async function runAssistant(ctx: AccessContext, input: { tenantId: string
   let final = "";
   let usageIn = 0, usageOut = 0;
   for (let turn = 0; turn < 6; turn++) {
-    const res = await provider.chat(messages, { tools, temperature: 0.1 });
+    const res = await provider.chat(messages, { tools, temperature: 0.1 }).catch((err: unknown) => {
+      aiCalls().inc({ ...aiLabels, outcome: "error" });
+      throw err;
+    });
     usageIn += res.usage.input;
     usageOut += res.usage.output;
     if (!res.toolCalls.length) {
@@ -145,6 +153,7 @@ export async function runAssistant(ctx: AccessContext, input: { tenantId: string
     for (const w of writes) await audit(tx, { actorId: ctx.principal.userId, actorKind: "ai", tenantId: input.tenantId, action: `ai.${w.name}`, targetType: "ai_conversation", targetId: conversationId!, detail: { args: w.args } });
   });
 
+  aiCalls().inc({ ...aiLabels, outcome: "completed" });
   return { conversationId: conversationId!, content: final, citations: cited, unverified, toolCalls: calls.map(({ name, args }) => ({ name, args })), policy: decision.reason };
 }
 

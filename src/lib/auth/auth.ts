@@ -12,6 +12,7 @@ import { audit } from "@/lib/audit";
 import * as schema from "@/db/schema";
 import { env } from "@/lib/env";
 import { parseTrustedProxies } from "@/lib/net/client-ip";
+import { logger } from "@/lib/obs/log";
 import { redis } from "@/lib/redis";
 import { sharedRateLimitStore } from "./rate-limit";
 import { ssoIdentityRejection } from "./sso-policy";
@@ -54,6 +55,8 @@ const PASSKEY_AUDIT: Record<string, string> = {
 
 export const auth = betterAuth({
   appName: "blakSOC",
+  // Better Auth's own messages go through the redacting logger (its args can include tokens or profiles).
+  logger: { log: (level, message, ...args) => logger[level](`auth: ${message}`, args.length ? { args } : undefined) },
   baseURL: e.APP_URL,
   secret: e.BETTER_AUTH_SECRET,
   // Customer IdPs whose OIDC discovery documents blakSOC may fetch.
@@ -85,7 +88,7 @@ export const auth = betterAuth({
   // cannot be turned into a credential that outlives it.
   session: { expiresIn: 60 * 60 * 12, updateAge: 60 * 60, freshAge: 60 * 15 },
   // Counted in Redis so the limit holds across web replicas (see rate-limit.ts).
-  rateLimit: { enabled: true, window: 60, max: 30, customStorage: sharedRateLimitStore(redis, (err) => console.warn(`[auth] rate limit fell back to per-process counting: ${err instanceof Error ? err.message : err}`)) },
+  rateLimit: { enabled: true, window: 60, max: 30, customStorage: sharedRateLimitStore(redis, (err) => logger.warn("auth rate limit fell back to per-process counting", { err })) },
   advanced: {
     useSecureCookies: e.NODE_ENV === "production",
     // Without trusted proxies, a multi-hop X-Forwarded-For resolves to no IP and every such client shares one rate-limit bucket.

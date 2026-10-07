@@ -1,0 +1,93 @@
+{{- if .Values.observability.prometheusRule.enabled }}
+{{- $r := .Values.observability.prometheusRule }}
+{{- $ns := printf "namespace=%q" .Release.Namespace }}
+# Platform alerts. Queue, scheduler and integration series are global (Redis/Postgres) and reported
+# by every replica, so expressions aggregate with max by. See docs/observability.md for runbooks.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "blaksoc.fullname" . }}
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+    {{- with $r.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: blaksoc.worker
+      rules:
+        # Web pods export the Redis heartbeat too, so a stopped worker shows as stale rather than absent.
+        - alert: BlaksocWorkerHeartbeatStale
+          expr: time() - max(blaksoc_worker_heartbeat_timestamp_seconds{ {{- $ns -}} }) > {{ $r.heartbeatStaleSeconds }}
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: blakSOC worker has not started a scheduled job for over {{ $r.heartbeatStaleSeconds }}s
+            description: Alert polling, response actions and escalations are stopped. Check the worker pods and Redis.
+        - alert: BlaksocHeartbeatMissing
+          expr: absent(blaksoc_worker_heartbeat_timestamp_seconds{ {{- $ns -}} })
+          for: 3m
+          labels: { severity: critical }
+          annotations:
+            summary: No blakSOC pod reports a worker heartbeat
+            description: Neither web nor worker metrics are being scraped, or the worker has never run. Check the pods and the PodMonitor.
+        - alert: BlaksocSchedulerStalled
+          expr: |
+            (time() - max by (queue, schedule) (blaksoc_scheduler_last_run_timestamp_seconds{ {{- $ns -}} }))
+              > 3 * max by (queue, schedule) (blaksoc_scheduler_interval_seconds{ {{- $ns -}} }) + 300
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`Schedule {{ $labels.queue }}:{{ $labels.schedule }} has missed three runs`}}"
+            description: The worker is up but this job scheduler is not producing jobs, or its jobs never start.
+    - name: blaksoc.queues
+      rules:
+        - alert: BlaksocQueueBacklogGrowing
+          expr: |
+            max by (queue) (blaksoc_queue_jobs{ {{- $ns -}} ,state=~"waiting|prioritized"}) > {{ $r.queueBacklog }}
+              and max by (queue) (deriv(blaksoc_queue_jobs{ {{- $ns -}} ,state="waiting"}[15m])) > 0
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`Queue {{ $labels.queue }} backlog is {{ $value }} and growing`}}"
+            description: Workers are not keeping up. Check job durations and failures for this queue, or add worker replicas.
+        - alert: BlaksocOldestJobAgeHigh
+          expr: max by (queue) (blaksoc_queue_oldest_waiting_age_seconds{ {{- $ns -}} }) > {{ $r.oldestJobAgeSeconds }}
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`Oldest runnable job in {{ $labels.queue }} has waited {{ $value | humanizeDuration }}`}}"
+            description: Jobs are queued but not being picked up. A stuck or saturated worker is the usual cause.
+        - alert: BlaksocJobFailureRate
+          expr: |
+            sum by (queue) (rate(blaksoc_job_failures_total{ {{- $ns -}} }[15m]))
+              / sum by (queue) (rate(blaksoc_job_duration_seconds_count{ {{- $ns -}} }[15m])) > {{ $r.jobFailureRatio }}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`More than {{ $value | humanizePercentage }} of {{ $labels.queue }} job attempts are failing`}}"
+            description: Search worker logs for msg="job failed" with this queue; each line carries the job id and request id.
+    - name: blaksoc.integrations
+      rules:
+        # Down, and no success within the window (or never). A single failed poll does not fire.
+        - alert: BlaksocIntegrationFailing
+          expr: |
+            (max by (integration, provider) (blaksoc_integration_up{ {{- $ns -}} }) == 0)
+              unless on (integration, provider)
+            (time() - max by (integration, provider) (blaksoc_integration_last_success_timestamp_seconds{ {{- $ns -}} }) < {{ $r.integrationFailingSeconds }})
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`Integration {{ $labels.provider }} {{ $labels.integration }} keeps failing`}}"
+            description: Join blaksoc_integration_info for the name. Affected tenants also receive an "Integration failing" health alert.
+    - name: blaksoc.web
+      rules:
+        - alert: BlaksocWebErrorRate
+          expr: |
+            sum(rate(blaksoc_http_requests_total{ {{- $ns -}} ,status=~"5.."}[5m]))
+              / sum(rate(blaksoc_http_requests_total{ {{- $ns -}} }[5m])) > 0.05
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $value | humanizePercentage }} of web requests are failing`}}"
+            description: Search web logs for msg="request failed"; the x-request-id response header matches the requestId field.
+{{- end }}

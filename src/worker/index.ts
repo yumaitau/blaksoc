@@ -17,8 +17,17 @@ import { runCorrelationAll } from "@/lib/services/correlation";
 import { assertHostingEnv } from "@/lib/hosting/profile";
 import { deliverToIntegration, eventJobPayload, fanOutEvent } from "@/lib/connectors/subscriptions";
 import type { Notification } from "@/lib/connectors/notify";
+import { recordSchedules } from "@/lib/obs/heartbeat";
+import { logger, setLogService } from "@/lib/obs/log";
+import { serveMetrics } from "@/lib/obs/metrics";
+import { startTracing, stopTracing } from "@/lib/obs/tracing";
+import { instrumented, onFailed } from "./instrument";
+import { registerWorkerMetrics } from "./metrics";
 
-const log = (scope: string) => (m: string) => console.log(`[${new Date().toISOString()}] [${scope}] ${m}`);
+setLogService("worker");
+
+/** Progress lines from job code; correlation fields come from the job's log context. */
+const log = (scope: string) => (m: string) => logger.info(m, { scope });
 
 type Handler = (job: Job) => Promise<unknown>;
 
@@ -31,7 +40,7 @@ const handlers: Record<QueueName, Handler> = {
     if (job.name === "assets") return syncAllAssets(log("sync"));
     if (job.name === "vulns") return syncAllVulnerabilities(log("sync"));
     if (job.name === "health") {
-      await probeHealth(log("health"));
+      await probeHealth();
       return runDueHealth();
     }
     if (job.name === "dfir-release") return releaseDueCollections();
@@ -66,7 +75,7 @@ const handlers: Record<QueueName, Handler> = {
   },
   [QUEUES.detection]: async (job) => {
     if (job.name === "correlate") return runCorrelationAll(log("correlation"));
-    return runDetections(log("detection"));
+    return runDetections();
   },
   [QUEUES.report]: async (job) => {
     if (job.name === "board") return runDueBoardSummaries();
@@ -110,21 +119,29 @@ const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
 
 async function main() {
   assertHostingEnv(process.env);
+  startTracing("blaksoc-worker");
   for (const s of SCHEDULES) {
     await queue(s.queue).upsertJobScheduler(`${s.queue}:${s.name}`, { every: s.every }, { name: s.name });
+  }
+  await recordSchedules(SCHEDULES);
+  // Own port, never behind the ingress; see the chart's PodMonitor and NetworkPolicy.
+  if (process.env.METRICS_PORT) {
+    registerWorkerMetrics();
+    serveMetrics(Number(process.env.METRICS_PORT));
   }
   const concurrency: Partial<Record<QueueName, number>> = { [QUEUES.ingest]: 1, [QUEUES.playbook]: 4, [QUEUES.response]: 2, [QUEUES.intel]: 1, [QUEUES.sync]: 1, [QUEUES.surface]: 1 };
   const workers = (Object.values(QUEUES) as QueueName[]).map(
     (name) =>
-      new Worker(name, handlers[name], { connection: redisConnectionOptions(), concurrency: concurrency[name] ?? 1 }).on("failed", (job, err) =>
-        log(name)(`job ${job?.name} failed: ${err.message}`),
-      ),
+      new Worker(name, instrumented(name, handlers[name]), { connection: redisConnectionOptions(), concurrency: concurrency[name] ?? 1 })
+        .on("failed", onFailed(name))
+        .on("error", (err) => logger.error("worker error", { queue: name, err })),
   );
-  log("worker")(`started ${workers.length} queues`);
+  logger.info("worker started", { queues: workers.length, schedules: SCHEDULES.length });
 
   const shutdown = async () => {
-    log("worker")("shutting down");
+    logger.info("worker shutting down");
     await Promise.all(workers.map((w) => w.close()));
+    await stopTracing();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);
@@ -132,6 +149,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  logger.error("worker failed to start", { err });
   process.exit(1);
 });

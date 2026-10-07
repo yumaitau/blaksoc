@@ -11,6 +11,7 @@ import { filterByEntitlement, lookupWithCache, summariseIntel } from "@/lib/inte
 import { extractObservables, type Observable } from "@/lib/intel/observables";
 import { ocsfForAlert } from "@/lib/ocsf/map";
 import { NORMALIZATION_VERSION } from "@/lib/ocsf/schema";
+import { logger } from "@/lib/obs/log";
 import { validateOcsf } from "@/lib/ocsf/validate";
 import type { IntelProvider } from "@/lib/intel/types";
 import type { NormalisedAlert } from "@/lib/providers/types";
@@ -166,14 +167,14 @@ function normaliseOcsf(alert: NormalisedAlert, provenance: Parameters<typeof ocs
     const { finding, sourceEvent } = ocsfForAlert(alert, provenance, { observables: obs, riskScore });
     const checked = validateOcsf(finding);
     if (!checked.ok) {
-      console.warn(`[ocsf] ${provenance.source} ${alert.externalId}: detection finding invalid: ${checked.errors.join("; ")}`);
+      logger.warn("ocsf detection finding invalid", { source: provenance.source, externalId: alert.externalId, errors: checked.errors });
       return null;
     }
     const sourceChecked = sourceEvent ? validateOcsf(sourceEvent) : null;
-    if (sourceChecked && !sourceChecked.ok) console.warn(`[ocsf] ${provenance.source} ${alert.externalId}: source event invalid: ${sourceChecked.errors.join("; ")}`);
+    if (sourceChecked && !sourceChecked.ok) logger.warn("ocsf source event invalid", { source: provenance.source, externalId: alert.externalId, errors: sourceChecked.errors });
     return { finding, sourceEvent: sourceChecked?.ok ? sourceEvent : null };
   } catch (err) {
-    console.warn(`[ocsf] ${provenance.source} ${alert.externalId}: mapping failed: ${err instanceof Error ? err.message : err}`);
+    logger.warn("ocsf mapping failed", { source: provenance.source, externalId: alert.externalId, err });
     return null;
   }
 }

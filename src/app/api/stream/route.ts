@@ -1,5 +1,6 @@
 import { sessionStateFor } from "@/lib/auth/session";
 import { eventVisible, subscribe } from "@/lib/events";
+import { sseConnections } from "@/lib/obs/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,7 @@ export async function GET(req: Request) {
   const cleanup = (controller?: ReadableStreamDefaultController) => {
     if (closed) return;
     closed = true;
+    sseConnections().dec();
     clearInterval(ping);
     clearInterval(recheck);
     unsubscribe();
@@ -38,6 +40,7 @@ export async function GET(req: Request) {
   let onAbort = () => cleanup();
   const stream = new ReadableStream({
     start(controller) {
+      sseConnections().inc();
       onAbort = () => cleanup(controller);
       const send = (s: string) => {
         if (closed) return;
