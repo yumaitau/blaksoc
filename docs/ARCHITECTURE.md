@@ -24,7 +24,7 @@ alerts / observables / intel_matches rows (RLS scope = that tenant)  →  Redis 
 evaluateTriggers("alert.created")  →  playbook runs  →  approval gates  →  response actions
 ```
 
-Scheduled jobs (`src/worker/index.ts`, `SCHEDULES`): alert poll 30s, in-flight response action status 30s,
+Scheduled jobs (`src/worker/schedules.ts`, `SCHEDULES`; recreated within a minute if Redis loses them): alert poll 30s, in-flight response action status 30s,
 Kelpie sync and escalations 1m, integration health and tenant health 5m, Sigma deployments 5m, approval expiry 5m,
 asset sync, DFIR release and attested surface scans 15m, vulnerability sync, syslog archive, ACSC/CISA advisories and
 board summaries 1h, CISA KEV + FIRST EPSS + OpenCTI CVE context 6h.

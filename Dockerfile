@@ -44,6 +44,8 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/src/db/sql ./src/db/sql
 COPY package.json ./
+# Mount point for the file-store archive; a named volume copies this ownership on first mount.
+RUN mkdir -p /var/lib/blaksoc/archive && chown 100:101 /var/lib/blaksoc/archive
 USER 100:101
 # Override with ["node","dist/db/migrate.mjs"] for the migration job.
 CMD ["node", "dist/worker/index.mjs"]

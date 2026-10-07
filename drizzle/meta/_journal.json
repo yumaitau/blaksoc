@@ -190,6 +190,13 @@
       "when": 1790619000000,
       "tag": "0026_passkey",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790625000000,
+      "tag": "0032_integration_poll_cursor",
+      "breakpoints": true
     }
   ]
 }

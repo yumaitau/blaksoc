@@ -91,9 +91,9 @@ The web pod disruption budget stays at `minAvailable: 1`, so the single web pod 
 
 ## Archive and restore
 
-Hot syslog stays in Postgres for 30 days (`SYSLOG_HOT_MS`). The worker schedule `syslog-retain` in `src/worker/index.ts` runs every 1 hour and calls `archiveDueSyslog`. That calls `archiveColdForTenant` per tenant. The function writes the line into `ap-southeast-2` or `ap-southeast-4` and marks the event cold. `syslog_archive.body` is the copy taken at that moment. `searchArchive` and `restoreArchive` read the object.
+Hot syslog stays in Postgres for 30 days (`SYSLOG_HOT_MS`). The worker schedule `syslog-retain` in `src/worker/schedules.ts` runs every 1 hour and calls `archiveDueSyslog`. That calls `archiveColdForTenant` per tenant. The function writes the line into `ap-southeast-2` or `ap-southeast-4` and marks the event cold. `syslog_archive.body` is the copy taken at that moment. `searchArchive` and `restoreArchive` read the object.
 
-`BLAKSOC_ARCHIVE_DIR` is the file-store root. The chart sets it to `/tmp/blaksoc-archive`. The worker root filesystem is read-only aside from that emptyDir, and the emptyDir dies with the pod. Mount a volume on that path when the object has to outlive the pod. The driver still rejects a region outside Australia.
+The durable driver is `S3ArchiveStore` (`src/lib/hosting/s3-store.ts`): AWS S3 or an S3-compatible store, one bucket per Australian region, every object written with server-side encryption, keys `syslog/<tenant>/<event>.log`. The chart turns it on with `archive.s3.buckets`; the worker reads each bucket's region back at start and refuses one outside its configured region. Without buckets the worker falls back to the file store under `BLAKSOC_ARCHIVE_DIR` (`/tmp/blaksoc-archive`, an emptyDir that dies with the pod) and logs that it is not durable. That fallback is for development only. Both drivers reject a region outside Australia. Configuration, credentials and bucket hardening are in `docs/disaster-recovery.md`.
 
 ### RPO and RTO
 

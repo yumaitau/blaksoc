@@ -11,6 +11,19 @@ config:
   WAZUH_INDEXER_REGION: ap-southeast-2
   OPENCTI_REGION: ap-southeast-2
 
+# A single node has no durable local archive: point the archive and the Postgres backup at an AU
+# S3-compatible bucket (an Australian provider, or AWS S3 in ap-southeast-2) with keys in the Secret
+# (BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID/_SECRET_ACCESS_KEY, BACKUP_AWS_ACCESS_KEY_ID/_SECRET_ACCESS_KEY).
+# The endpoint must be reachable: add its CIDR to networkPolicy.egressCidrs if it is private.
+# archive:
+#   s3:
+#     buckets: { ap-southeast-2: blaksoc-archive }
+#     endpoint: https://s3.example.com.au
+# backup:
+#   enabled: true
+#   bucket: blaksoc-backup
+#   endpoint: https://s3.example.com.au
+
 web:
   replicas: 1
   resources:

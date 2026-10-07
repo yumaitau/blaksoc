@@ -111,51 +111,71 @@ export async function syncAllVulnerabilities(log: Log) {
  */
 export async function pollAlerts(log: Log) {
   const tierOf = await tierOfTenant();
-  for (const row of await eventIntegrations()) {
-    try {
-      const provider = eventProvider(row);
-      const links = await tenantLinks(row);
-      const live = new Set(collectingTenantIds(row.provider, links, tierOf));
-      // Leave the cursor where it is when nobody on this integration may collect.
-      if (!live.size) continue;
-      // Route by the provider's asset id; built from asset inventory (system-level map).
-      const sources = await systemDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
-      const agentTenant = new Map(sources.map((s) => [s.externalId, s.tenantId]));
-      const fallbackTenant = row.tenantId ?? (links.length === 1 ? links[0]!.tenantId : null);
+  for (const row of await eventIntegrations()) await pollIntegration(row, tierOf, log);
+}
 
-      let alerts;
-      let cursorKey: string | null = null;
-      let nextCursor: string | null = null;
-      if (provider instanceof DemoProvider) {
-        // Demo: a trickle of synthetic alerts so the live queue moves.
-        alerts = Math.random() < 0.5 ? provider.generate(1) : [];
-      } else {
-        cursorKey = `cursor:alerts:${row.id}`;
-        const cursor = await redis().get(cursorKey);
-        const res = await provider.getAlerts({ since: new Date(Date.now() - 24 * 3600_000), afterCursor: cursor ?? undefined, limit: 500 });
-        alerts = res.alerts;
-        nextCursor = res.cursor;
-      }
+export const cursorKey = (integrationId: string) => `cursor:alerts:${integrationId}`;
 
-      const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
-      let n = 0;
-      for (const a of alerts) {
-        const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
-        if (!tenantId || !live.has(tenantId)) continue;
-        if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(systemDb(), tenantId));
-        const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
-        if (res.created) {
-          n++;
-          await evaluateTriggers(tenantId, "alert.created", { alertId: res.alertId });
-        }
-      }
-      if (n) log(`alerts ${row.name}: +${n}`);
-      if (cursorKey && nextCursor) await redis().set(cursorKey, nextCursor);
-      await markHealth(row, true);
-    } catch (e) {
-      await markHealth(row, false, (e as Error).message);
-      log(`alert poll ${row.name} failed: ${(e as Error).message}`);
+/**
+ * Postgres holds the cursor. Redis is read only for a row that predates the column (upgrade) and
+ * written after Postgres so an older worker image still finds it on rollback.
+ */
+async function readCursor(row: IntegrationRow): Promise<string | null> {
+  if (row.pollCursor) return row.pollCursor;
+  return redis().get(cursorKey(row.id)).catch(() => null);
+}
+
+async function saveCursor(row: IntegrationRow, cursor: string): Promise<void> {
+  await systemDb().update(integrations).set({ pollCursor: cursor }).where(eq(integrations.id, row.id));
+  await redis().set(cursorKey(row.id), cursor).catch(() => undefined);
+}
+
+/** One integration's poll. Returns how many alerts it created. */
+export async function pollIntegration(row: IntegrationRow, tierOf: (id: string) => Tier, log: Log): Promise<number> {
+  try {
+    const provider = eventProvider(row);
+    const links = await tenantLinks(row);
+    const live = new Set(collectingTenantIds(row.provider, links, tierOf));
+    // Leave the cursor where it is when nobody on this integration may collect.
+    if (!live.size) return 0;
+    // Route by the provider's asset id; built from asset inventory (system-level map).
+    const sources = await systemDb().select({ externalId: assetSources.externalId, tenantId: assetSources.tenantId }).from(assetSources).where(eq(assetSources.integrationId, row.id));
+    const agentTenant = new Map(sources.map((s) => [s.externalId, s.tenantId]));
+    const fallbackTenant = row.tenantId ?? (links.length === 1 ? links[0]!.tenantId : null);
+
+    let alerts;
+    let nextCursor: string | null = null;
+    if (provider instanceof DemoProvider) {
+      // Demo: a trickle of synthetic alerts so the live queue moves.
+      alerts = Math.random() < 0.5 ? provider.generate(1) : [];
+    } else {
+      const cursor = await readCursor(row);
+      const res = await provider.getAlerts({ since: new Date(Date.now() - 24 * 3600_000), afterCursor: cursor ?? undefined, limit: 500 });
+      alerts = res.alerts;
+      nextCursor = res.cursor;
     }
+
+    const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
+    let n = 0;
+    for (const a of alerts) {
+      const tenantId = (a.assetExternalId && agentTenant.get(a.assetExternalId)) || fallbackTenant;
+      if (!tenantId || !live.has(tenantId)) continue;
+      if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(systemDb(), tenantId));
+      const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
+      if (res.created) {
+        n++;
+        await evaluateTriggers(tenantId, "alert.created", { alertId: res.alertId });
+      }
+    }
+    if (n) log(`alerts ${row.name}: +${n}`);
+    // Saved only after every alert in the page is stored, so a crash replays the page (deduped) instead of skipping it.
+    if (nextCursor && nextCursor !== row.pollCursor) await saveCursor(row, nextCursor);
+    await markHealth(row, true);
+    return n;
+  } catch (e) {
+    await markHealth(row, false, (e as Error).message);
+    log(`alert poll ${row.name} failed: ${(e as Error).message}`);
+    return 0;
   }
 }
 
