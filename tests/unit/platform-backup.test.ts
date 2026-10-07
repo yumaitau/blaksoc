@@ -120,5 +120,5 @@ describe("disaster recovery chart and drill record", () => {
     expect(on).toContain('{ name: BACKUP_REGION, value: "ap-southeast-2" }');
     expect(() => execFileSync("helm", [...base, "--set", "backup.enabled=true", "--set", "backup.bucket=b", "--set", "backup.region=us-east-1"], { stdio: "pipe" })).toThrow(/ap-southeast-2 or ap-southeast-4/);
     expect(() => execFileSync("helm", [...base, "--set", "archive.s3.buckets.eu-west-1=b"], { stdio: "pipe" })).toThrow(/ap-southeast-2 or ap-southeast-4/);
-  });
+  }, 60_000); // helm template runs several times; slow CI runners took 17 s
 });
