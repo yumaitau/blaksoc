@@ -1,3 +1,5 @@
+import type { SecurityDataProvider, TenantDataScope } from "./data";
+
 /**
  * Provider-neutral contract for SIEM/XDR sources. blakSOC never depends on a vendor's
  * data shapes outside the adapter that implements this interface.
@@ -102,4 +104,9 @@ export interface SecurityEventProvider {
   deployDetection?(sigmaYaml: string): Promise<{ providerRef: string; message: string }>;
   /** Stops a rule `deployDetection` created. Throws with the provider's reason when it cannot. */
   withdrawDetection?(providerRef: string): Promise<{ message: string }>;
+  /**
+   * Query-in-place access for one tenant's slice of this source (see `./data.ts`). Providers
+   * without it are reported through their connector's static data capabilities (no search).
+   */
+  dataProvider?(scope: TenantDataScope): SecurityDataProvider;
 }

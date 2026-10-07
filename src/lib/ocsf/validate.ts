@@ -39,6 +39,7 @@ const base = z.looseObject({
 });
 
 const byClass: Record<number, z.ZodType> = {
+  [OCSF_CLASSES.base_event.class_uid]: base.extend({ device: device.optional(), user: user.optional(), src_endpoint: endpoint.optional(), dst_endpoint: endpoint.optional() }),
   [OCSF_CLASSES.detection_finding.class_uid]: base.extend({ finding_info: findingInfo, evidences: z.array(z.looseObject({ device: device.optional(), user: user.optional(), src_endpoint: endpoint.optional(), dst_endpoint: endpoint.optional() })).optional() }),
   [OCSF_CLASSES.vulnerability_finding.class_uid]: base.extend({ finding_info: findingInfo, vulnerabilities: z.array(vulnerability).min(1) }),
   [OCSF_CLASSES.authentication.class_uid]: base.extend({ user, src_endpoint: endpoint.optional() }),

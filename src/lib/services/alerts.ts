@@ -27,6 +27,23 @@ export type AlertFilters = {
   offset?: number;
 };
 
+/**
+ * Free-text match for the alert queue. Full-text search over the generated `alerts.search_vector`
+ * (title, user, category, rule id, source, description; migration 0033) accepts web-search syntax:
+ * quoted phrases, `or`, and `-word`. Substring matches on title, user and asset name are kept, so
+ * a partial host or user name still finds its alerts.
+ */
+export function alertTextMatch(q: string): SQL {
+  const text = q.slice(0, 500);
+  const like = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  return or(
+    sql`"alerts"."search_vector" @@ websearch_to_tsquery('simple', ${text})`,
+    ilike(alerts.title, like),
+    ilike(alerts.userName, like),
+    ilike(assets.name, like),
+  )!;
+}
+
 export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
   return scoped(
     ctx,
@@ -42,7 +59,7 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
       if (f.intelLabel) {
         where.push(sql`${alerts.intel} @? ${`$.matches[*].labels[*] ? (@ like_regex "${f.intelLabel.replace(/[^A-Za-z0-9_ -]/g, "")}" flag "i")`}::jsonpath`);
       }
-      if (f.q) where.push(or(ilike(alerts.title, `%${f.q}%`), ilike(alerts.userName, `%${f.q}%`), ilike(assets.name, `%${f.q}%`))!);
+      if (f.q) where.push(alertTextMatch(f.q));
       if (f.technique) where.push(sql`exists (select 1 from unnest(${alerts.attackTechniques}) t where t like ${`${f.technique}%`})`);
       if (f.category) where.push(eq(alerts.category, f.category));
       if (f.minRisk != null) where.push(gte(alerts.riskScore, f.minRisk));

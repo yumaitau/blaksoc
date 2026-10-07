@@ -196,6 +196,8 @@ export const alerts = pgTable(
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     ingestedAt: timestamp("ingested_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    // Generated "search_vector" tsvector + GIN index "alerts_search" exist in the database
+    // (drizzle/0033_alert_search.sql) and are queried through alertTextMatch() only.
   },
   (t) => [
     uniqueIndex("alerts_source_ext").on(t.tenantId, t.source, t.externalId),

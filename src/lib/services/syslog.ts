@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import type { AccessContext } from "@/lib/auth/access";
 import { systemScope } from "@/lib/auth/access";
 import { connectorDef } from "@/lib/connectors/registry";
+import { scanArchive } from "@/lib/syslog/archive";
 import { parseSyslog } from "@/lib/syslog/parse";
 import { defaultArchiveStore, type ArchiveStore } from "@/lib/hosting/store";
 import { archiveKey, assertAuRegion, SYSLOG_HOT_MS } from "@/lib/syslog/retain";
@@ -129,13 +130,8 @@ export async function archiveColdForTenant(tenantId: string, now = new Date(), r
 
 /** Match archived lines by reading the object store. The Postgres body column is not the source. */
 export async function searchArchive(tenantId: string, query: string, store: ArchiveStore = defaultArchiveStore()): Promise<{ eventId: string; region: string; line: string }[]> {
-  const rows = await withScope(systemScope(tenantId), (tx) => tx.select().from(syslogArchive).where(eq(syslogArchive.tenantId, tenantId)));
-  const found: { eventId: string; region: string; line: string }[] = [];
-  for (const row of rows) {
-    const line = await store.get(row.region, row.objectKey);
-    if (query.length === 0 || line.includes(query)) found.push({ eventId: row.eventId, region: row.region, line });
-  }
-  return found;
+  const { hits } = await scanArchive(tenantId, store, { match: (line) => query.length === 0 || line.includes(query) });
+  return hits.map(({ eventId, region, line }) => ({ eventId, region, line }));
 }
 
 /** Put the archived object back on the hot event. */

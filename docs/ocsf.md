@@ -18,8 +18,11 @@ Class ids, enums and required attributes were checked against the OCSF schema se
 | Network Activity | 4001 | Firewall syslog lines (FortiGate, Sophos, DrayTek, MikroTik, UniFi) | `alerts.ocsf_source_event` |
 | Authentication | 3002 | Microsoft Entra sign-in records behind an alert | `alerts.ocsf_source_event` |
 | Vulnerability Finding | 2002 | `NormalisedVulnerability` (`toVulnerabilityFinding`) | Mapper only; not stored yet |
+| Base Event | 0 | Records read in place that have no activity mapper (`toBaseEvent`), e.g. a Wazuh archive record without a rule | Not stored; search results only |
 
 `ocsf_source_event` holds the record an alert was raised from, in its own activity class, when blakSOC understands that record. Other alerts have only the Detection Finding.
+
+Event search (`SecurityDataProvider`, see [ARCHITECTURE.md](ARCHITECTURE.md#query-in-place-search)) returns the same OCSF shapes for records it reads in place, built by the same mappers: Wazuh records as Detection Findings, syslog lines as Network Activity. For those results `metadata.logged_time` is the source's own receive time (indexer `timestamp`, syslog receive time), since blakSOC did not ingest them.
 
 Process Activity (1007) is declared in `OCSF_CLASSES` but has no mapper yet.
 
