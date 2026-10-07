@@ -149,7 +149,8 @@ export const HOST_RISK_ACCUMULATION: CorrelationRule = {
 /** Count with distinct: one source address behind alerts on three or more hosts inside an hour. */
 export const SOURCE_FANOUT: CorrelationRule = {
   id: "source-ip-fanout",
-  version: 1,
+  // 2: ignores benchmark and informational alerts (an orchestration host's routine SSH logins).
+  version: 2,
   title: "One source address alerting on several hosts",
   description: "Alerts from one source IP on three or more distinct hosts inside an hour: scanning, spraying or lateral movement.",
   severity: "high",
@@ -158,7 +159,7 @@ export const SOURCE_FANOUT: CorrelationRule = {
   stage: "alerts",
   enabledByDefault: true,
   groupBy: ["src_ip"],
-  clause: { type: "count", id: "hosts", label: "Hosts alerting for the source", match: { host: { exists: true } }, threshold: 3, within: HOUR, distinct: "host" },
+  clause: { type: "count", id: "hosts", label: "Hosts alerting for the source", match: { ...THREAT_SIGNAL, host: { exists: true } }, threshold: 3, within: HOUR, distinct: "host" },
   eventType: "source_fanout",
 };
 

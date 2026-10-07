@@ -105,4 +105,22 @@ YML
 
 docker compose -f docker-compose.yml -f blaksoc-overlay.yml up -d
 echo "wazuh stack started"
+
+# Local rules (blakSOC tuning), applied through the API once the manager answers.
+API_URL=https://localhost:55000
+for _ in $(seq 1 60); do curl -sk -o /dev/null "$API_URL" && break; sleep 5; done
+T=$(curl -sk -u "wazuh-wui:$API_PASSWORD" -X POST "$API_URL/security/user/authenticate?raw=true")
+current=$(curl -sk -H "Authorization: Bearer $T" "$API_URL/rules/files/local_rules.xml?raw=true")
+if ! grep -q 'id="100100"' <<<"$current"; then
+  # Docker attaching a container's veth to a bridge puts it in promiscuous mode (rule 80710) on every
+  # container start; a real interface entering promiscuous mode still alerts.
+  printf '%s\n%s\n' "$current" '<group name="local,audit,blaksoc,">
+  <rule id="100100" level="0">
+    <if_sid>80710</if_sid>
+    <field name="audit.dev">^veth</field>
+    <description>Docker container interface entered promiscuous mode (bridge attach); not a sniffer.</description>
+  </rule>
+</group>' | curl -sk -H "Authorization: Bearer $T" -H "Content-Type: application/octet-stream" -X PUT "$API_URL/rules/files/local_rules.xml?overwrite=true" --data-binary @- | jq -c '{rules: .message}'
+  curl -sk -H "Authorization: Bearer $T" -X PUT "$API_URL/manager/restart" | jq -c '{restart: .message}'
+fi
 docker compose -f docker-compose.yml -f blaksoc-overlay.yml ps --format '{{.Service}} {{.State}}'

@@ -303,3 +303,12 @@ describe("risk accumulation signal", () => {
     expect(evaluateRule(HOST_RISK_ACCUMULATION, [...noise, ...real])).toHaveLength(1);
   });
 });
+
+describe("source fan-out signal", () => {
+  it("ignores routine informational logins from an orchestration host", () => {
+    const logins = ["web-01", "db-01", "app-01", "cache-01"].map((host, i) => ({ id: `l${i}`, at: T0 + i * MIN, fields: { src_ip: "172.31.36.25", host, severity: "informational", category: "syslog" } }));
+    expect(evaluateRule(SOURCE_FANOUT, logins)).toEqual([]);
+    const attacks = logins.map((e) => ({ ...e, id: `x${e.id}`, fields: { ...e.fields, severity: "medium", category: "sshd" } }));
+    expect(evaluateRule(SOURCE_FANOUT, attacks)).toHaveLength(1);
+  });
+});
