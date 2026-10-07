@@ -1,7 +1,15 @@
 # Yuma IT production on AWS
 
-blakSOC runs on the `yumait-prod` EKS Auto Mode cluster in `ap-southeast-2`. Wazuh and OpenCTI run on
-separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-eks` and `App=blaksoc`.
+blakSOC runs on the `yumait-prod` EKS Auto Mode cluster in `ap-southeast-2`. Wazuh runs on its own EC2 host
+in the same VPC. OpenCTI is shared with ThreatSieve (Cloudflare Workers), which feeds it through its own
+connector. blakSOC-owned resources carry the tags `Project=yumait-eks` and `App=blaksoc`.
+
+```
+ThreatSieve (Cloudflare) ──STIX──► OpenCTI (EC2 threatsieve-opencti-production)
+                                        ▲ GraphQL :8080 (EKS cluster SG only)
+EC2 hosts ──agents──► Wazuh (EC2 blaksoc-wazuh) ◄──API :55000 / indexer :9200── blakSOC (EKS)
+outside AWS ──agents──► NLB agents.soc.yumait.au ┘
+```
 
 ## Resources
 
@@ -14,10 +22,12 @@ separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-
 | Runtime env | Secrets Manager `blaksoc-eks-runtime` | Synced to `blaksoc/blaksoc-runtime` by External Secrets |
 | Generated credentials | Secrets Manager `blaksoc-eks-bootstrap` | Source of the runtime values, including break-glass |
 | TLS | ACM `soc.yumait.au` | On the ALB created by the Ingress |
-| Wazuh host | EC2 `blaksoc-wazuh` | `m7g.xlarge`, 200 GiB gp3, private subnet, SSM only |
-| OpenCTI host | EC2 `blaksoc-opencti` | `m7g.xlarge`, 150 GiB gp3, private subnet, SSM only |
-| Agent entry | NLB `blaksoc-wazuh-agents` | Public TCP 1514 and 1515 to the Wazuh host only |
-| Host credentials | `blaksoc-wazuh-credentials`, `blaksoc-opencti-credentials` | Read by the hosts' instance role |
+| Wazuh host | EC2 `blaksoc-wazuh` (`i-081ab4c4f4199e054`) | `r7g.large` until the vCPU quota rises, then `m7g.xlarge` (stop, change type, start; IP and disk stay). Fixed IP `172.31.49.40`, 200 GiB gp3 kept on termination, private subnet, SSM only, termination protection |
+| Agent entry | NLB `blaksoc-wazuh-agents` | Public TCP 1514 and 1515 to the Wazuh host only, for agents outside AWS |
+| OpenCTI | EC2 `threatsieve-opencti-production` (ThreatSieve) | OpenCTI 7. Published on `172.31.49.31:8080`; its security group admits port 8080 from the EKS cluster SG only |
+| Host credentials | `blaksoc-wazuh-credentials` | Indexer, API, dashboard and enrolment passwords, plus blakSOC's own API and indexer users. Read by the Wazuh host's role |
+| OpenCTI token | `blaksoc-opencti-service-token` | blakSOC service account in OpenCTI's Connectors group (not admin). Expires after 365 days |
+| Enrolment password | SSM `/blaksoc/wazuh/enrollment-password` | SecureString mirror; Run Command does not resolve `ssm-secure` references, so the rollout reads the secret instead |
 
 ## Deploy a new version
 
@@ -60,8 +70,18 @@ The scripts run as root through SSM Run Command and can be re-run:
 
 - `wazuh-host.sh`: wazuh-docker single-node `v4.14.8`. Replaces the published default passwords before
   first start, turns on enrolment passwords, and sets the indexer `node.attr.region`.
-- `opencti-host.sh`: OpenCTI from `deploy/compose/docker-compose.yml` (profile `opencti`). Copy the compose
-  file to `/opt/blaksoc-opencti/docker-compose.yml` first.
+- `wazuh-agent.sh`: installs and enrols the pinned agent on an EC2 host (Ubuntu or Amazon Linux) into group
+  `yumait-aws`. Prefix it with exports of `WAZUH_REGISTRATION_PASSWORD` and `WAZUH_AGENT_NAME` (the Name tag)
+  when sending it with `AWS-RunShellScript`. EC2 hosts point at `wazuh-internal.soc.yumait.au`, a public
+  record holding the manager's private address: hosts on Tailscale resolve through MagicDNS, so a Route 53
+  private zone would never be consulted. Every EC2 host in the VPC runs an agent; EKS Auto Mode nodes cannot.
+- `opencti-host.sh`: a blakSOC-owned OpenCTI. Not used in production, which shares ThreatSieve's OpenCTI.
+
+blakSOC's Wazuh API user (`blaksoc`) holds `agents_readonly`, `cluster_readonly` and a policy for
+`active-response:command`; its indexer user (`blaksoc`) can only read `wazuh-alerts-*`, `wazuh-archives-*` and
+`wazuh-states-vulnerabilities-*` plus node info for the region check. The integrations are `Wazuh (AWS)`,
+linked to the `Yuma IT Internal` tenant by agent group `yumait-aws`, and `OpenCTI (ThreatSieve)` at platform
+level.
 
 Reach the Wazuh dashboard or OpenCTI with SSM port forwarding, for example:
 
@@ -76,9 +96,17 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 | --- | --- | --- | --- |
 | `soc.yumait.au` | CNAME | ALB hostname from `kubectl -n blaksoc get ingress` | DNS only |
 | `agents.soc.yumait.au` | CNAME | NLB hostname | DNS only (raw TCP) |
+| `wazuh-internal.soc.yumait.au` | A | `172.31.49.40` (manager private address) | DNS only |
 | ACM validation | CNAME | from the certificate | DNS only |
 
 ## Known gaps
+
+- The Wazuh indexer and API certificates name `wazuh.indexer` and `localhost`, so the Wazuh integration
+  connects to `172.31.49.40` with `tlsVerify: false`. Traffic stays in the VPC and the ports admit only the VPC
+  range. Reissue the certificates with the IP (or a private name) in the SAN, then set `caPem` and turn
+  verification back on.
+- `BLAKSOC_ARCHIVE_S3_BUCKETS` is unset, so cold syslog lives on the worker's emptyDir. Create the AU buckets and
+  an IAM role for the service account, then set `archive.s3` and `backup` in `values-yumait-prod.yaml`.
 
 - Network policies are disabled here because the cluster does not enforce them. The chart now allows public
   HTTPS egress with private and metadata ranges excluded (`networkPolicy.publicHttps`). Before turning
