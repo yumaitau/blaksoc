@@ -4,22 +4,26 @@ import { eq, inArray } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
 import { withScope } from "@/db/scope";
-import { auditLog, incidentTimeline, incidents, integrations, notificationDeliveries, obligationCases, tenants } from "@/db/schema";
+import { auditLog, incidentTimeline, incidents, integrations, notificationDeliveries, obligationCases, reportingClocks, tenants } from "@/db/schema";
 import { AccessDenied, type AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
 import { secretAad } from "@/lib/connectors/instances";
 import { encryptSecret } from "@/lib/crypto";
-import { assessmentDue } from "@/lib/obligations/clock";
+import { assessmentDue, clockDue } from "@/lib/obligations/clock";
 import type { Applicability } from "@/lib/obligations/model";
 import type { EscalationStep } from "@/lib/portal/escalation";
 import { advanceIncidentEscalation, saveEscalationPolicy } from "@/lib/services/escalation";
-import { ObligationError, createDraft, getObligation, obligationPdf, recordDecision, recordReferral, runDueObligationReminders, startObligation } from "@/lib/services/obligations";
+import {
+  ObligationError, createDraft, getObligation, markClockReported, obligationPdf, recordDecision, recordReferral, runDueClockReminders,
+  runDueObligationReminders, startClock, startObligation, updateApplicability,
+} from "@/lib/services/obligations";
 
 const created: string[] = [];
 const FROM = "+61400111000";
 const MOBILE = "+61400999888";
 const DAY = 86_400_000;
-const YES: Applicability = { privacyAct: "yes", healthInformation: "yes", governmentContract: "no", soci: "unsure" };
+const HOUR = 3_600_000;
+const YES: Applicability = { privacyAct: "yes", healthInformation: "yes", governmentContract: "no", soci: "unsure", ransomwareReporting: "unsure" };
 
 function pdfPlain(bytes: Uint8Array) {
   const raw = Buffer.from(bytes);
@@ -60,6 +64,23 @@ function platform(tenantId: string): AccessContext {
     tenantIds: [tenantId],
     tenants: [{ id: tenantId, slug: "ndb", name: "NDB Clinic", kind: "customer" }],
   };
+}
+
+async function smsTenant() {
+  const tenant = await freshTenant();
+  await saveEscalationPolicy(platform(tenant.id), tenant.id, [{ severity: "high", channel: "sms", contacts: [MOBILE], minIntervalMs: 60_000, maxAttempts: 3 }]);
+  const integrationId = randomUUID();
+  await adminDb().insert(integrations).values({
+    id: integrationId,
+    tenantId: tenant.id,
+    category: "collaboration",
+    provider: "sms",
+    name: "sms",
+    enabled: true,
+    config: { from: FROM, mode: "fixture", events: ["incident.created"] },
+    secretCiphertext: encryptSecret(JSON.stringify({ apiKey: "fixture-key", apiSecret: "fixture-secret" }), secretAad(integrationId)),
+  });
+  return tenant;
 }
 
 async function freshTenant() {
@@ -150,5 +171,86 @@ describe("breach obligations", () => {
     await runDueObligationReminders();
     const stopped = await adminDb().select().from(notificationDeliveries).where(eq(notificationDeliveries.incidentId, closed!.id));
     expect(stopped).toEqual([]);
+  });
+
+  it("starts SOCI and ransomware clocks from the recorded time, reminds before the deadline, and keeps them to the tenant", async () => {
+    const tenant = await smsTenant();
+    const admin = ctx(tenant.id, ["portal:read", "incident:read", "response:approve"], "soci-admin", "Ava Chen");
+    const reader = ctx(tenant.id, ["portal:read", "incident:read"], "soci-reader", "Reader");
+    const [inc] = await adminDb().insert(incidents).values({ tenantId: tenant.id, title: "Ransomware on the SCADA historian", severity: "high" }).returning();
+    const now = Date.now();
+    const aware = new Date(now - 7 * HOUR);
+
+    await expect(startClock(admin, inc!.id, { kind: "soci_critical", startedAt: aware, timeZone: "UTC" })).rejects.toMatchObject({ code: "missing" });
+    await startObligation(admin, inc!.id, { startedAt: new Date(now), applicability: { ...YES, soci: "no", ransomwareReporting: "no" } });
+    await expect(startClock(admin, inc!.id, { kind: "soci_critical", startedAt: aware, timeZone: "UTC" })).rejects.toMatchObject({ code: "applicability" });
+    await expect(startClock(admin, inc!.id, { kind: "ransomware_payment", startedAt: aware, timeZone: "UTC" })).rejects.toMatchObject({ code: "applicability" });
+    await updateApplicability(admin, inc!.id, { ...YES, soci: "yes", ransomwareReporting: "no" });
+
+    await expect(startClock(reader, inc!.id, { kind: "soci_critical", startedAt: aware, timeZone: "UTC" })).rejects.toBeInstanceOf(AccessDenied);
+    await expect(startClock(admin, inc!.id, { kind: "soci_critical", startedAt: new Date(now + DAY), timeZone: "UTC" })).rejects.toMatchObject({ code: "time" });
+    await expect(startClock(admin, inc!.id, { kind: "soci_critical", startedAt: aware, timeZone: "Europe/London" })).rejects.toMatchObject({ code: "time" });
+    const clock = await startClock(admin, inc!.id, { kind: "soci_critical", startedAt: aware, timeZone: "Australia/Sydney" });
+    expect(clock.dueAt.toISOString()).toBe(clockDue("soci_critical", aware).toISOString());
+    expect(clock.dueAt.getTime() - aware.getTime()).toBe(12 * HOUR);
+    await expect(startClock(admin, inc!.id, { kind: "soci_critical", startedAt: aware, timeZone: "UTC" })).rejects.toMatchObject({ code: "exists" });
+    // A SOCI responsible entity reports ransomware payments whatever its turnover.
+    const payment = await startClock(admin, inc!.id, { kind: "ransomware_payment", startedAt: new Date(now - HOUR), timeZone: "Australia/Perth" });
+    expect(payment.dueAt.getTime() - payment.startedAt.getTime()).toBe(72 * HOUR);
+
+    // Seven hours after awareness the 6-hour reminder is due; nothing yet on the 72-hour payment clock.
+    const first = (await runDueClockReminders(now)).filter((row) => row.incidentId === inc!.id);
+    expect(first).toEqual([expect.objectContaining({ clock: "soci_critical", reminderKey: "6" })]);
+    const sent = await adminDb().select().from(notificationDeliveries).where(eq(notificationDeliveries.incidentId, inc!.id));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ status: "sent", channel: "sms", destination: MOBILE, providerRef: "fixture-sms" });
+    expect(sent[0]?.detail).toMatchObject({ kind: "obligation", clock: "soci_critical", reminderKey: "6" });
+
+    expect((await runDueClockReminders(now + 60_000)).filter((row) => row.incidentId === inc!.id)).toEqual([]);
+    const second = (await runDueClockReminders(now + 2 * HOUR + 60_000)).filter((row) => row.incidentId === inc!.id);
+    expect(second).toEqual([expect.objectContaining({ clock: "soci_critical", reminderKey: "9" })]);
+
+    // The SOCI reminders are not NDB reminders and do not count against the NDB clock.
+    const view = await getObligation(admin, inc!.id);
+    expect(view?.reminders).toEqual([]);
+    expect(view?.clocks.find((row) => row.kind === "soci_critical")?.reminders.map((row) => row.key)).toEqual(["6", "9"]);
+    expect((await runDueObligationReminders(now)).filter((row) => row.incidentId === inc!.id)).toEqual([]);
+
+    const draft = await createDraft(admin, inc!.id, "soci_critical");
+    expect(draft.body).toContain("This is not legal advice.");
+    expect(draft.body).toContain("s30BC");
+    expect(draft.body).toContain("does not submit this report");
+    expect((await getObligation(admin, inc!.id))?.case.legalReview).toBe(true);
+    expect(await adminDb().select().from(notificationDeliveries).where(eq(notificationDeliveries.incidentId, inc!.id))).toHaveLength(2);
+
+    await markClockReported(admin, inc!.id, { kind: "soci_critical", reference: "ASD-REF-1" });
+    await expect(markClockReported(admin, inc!.id, { kind: "soci_critical" })).rejects.toMatchObject({ code: "missing" });
+    expect((await runDueClockReminders(now + 5 * HOUR)).filter((row) => row.incidentId === inc!.id && row.clock === "soci_critical")).toEqual([]);
+
+    const timeline = await adminDb().select().from(incidentTimeline).where(eq(incidentTimeline.incidentId, inc!.id));
+    expect(timeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "obligation", title: "Clock started: SOCI critical cyber security incident (12 hours)" }),
+      expect.objectContaining({ category: "obligation", title: "Clock reminder: SOCI critical cyber security incident (12 hours), 6 hours left" }),
+      expect.objectContaining({ category: "obligation", title: "Marked reported: SOCI critical cyber security incident (12 hours)", detail: expect.stringContaining("ASD-REF-1") }),
+    ]));
+    const audits = await adminDb().select().from(auditLog).where(eq(auditLog.tenantId, tenant.id));
+    for (const action of ["obligation.applicability", "obligation.clock_start", "obligation.clock_reported", "notify.delivery"]) {
+      expect(audits.some((row) => row.action === action && row.targetId === inc!.id)).toBe(true);
+    }
+    expect(pdfPlain(await obligationPdf(admin, inc!.id))).toContain("s30BC");
+
+    // Another tenant cannot see, start or mark these clocks, and RLS hides the rows.
+    const other = await smsTenant();
+    const outsider = ctx(other.id, ["portal:read", "incident:read", "incident:write"], "soci-outsider", "Outsider");
+    await expect(getObligation(outsider, inc!.id)).rejects.toBeInstanceOf(AccessDenied);
+    await expect(startClock(outsider, inc!.id, { kind: "soci_other", startedAt: aware, timeZone: "UTC" })).rejects.toBeInstanceOf(AccessDenied);
+    await expect(markClockReported(outsider, inc!.id, { kind: "ransomware_payment" })).rejects.toBeInstanceOf(AccessDenied);
+    const leaked = await withScope({ tenantIds: [other.id], platform: false }, (tx) => tx.select().from(reportingClocks).where(eq(reportingClocks.tenantId, tenant.id)));
+    expect(leaked).toEqual([]);
+    const own = await withScope({ tenantIds: [tenant.id], platform: false }, (tx) => tx.select().from(reportingClocks).where(eq(reportingClocks.tenantId, tenant.id)));
+    expect(own).toHaveLength(2);
+    await expect(withScope({ tenantIds: [other.id], platform: false }, (tx) => tx.insert(reportingClocks).values({
+      tenantId: tenant.id, incidentId: inc!.id, caseId: clock.caseId, kind: "soci_other", startedAt: aware, dueAt: aware, timeZone: "UTC", startedBy: "Outsider",
+    }))).rejects.toThrow();
   });
 });

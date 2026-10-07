@@ -12,6 +12,10 @@ import { requireAccess } from "@/lib/auth/session";
 import { SEVERITIES } from "@/lib/services/alerts";
 import { COLLECTION_STATUS_LABEL } from "@/lib/dfir/sets";
 import { listCollectionTargets, listCollections } from "@/lib/services/dfir";
+import { formatZoned } from "@/lib/obligations/clock";
+import { CLOCK_INFO } from "@/lib/obligations/model";
+import { getObligation } from "@/lib/services/obligations";
+import { canViewPortal } from "@/lib/services/portal";
 import { getIncident, INCIDENT_STATUSES, listIncidentOwners } from "@/lib/services/incidents";
 import { isResponseAction, RESPONSE_ACTIONS } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
@@ -50,6 +54,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
   const owners = editable ? await listIncidentOwners(ctx, tenantId) : [];
   const collectionRows = await listCollections(ctx, inc.id);
   const targets = editable ? await listCollectionTargets(ctx, tenantId) : [];
+  const obligation = await getObligation(ctx, inc.id);
   const active = !["CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"].includes(inc.status);
   const breached = active && inc.slaDueAt && inc.slaDueAt.getTime() < new Date().getTime();
 
@@ -258,6 +263,31 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
         </div>
 
         <div className="space-y-5">
+          <Card>
+            <CardHeader>
+              <CardTitle>Reporting clocks</CardTitle>
+              {canViewPortal(ctx, tenantId) ? <Link href={`/portal/incidents/${inc.id}#obligations`} className="text-xs text-accent hover:underline">Reporting duties →</Link> : null}
+            </CardHeader>
+            <CardContent>
+              {!obligation ? <p className="text-sm text-muted">No reporting clock started.</p> : (
+                <ul className="space-y-1.5 text-sm">
+                  <li>NDB assessment due {obligation.case.dueAt.toISOString().slice(0, 10)}{obligation.case.decision ? ` · ${obligation.case.decision.replaceAll("_", " ")}` : ""}</li>
+                  {obligation.clocks.map((clock) => {
+                    const overdue = !clock.reportedAt && clock.dueAt.getTime() < new Date().getTime();
+                    return (
+                      <li key={clock.id}>
+                        {CLOCK_INFO[clock.kind].label}
+                        <div className="text-xs text-muted">
+                          Due {formatZoned(clock.dueAt, clock.timeZone)} · {clock.reportedAt ? "marked reported" : overdue ? <Badge variant="danger">Deadline passed</Badge> : "not reported"}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader><CardTitle>Response actions</CardTitle><Link href="/soc/approvals" className="text-xs text-accent hover:underline">Approvals →</Link></CardHeader>
             {data.pendingApprovals.length ? (

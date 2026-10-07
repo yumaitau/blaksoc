@@ -2,7 +2,7 @@ import { Worker, type Job } from "bullmq";
 import { queue, QUEUES, type QueueName } from "@/lib/queue";
 import { redisConnectionOptions } from "@/lib/redis";
 import { runDueEscalations } from "@/lib/services/escalation";
-import { runDueObligationReminders } from "@/lib/services/obligations";
+import { runDueClockReminders, runDueObligationReminders } from "@/lib/services/obligations";
 import { advanceRun, resumeRun } from "@/lib/soar/engine";
 import { executeResponseAction, expireDueApprovals, pollPendingResponseActions } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
@@ -78,7 +78,8 @@ const handlers: Record<QueueName, Handler> = {
     }
     const escalations = await runDueEscalations();
     const obligations = await runDueObligationReminders();
-    return { escalations, obligations };
+    const clocks = await runDueClockReminders();
+    return { escalations, obligations, clocks };
   },
   [QUEUES.surface]: async () => runDueSurface(),
 };
