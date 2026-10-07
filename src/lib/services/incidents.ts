@@ -8,7 +8,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { publish } from "@/lib/events";
 import { queue, QUEUES } from "@/lib/queue";
-import { actor, AccessDenied, inTenant, scoped } from "./common";
+import { actor, AccessDenied, inTenant, scoped, userRef } from "./common";
 import { assertNotKelpieManaged, kelpieIntegration, kelpieLink } from "./kelpie";
 
 export const INCIDENT_STATUSES = ["OPEN", "INVESTIGATING", "CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"] as const;
@@ -212,7 +212,7 @@ export async function addNote(ctx: AccessContext, incidentId: string, body: stri
   return inTenant(ctx, "incident:write", inc.tenantId, async (tx) => {
     // Customer notes feed the portal and stay in blakSOC. Internal case notes belong in Kelpie.
     if (visibility === "internal") await assertNotKelpieManaged(tx, inc.tenantId, incidentId);
-    const [n] = await tx.insert(incidentNotes).values({ tenantId: inc.tenantId, incidentId, authorId: ctx.principal.userId, body, visibility, aiGenerated }).returning();
+    const [n] = await tx.insert(incidentNotes).values({ tenantId: inc.tenantId, incidentId, authorId: userRef(ctx), body, visibility, aiGenerated }).returning();
     await audit(tx, { ...actor(ctx), tenantId: inc.tenantId, action: "incident.note", targetType: "incident", targetId: incidentId, detail: { noteId: n!.id, visibility, aiGenerated } });
     return n!;
   });

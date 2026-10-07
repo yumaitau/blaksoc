@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, systemDb } from "@/db/client";
-import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
+import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, serviceIdentities, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, dbScope, systemScope, tenantRoleGrantDenial, type AccessContext } from "@/lib/auth/access";
 import { googleEndpoints } from "@/lib/auth/sso-policy";
@@ -155,9 +155,10 @@ export async function auditTrail(ctx: AccessContext, f: { tenantId?: string; act
   if (!tenantIds.length && !(ctx.isPlatform && can(ctx, "audit:read"))) throw new AccessDenied();
   return withScope({ tenantIds, platform: ctx.isPlatform && can(ctx, "audit:read") }, (tx) =>
     tx
-      .select({ entry: auditLog, actorName: user.name, tenantName: tenants.name })
+      .select({ entry: auditLog, actorName: sql<string | null>`coalesce(${user.name}, ${serviceIdentities.name})`, tenantName: tenants.name })
       .from(auditLog)
       .leftJoin(user, eq(user.id, auditLog.actorId))
+      .leftJoin(serviceIdentities, and(eq(auditLog.actorKind, "service"), sql`${serviceIdentities.id}::text = ${auditLog.actorId}`))
       .leftJoin(tenants, eq(tenants.id, auditLog.tenantId))
       .where(and(
         f.tenantId ? eq(auditLog.tenantId, f.tenantId) : or(inArray(auditLog.tenantId, tenantIds.length ? tenantIds : ["00000000-0000-0000-0000-000000000000"]), ctx.isPlatform ? isNull(auditLog.tenantId) : undefined),

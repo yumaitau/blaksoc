@@ -4,7 +4,7 @@ import { auditLog } from "@/db/schema";
 
 export type AuditEntry = {
   actorId: string | null;
-  actorKind: "user" | "system" | "playbook" | "ai";
+  actorKind: "user" | "system" | "playbook" | "ai" | "service";
   tenantId: string | null;
   action: string;
   targetType?: string;

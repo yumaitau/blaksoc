@@ -194,8 +194,15 @@
     {
       "idx": 27,
       "version": "7",
-      "when": 1790620000000,
+      "when": 1790618002000,
       "tag": "0027_reporting_clocks",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790618003000,
+      "tag": "0028_service_identities",
       "breakpoints": true
     }
   ]

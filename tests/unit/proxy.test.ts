@@ -8,6 +8,8 @@ describe("session proxy matcher", () => {
     expect(gated("/api/ingest/syslog")).toBe(false);
     expect(gated("/api/health")).toBe(false);
     expect(gated("/api/auth/sign-in")).toBe(false);
+    expect(gated("/api/v1/alerts")).toBe(false);
+    expect(gated("/api/v1/oauth/token")).toBe(false);
   });
 
   it("still gates the app and session-authenticated APIs", () => {

@@ -182,6 +182,20 @@ CREATE POLICY tenant_isolation ON integrations
   USING ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)))
   WITH CHECK ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)));
 
+-- API service identities and their tokens: platform identities (tenant_id NULL) only to platform staff.
+-- Token issue and bearer checks run before a scope exists and use blaksoc_system.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['service_identities', 'service_tokens'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
+    EXECUTE format(
+      'CREATE POLICY tenant_isolation ON %I USING ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id))) WITH CHECK ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)))', t);
+  END LOOP;
+END $$;
+
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON tenants;
