@@ -15,6 +15,30 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 - name: {{ $k }}
   value: {{ $v | quote }}
 {{- end }}
+- name: LOG_LEVEL
+  value: {{ .Values.observability.logLevel | quote }}
+{{- if .Values.observability.metrics.enabled }}
+- name: METRICS_PORT
+  value: {{ .Values.observability.metrics.port | quote }}
+{{- end }}
+{{- with .Values.observability.otlpEndpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Metrics container port for web and worker. */}}
+{{- define "blaksoc.metricsPort" -}}
+{{- if .Values.observability.metrics.enabled }}, { name: metrics, containerPort: {{ .Values.observability.metrics.port }} }{{ end -}}
+{{- end -}}
+
+{{/* NetworkPolicy ingress rule admitting the scraper to the metrics port. */}}
+{{- define "blaksoc.metricsIngress" -}}
+{{- if .Values.observability.metrics.enabled }}
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.observability.metrics.scrapeNamespace }} } }
+      ports: [{ port: {{ .Values.observability.metrics.port }} }]
+{{- end }}
 {{- end -}}
 
 {{/* Secret keys for web and worker. The migration job uses envFrom with the whole Secret. */}}

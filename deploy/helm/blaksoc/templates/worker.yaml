@@ -22,6 +22,9 @@ spec:
         - name: worker
           image: {{ include "blaksoc.image" (dict "root" . "target" "worker") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.observability.metrics.enabled }}
+          ports: [{ name: metrics, containerPort: {{ .Values.observability.metrics.port }} }]
+          {{- end }}
           env:
             {{- include "blaksoc.env" . | nindent 12 }}
             {{- include "blaksoc.secretEnv" . | trim | nindent 12 }}

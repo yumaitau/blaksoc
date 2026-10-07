@@ -1,7 +1,7 @@
 import { and, arrayContains, eq, inArray, notInArray, or } from "drizzle-orm";
 import { systemDb } from "@/db/client";
 import type { Tx } from "@/db/client";
-import { alerts, assets, detectionDeployments, dmarcReports, healthBaselines, integrations, monitoredDomains, sigmaRules, sites, tenants, type HealthPolicy } from "@/db/schema";
+import { alerts, assets, detectionDeployments, dmarcReports, healthBaselines, integrations, integrationTenantLinks, monitoredDomains, sigmaRules, sites, tenants, type HealthPolicy } from "@/db/schema";
 import { assertCan, systemScope, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { coverageDropped, healthOf, isSilent, olderThan, silentHours } from "@/lib/health/rules";
@@ -108,7 +108,22 @@ async function recover(tx: Tx, tenantId: string, externalId: string, now: Date) 
     .where(and(eq(alerts.tenantId, tenantId), eq(alerts.source, "health"), eq(alerts.externalId, externalId), notInArray(alerts.status, ["RESOLVED", "FALSE_POSITIVE"])));
 }
 
-async function evaluate(tx: Tx, tenantId: string, now: Date) {
+type Failing = { id: string; name: string; provider: string; lastSuccessAt: Date | null };
+
+/**
+ * Integrations serving this tenant whose last poll or probe failed: its own, plus shared ones
+ * (a platform Wazuh cluster) through tenant links. Read with the system role because the tenant
+ * scope cannot see platform-owned rows.
+ */
+async function failingIntegrations(tenantId: string): Promise<Failing[]> {
+  const linked = systemDb().select({ id: integrationTenantLinks.integrationId }).from(integrationTenantLinks).where(eq(integrationTenantLinks.tenantId, tenantId));
+  return systemDb()
+    .select({ id: integrations.id, name: integrations.name, provider: integrations.provider, lastSuccessAt: integrations.lastSuccessAt })
+    .from(integrations)
+    .where(and(eq(integrations.enabled, true), eq(integrations.status, "error"), or(eq(integrations.tenantId, tenantId), inArray(integrations.id, linked))));
+}
+
+async function evaluate(tx: Tx, tenantId: string, now: Date, failing: Failing[]) {
   const [tenant] = await tx.select().from(tenants).where(eq(tenants.id, tenantId));
   if (!tenant) return;
   const policy = healthOf(tenant.settings);
@@ -154,6 +169,15 @@ async function evaluate(tx: Tx, tenantId: string, now: Date) {
   for (const row of polls) {
     if (olderThan(stamp(row.lastSuccessAt), policy.pollLagMinutes * 60_000, now)) {
       wanted.set(`health:poll:${row.id}`, { title: `Polling lag: ${row.name}` });
+    }
+  }
+
+  // Repeated failure, not one blip: still failing with no success inside the poll-lag window.
+  // Identity polls are already covered by the lag rule above.
+  for (const row of failing) {
+    if ((POLL_PROVIDERS as readonly string[]).includes(row.provider)) continue;
+    if (olderThan(stamp(row.lastSuccessAt), policy.pollLagMinutes * 60_000, now)) {
+      wanted.set(`health:integration:${row.id}`, { title: `Integration failing: ${row.name}` });
     }
   }
 
@@ -222,7 +246,8 @@ async function evaluate(tx: Tx, tenantId: string, now: Date) {
 
 /** One customer. Tests call this directly so a sweep cannot touch other tenants. */
 export async function runHealthForTenant(tenantId: string, now = new Date()) {
-  await withScope(systemScope(tenantId), (tx) => evaluate(tx, tenantId, now));
+  const failing = await failingIntegrations(tenantId);
+  await withScope(systemScope(tenantId), (tx) => evaluate(tx, tenantId, now, failing));
 }
 
 /** Worker hook. Runs after connector probes. */

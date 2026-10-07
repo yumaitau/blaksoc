@@ -106,6 +106,35 @@ networkPolicy:
   # cluster. 0.0.0.0/0 and ::/0 fail the hosting profile check.
   egressCidrs: []
 
+# Logs, metrics, traces and alerting. See docs/observability.md.
+observability:
+  # debug | info | warn | error. Logs are JSON lines on stdout with secrets and raw payloads redacted.
+  logLevel: info
+  # OTLP/HTTP collector for traces, e.g. http://otel-collector.monitoring:4318. Empty: spans are not exported.
+  otlpEndpoint: ""
+  metrics:
+    # Web and worker serve /metrics on this port. It is not on the web Service, so the ingress
+    # never routes to it; the NetworkPolicy admits only scrapeNamespace.
+    enabled: true
+    port: 9464
+    scrapeNamespace: monitoring
+  # Prometheus Operator PodMonitor scraping web and worker pods (needs the monitoring.coreos.com CRDs).
+  podMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+  # Prometheus Operator alert rules.
+  prometheusRule:
+    enabled: false
+    labels: {}
+    # Seconds without a scheduled job starting. Schedules tick every 30s; a stopped worker fires
+    # within about 4 minutes with the default 1m rule evaluation.
+    heartbeatStaleSeconds: 120
+    queueBacklog: 200
+    oldestJobAgeSeconds: 600
+    jobFailureRatio: 0.2
+    integrationFailingSeconds: 1800
+
 podSecurityContext:
   runAsNonRoot: true
   # The image user `blaksoc` is 100:101. A numeric id lets the kubelet verify runAsNonRoot.

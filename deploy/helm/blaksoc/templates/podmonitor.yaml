@@ -1,0 +1,19 @@
+{{- if and .Values.observability.metrics.enabled .Values.observability.podMonitor.enabled }}
+# Scrapes web and worker pods on the metrics port. Pods, not a Service: the worker has no Service
+# and the metrics port is deliberately absent from the web Service the ingress routes to.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "blaksoc.fullname" . }}
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+    {{- with .Values.observability.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/name: blaksoc }
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.observability.podMonitor.interval }}
+{{- end }}
