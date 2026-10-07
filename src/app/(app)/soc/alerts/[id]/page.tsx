@@ -10,6 +10,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { ALERT_STATUSES, getAlert } from "@/lib/services/alerts";
+import { entityLinks } from "@/lib/services/entities";
 import { RESPONSE_ACTIONS, isResponseAction } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { fmtDateTime, timeAgo } from "@/lib/utils";
@@ -26,6 +27,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
   const tenantId = a.tenantId;
   const canTriage = can(ctx, "alert:triage", tenantId);
   const matches = a.intel?.matches ?? [];
+  const graph = await entityLinks(ctx, tenantId, { alertId: a.id, userName: a.userName });
 
   return (
     <div className="space-y-5">
@@ -42,6 +44,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
               <StatusBadge status={a.status} />
               <RiskScore score={a.riskScore} factors={a.riskFactors} />
               <IntelVerdict verdict={a.intelVerdict} />
+              {graph.alert ? <Link href={`/soc/entities/${graph.alert}`} className="text-xs text-accent hover:underline">Entity graph</Link> : null}
               {incident ? (
                 <Link href={`/soc/incidents/${incident.id}`} className="text-xs text-accent hover:underline">
                   On INC-{incident.ref}: {incident.title}
@@ -73,7 +76,9 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
             {asset ? <Link href={`/assets/${asset.id}`} className="text-accent hover:underline">{asset.name}</Link> : <span className="text-faint">—</span>}
             {asset ? <span className="ml-1 text-xs text-muted">crit {asset.criticality}/5</span> : null}
           </Meta>
-          <Meta label="User">{a.userName ?? <span className="text-faint">—</span>}</Meta>
+          <Meta label="User">
+            {a.userName && graph.user ? <Link href={`/soc/entities/${graph.user}`} className="text-accent hover:underline">{a.userName}</Link> : a.userName ?? <span className="text-faint">—</span>}
+          </Meta>
           <Meta label="Occurred"><span title={timeAgo(a.occurredAt)}>{fmtDateTime(a.occurredAt)}</span></Meta>
           <Meta label="Source">{a.source}{a.ruleId ? <span className="ml-1 text-xs text-muted">rule <RefLink type="rule" id={a.ruleId} label={a.ruleId} /></span> : null}</Meta>
           <Meta label="Assignee">{data.assigneeName ?? <span className="text-faint">Unassigned</span>}</Meta>
