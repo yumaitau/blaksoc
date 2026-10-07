@@ -1,7 +1,8 @@
 /**
  * Automatic incident grouping. Pure and deterministic: the same alerts (in any order) give the same
- * plans. Two alerts are related when they share an entity (user or asset) inside the window and share
- * an ATT&CK technique or tactic, or when one is a correlated alert built from the other. Related alerts
+ * plans. Two alerts are related when they share an entity (user or asset) inside the window and either
+ * share an ATT&CK technique or tactic, or one of them is a correlation finding (it is about that entity);
+ * a correlation finding is also related to the alerts it was built from, past the window. Related alerts
  * form connected groups; a group either joins the open incident one of its alerts is already in, or
  * becomes a new incident once it holds `minAlerts` alerts.
  */
@@ -27,9 +28,18 @@ export type GroupReason = {
   windowMs: number;
   firstAt: string;
   lastAt: string;
+  /** The edges that joined the group (a spanning set, plus correlation links), at most MAX_REASON_EDGES. */
   edges: GroupEdge[];
+  /** All joining edges, when more than the ones kept. */
+  edgeCount: number;
   summary: string;
 };
+
+/**
+ * Edges kept on a reason. The reason is stored on every linked alert, so a scan of thousands of alerts on one
+ * host must not carry thousands of edges each.
+ */
+export const MAX_REASON_EDGES = 50;
 
 export type GroupPlan = {
   /** Deterministic key for a new incident (`grp:` + earliest alert id); null when joining an existing incident. */
@@ -95,11 +105,17 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
   const consider = (i: number, j: number) => {
     const [a, b] = [alerts[i]!, alerts[j]!];
     const correlated = info[i]!.related.has(b.id) || info[j]!.related.has(a.id);
+    // Already connected: the pair changes no group. Recording every related pair in a window was quadratic
+    // (gigabytes for one host's benchmark scan). Correlation links are few and always kept as evidence.
+    if (!correlated && find(i) === find(j)) return;
     const entities = shared(info[i]!.entities, info[j]!.entities);
     if (!entities.length) return;
     const techniques = shared(info[i]!.techniques, info[j]!.techniques);
     const tactics = shared(info[i]!.tactics, info[j]!.tactics);
-    if (!correlated && !techniques.length && !tactics.length) return;
+    // A finding is about its entity, and the alerts it was built from are often below the incident threshold,
+    // so it joins whatever else is happening to that user or host in the window.
+    const finding = a.relatedIds !== undefined || b.relatedIds !== undefined;
+    if (!correlated && !finding && !techniques.length && !tactics.length) return;
     // Two alerts already in incidents stay where analysts put them.
     if (a.incidentId && b.incidentId) return;
     edges.push({ i, j, edge: { a: a.id, b: b.id, entities, techniques, tactics, correlated } });
@@ -123,7 +139,9 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
   const groups = new Map<number, number[]>();
   alerts.forEach((_, i) => {
     const root = find(i);
-    groups.set(root, [...(groups.get(root) ?? []), i]);
+    const members = groups.get(root);
+    if (members) members.push(i);
+    else groups.set(root, [i]);
   });
 
   const plans: GroupPlan[] = [];
@@ -145,11 +163,13 @@ export function planGroups(input: GroupableAlert[], opts: GroupingOptions): Grou
       windowMs: opts.windowMs,
       firstAt: new Date(first.occurredAt).toISOString(),
       lastAt: new Date(last.occurredAt).toISOString(),
-      edges: groupEdges,
+      edges: groupEdges.slice(0, MAX_REASON_EDGES),
+      edgeCount: groupEdges.length,
       summary: "",
     };
     const common = [...reason.tactics, ...reason.techniques];
-    reason.summary = [
+    // One qualifying alert with nothing related yet: there is no shared entity or technique to describe.
+    reason.summary = !groupEdges.length ? `single alert; no related alerts within ${Math.round(opts.windowMs / 3_600_000)}h` : [
       `same ${reason.entities.join(", ")}`,
       `within ${Math.round(opts.windowMs / 3_600_000)}h`,
       common.length ? `shared ATT&CK ${common.join(", ")}` : null,

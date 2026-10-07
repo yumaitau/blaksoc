@@ -6,6 +6,22 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import { env } from "@/lib/env";
 import { urlPasswordMismatch } from "./url-password";
 
+const LOCK_TIMEOUT = 10_000; // ms
+const LOCK_ATTEMPTS = 12;
+
+/** Retries a step that gave up waiting for a lock (SQLSTATE 55P03); each failed attempt rolls back. */
+async function retryOnLock<T>(label: string, step: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await step();
+    } catch (err) {
+      if ((err as { code?: string }).code !== "55P03" || attempt >= LOCK_ATTEMPTS) throw err;
+      console.log(`${label}: lock busy, retrying (${attempt}/${LOCK_ATTEMPTS})`);
+      await new Promise((r) => setTimeout(r, 10_000));
+    }
+  }
+}
+
 async function main() {
   // Fail before touching roles if web or worker could not log in with what we are about to set.
   const e = env();
@@ -15,12 +31,14 @@ async function main() {
   ].filter(Boolean);
   if (problems.length) throw new Error(problems.join("\n"));
 
-  const client = postgres(e.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {} });
-  await migrate(drizzle(client), { migrationsFolder: path.join(process.cwd(), "drizzle") });
+  // The SQL files re-apply RLS on every table each deploy, which needs brief exclusive locks. Without a
+  // lock timeout one long worker transaction makes the migration wait, and every query queues behind it.
+  const client = postgres(e.DATABASE_ADMIN_URL, { max: 1, onnotice: () => {}, connection: { lock_timeout: LOCK_TIMEOUT } });
+  await retryOnLock("drizzle migrations", () => migrate(drizzle(client), { migrationsFolder: path.join(process.cwd(), "drizzle") }));
 
   const dir = path.join(process.cwd(), "src/db/sql");
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
-    await client.unsafe(readFileSync(path.join(dir, file), "utf8"));
+    await retryOnLock(file, () => client.unsafe(readFileSync(path.join(dir, file), "utf8")));
     console.log(`applied ${file}`);
   }
   // Passwords come from the environment, never from committed SQL.

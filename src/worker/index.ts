@@ -14,6 +14,7 @@ import { runDueHealth } from "@/lib/services/health";
 import { syncKelpie } from "@/lib/services/kelpie";
 import { runDueSurface } from "@/lib/services/surface";
 import { runCorrelationAll } from "@/lib/services/correlation";
+import { runAlertRetention } from "@/lib/services/retention";
 import { assertHostingEnv } from "@/lib/hosting/profile";
 import { ArchiveResidencyError, S3ArchiveStore } from "@/lib/hosting/s3-store";
 import { defaultArchiveStore } from "@/lib/hosting/store";
@@ -82,6 +83,7 @@ const handlers: Record<QueueName, Handler> = {
   },
   [QUEUES.report]: async (job) => {
     if (job.name === "board") return runDueBoardSummaries();
+    if (job.name === "retention") return runAlertRetention(log("retention"));
   },
   [QUEUES.notify]: async (job) => {
     if (job.name === "event") {

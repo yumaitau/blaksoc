@@ -89,6 +89,11 @@ export class KelpieClient {
     return this.request<{ id: string }>("POST", `/api/v1/cases/${encodeURIComponent(caseId)}/comments`, { body });
   }
 
+  /** Raise (or set) a case's severity with the reason shown in Kelpie. */
+  updateSeverity(caseId: string, severity: KelpieSeverity, justification: string) {
+    return this.request<unknown>("PATCH", `/api/v1/cases/${encodeURIComponent(caseId)}`, { severity, severityJustification: justification });
+  }
+
   /** Proves the token reaches its organisation with cases:read. */
   async health(): Promise<{ ok: boolean; latencyMs: number; detail: Record<string, unknown>; error?: string }> {
     const start = Date.now();

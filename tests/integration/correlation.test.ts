@@ -17,7 +17,7 @@ import { CORRELATION_SOURCE } from "@/lib/correlation/events";
 import { ingestAlert } from "@/lib/pipeline/ingest";
 import type { NormalisedAlert } from "@/lib/providers/types";
 import { redis } from "@/lib/redis";
-import { runCorrelation, runGrouping, setCorrelationRuleEnabled } from "@/lib/services/correlation";
+import { GROUP_BATCH, runCorrelation, runGrouping, setCorrelationRuleEnabled } from "@/lib/services/correlation";
 import { ungroupAlerts } from "@/lib/services/incidents";
 
 const run = randomUUID().slice(0, 8);
@@ -205,5 +205,65 @@ describe("automatic incident grouping", () => {
     const [inc] = await adminDb().insert(incidents).values({ tenantId: tenantA, title: "Manual case", severity: "high" }).returning();
     await adminDb().insert(incidentAlerts).values({ tenantId: tenantA, incidentId: inc!.id, alertId: ids["a:mfa"]! });
     await expect(ungroupAlerts(analyst(), inc!.id)).rejects.toThrow(/only automatically grouped alerts/);
+  });
+});
+
+describe("grouping a large burst", () => {
+  let tenantC = "";
+  beforeAll(async () => {
+    const [c] = await adminDb().insert(tenants).values({ name: "Correlation C", slug: `corr-c-${run}`, kind: "customer", sectors: ["SMB"], deploymentMode: "shared", settings: DEFAULT_TENANT_SETTINGS }).returning();
+    tenantC = c!.id;
+  });
+  afterAll(async () => {
+    if (tenantC) await adminDb().delete(tenants).where(eq(tenants.id, tenantC));
+  });
+
+  it("links a group bigger than one batch into a single incident, one short transaction per batch", async () => {
+    const n = GROUP_BATCH * 2 + 30;
+    for (let i = 0; i < n; i++) {
+      const a = m365(`burst${i}`, 2, "mailbox_rule", `Mailbox rule ${i}`, ["T1114.003"]);
+      await ingestAlert({ tenantId: tenantC, integrationId: null, source: "entra", alert: { ...a, occurredAt: new Date(a.occurredAt.getTime() + i * 1000) }, intel: null });
+    }
+    const res = await runGrouping(tenantC, now);
+    expect(res).toMatchObject({ opened: 1, linked: n });
+    const incs = await adminDb().select().from(incidents).where(eq(incidents.tenantId, tenantC));
+    expect(incs).toHaveLength(1);
+    expect(await adminDb().select().from(incidentAlerts).where(eq(incidentAlerts.incidentId, incs[0]!.id))).toHaveLength(n);
+    const titles = (await adminDb().select().from(incidentTimeline).where(and(eq(incidentTimeline.incidentId, incs[0]!.id), eq(incidentTimeline.category, "grouping")))).map((t) => t.title);
+    expect(titles.sort()).toEqual([`Grouped ${GROUP_BATCH} related alerts automatically`, `Grouped 30 related alerts automatically`, `Opened by automatic grouping of ${GROUP_BATCH} alerts`].sort());
+    expect(await runGrouping(tenantC, now)).toEqual({ plans: 0, linked: 0, opened: 0 });
+  }, 120_000);
+});
+
+describe("which alerts open incidents", () => {
+  let tenantD = "";
+  beforeAll(async () => {
+    const [d] = await adminDb().insert(tenants).values({ name: "Correlation D", slug: `corr-d-${run}`, kind: "customer", sectors: ["SMB"], deploymentMode: "shared", settings: DEFAULT_TENANT_SETTINGS }).returning();
+    tenantD = d!.id;
+  });
+  afterAll(async () => {
+    if (tenantD) await adminDb().delete(tenants).where(eq(tenants.id, tenantD));
+  });
+
+  it("opens an incident for one high alert and leaves medium alerts in the queue", async () => {
+    const high = m365("solo-high", 1, "mailbox_rule", "Suspicious mailbox rule", ["T1114.003"]);
+    const medium = { ...m365("solo-medium", 1, "mailbox_rule", "Benchmark check failed", ["T1114.003"]), severity: "medium" as const };
+    const h = await ingestAlert({ tenantId: tenantD, integrationId: null, source: "entra", alert: high, intel: null });
+    const m = await ingestAlert({ tenantId: tenantD, integrationId: null, source: "entra", alert: medium, intel: null });
+    expect(await runGrouping(tenantD, now)).toMatchObject({ opened: 1, linked: 1 });
+    const rows = await adminDb().select({ id: alerts.id, incidentId: alerts.incidentId }).from(alerts).where(inArray(alerts.id, [h.alertId, m.alertId]));
+    expect(rows.find((r) => r.id === h.alertId)!.incidentId).toBeTruthy();
+    expect(rows.find((r) => r.id === m.alertId)!.incidentId).toBeNull();
+  });
+
+  it("raises the incident's severity when a more severe related alert joins it", async () => {
+    const critical = { ...m365("solo-critical", 0.5, "mailbox_rule", "Mailbox forwarding to external domain", ["T1114.003"]), severity: "critical" as const };
+    const c = await ingestAlert({ tenantId: tenantD, integrationId: null, source: "entra", alert: critical, intel: null });
+    await runGrouping(tenantD, now);
+    const [row] = await adminDb().select({ incidentId: alerts.incidentId }).from(alerts).where(eq(alerts.id, c.alertId));
+    const [inc] = await adminDb().select().from(incidents).where(eq(incidents.id, row!.incidentId!));
+    expect(inc!.severity).toBe("critical");
+    const timeline = await adminDb().select({ title: incidentTimeline.title }).from(incidentTimeline).where(eq(incidentTimeline.incidentId, inc!.id));
+    expect(timeline.map((t) => t.title)).toContain("Severity raised high → critical by a grouped alert");
   });
 });

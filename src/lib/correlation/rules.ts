@@ -114,10 +114,17 @@ export const ACCOUNT_TAKEOVER: CorrelationRule = {
   eventType: "account_takeover",
 };
 
+/**
+ * Alerts that count towards accumulated risk. Benchmark (SCA) failures are posture, not threats, and
+ * informational events (session opened, sudo) arrive by the thousand; summed, they raised "risk" on every host.
+ */
+const THREAT_SIGNAL = { category: { not: "sca" }, severity: { not: "informational" } };
+
 /** Risk accumulation: many moderate alerts on one user add up even when none is critical alone. */
 export const USER_RISK_ACCUMULATION: CorrelationRule = {
   id: "user-risk-accumulation",
-  version: 1,
+  // 2: ignores benchmark (SCA) and informational alerts.
+  version: 2,
   title: "Risk accumulating on one user",
   description: "The risk scores of alerts for one user add up to 150 or more inside 24 hours.",
   severity: "high",
@@ -126,7 +133,7 @@ export const USER_RISK_ACCUMULATION: CorrelationRule = {
   stage: "alerts",
   enabledByDefault: true,
   groupBy: ["user"],
-  clause: { type: "risk", id: "risk", label: "Alert risk for the user", within: 24 * HOUR, threshold: 150 },
+  clause: { type: "risk", id: "risk", label: "Alert risk for the user", within: 24 * HOUR, threshold: 150, match: THREAT_SIGNAL },
   eventType: "risk_accumulation",
 };
 
@@ -136,13 +143,14 @@ export const HOST_RISK_ACCUMULATION: CorrelationRule = {
   title: "Risk accumulating on one host",
   description: "The risk scores of alerts for one host add up to 150 or more inside 24 hours.",
   groupBy: ["host"],
-  clause: { type: "risk", id: "risk", label: "Alert risk for the host", within: 24 * HOUR, threshold: 150 },
+  clause: { type: "risk", id: "risk", label: "Alert risk for the host", within: 24 * HOUR, threshold: 150, match: THREAT_SIGNAL },
 };
 
 /** Count with distinct: one source address behind alerts on three or more hosts inside an hour. */
 export const SOURCE_FANOUT: CorrelationRule = {
   id: "source-ip-fanout",
-  version: 1,
+  // 2: ignores benchmark and informational alerts (an orchestration host's routine SSH logins).
+  version: 2,
   title: "One source address alerting on several hosts",
   description: "Alerts from one source IP on three or more distinct hosts inside an hour: scanning, spraying or lateral movement.",
   severity: "high",
@@ -151,7 +159,7 @@ export const SOURCE_FANOUT: CorrelationRule = {
   stage: "alerts",
   enabledByDefault: true,
   groupBy: ["src_ip"],
-  clause: { type: "count", id: "hosts", label: "Hosts alerting for the source", match: { host: { exists: true } }, threshold: 3, within: HOUR, distinct: "host" },
+  clause: { type: "count", id: "hosts", label: "Hosts alerting for the source", match: { ...THREAT_SIGNAL, host: { exists: true } }, threshold: 3, within: HOUR, distinct: "host" },
   eventType: "source_fanout",
 };
 

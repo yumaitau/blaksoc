@@ -1,7 +1,15 @@
 # Yuma IT production on AWS
 
-blakSOC runs on the `yumait-prod` EKS Auto Mode cluster in `ap-southeast-2`. Wazuh and OpenCTI run on
-separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-eks` and `App=blaksoc`.
+blakSOC runs on the `yumait-prod` EKS Auto Mode cluster in `ap-southeast-2`. Wazuh runs on its own EC2 host
+in the same VPC. OpenCTI is shared with ThreatSieve (Cloudflare Workers), which feeds it through its own
+connector. blakSOC-owned resources carry the tags `Project=yumait-eks` and `App=blaksoc`.
+
+```
+ThreatSieve (Cloudflare) ──STIX──► OpenCTI (EC2 threatsieve-opencti-production)
+                                        ▲ GraphQL :8080 (EKS cluster SG only)
+EC2 hosts ──agents──► Wazuh (EC2 blaksoc-wazuh) ◄──API :55000 / indexer :9200── blakSOC (EKS)
+outside AWS ──agents──► NLB agents.soc.yumait.au ┘
+```
 
 ## Resources
 
@@ -14,10 +22,12 @@ separate EC2 hosts in the same VPC. Everything carries the tags `Project=yumait-
 | Runtime env | Secrets Manager `blaksoc-eks-runtime` | Synced to `blaksoc/blaksoc-runtime` by External Secrets |
 | Generated credentials | Secrets Manager `blaksoc-eks-bootstrap` | Source of the runtime values, including break-glass |
 | TLS | ACM `soc.yumait.au` | On the ALB created by the Ingress |
-| Wazuh host | EC2 `blaksoc-wazuh` | `m7g.xlarge`, 200 GiB gp3, private subnet, SSM only |
-| OpenCTI host | EC2 `blaksoc-opencti` | `m7g.xlarge`, 150 GiB gp3, private subnet, SSM only |
-| Agent entry | NLB `blaksoc-wazuh-agents` | Public TCP 1514 and 1515 to the Wazuh host only |
-| Host credentials | `blaksoc-wazuh-credentials`, `blaksoc-opencti-credentials` | Read by the hosts' instance role |
+| Wazuh host | EC2 `blaksoc-wazuh` | `r7g.large` until the vCPU quota rises, then `m7g.xlarge` (stop, change type, start; IP and disk stay). Fixed private IP, 200 GiB gp3 kept on termination, private subnet, SSM only, termination protection |
+| Agent entry | NLB `blaksoc-wazuh-agents` | Public TCP 1514 and 1515 to the Wazuh host only, for agents outside AWS |
+| OpenCTI | EC2 `threatsieve-opencti-production` (ThreatSieve) | OpenCTI 7. Published on its private address, port 8080; its security group admits port 8080 from the EKS cluster SG only |
+| Host credentials | `blaksoc-wazuh-credentials` | Indexer, API, dashboard and enrolment passwords, plus blakSOC's own API and indexer users. Read by the Wazuh host's role |
+| OpenCTI token | `blaksoc-opencti-service-token` | blakSOC service account in OpenCTI's Connectors group (not admin). Expires after 365 days |
+| Enrolment password | SSM parameter `/blaksoc/wazuh/enrollment` | Passed to SSM commands as the reference `{{ssm:/blaksoc/wazuh/enrollment}}`, which Systems Manager resolves on the instance; CloudTrail and command history keep only the reference. Mirrors `ENROLLMENT_PASSWORD` in `blaksoc-wazuh-credentials` |
 
 ## Deploy a new version
 
@@ -60,8 +70,42 @@ The scripts run as root through SSM Run Command and can be re-run:
 
 - `wazuh-host.sh`: wazuh-docker single-node `v4.14.8`. Replaces the published default passwords before
   first start, turns on enrolment passwords, and sets the indexer `node.attr.region`.
-- `opencti-host.sh`: OpenCTI from `deploy/compose/docker-compose.yml` (profile `opencti`). Copy the compose
-  file to `/opt/blaksoc-opencti/docker-compose.yml` first.
+- `wazuh-agent-ssm.py`: creates the `BlakSOC-WazuhAgent` SSM document and the State Manager association
+  `blaksoc-wazuh-agent`, which runs `wazuh-agent.sh` on every SSM-managed Linux instance when it registers
+  and daily after that. New EC2 hosts are enrolled without any action, provided they run the SSM agent with
+  an instance profile that allows it. Re-run the script after changing `wazuh-agent.sh`.
+- `wazuh-agent.sh`: installs and enrols the pinned agent on an EC2 host (Ubuntu or Amazon Linux) into group
+  `yumait-aws`. It normally runs through the `BlakSOC-WazuhAgent` document; for a one-off Run Command,
+  prefix it with `export WAZUH_REGISTRATION_PASSWORD='{{ssm:/blaksoc/wazuh/enrollment}}'` (a reference, never the
+  value) and optionally `WAZUH_AGENT_NAME`. EC2 hosts point at `wazuh-internal.soc.yumait.au`, a public
+  record holding the manager's private address: hosts on Tailscale resolve through MagicDNS, so a Route 53
+  private zone would never be consulted. Every EC2 host in the VPC runs an agent; EKS Auto Mode nodes cannot.
+- `opencti-host.sh`: a blakSOC-owned OpenCTI. Not used in production, which shares ThreatSieve's OpenCTI.
+
+blakSOC's Wazuh API user (`blaksoc`) holds `agents_readonly`, `cluster_readonly` and a policy for
+`active-response:command`; its indexer user (`blaksoc`) can only read `wazuh-alerts-*`, `wazuh-archives-*` and
+`wazuh-states-vulnerabilities-*` plus node info for the region check. The integrations are `Wazuh (AWS)`,
+linked to the `Yuma IT Internal` tenant by agent group `yumait-aws`, and `OpenCTI (ThreatSieve)` at platform
+level.
+
+Cases go to Kelpie (`kelpie` namespace, `https://kelpie-app.yumait.au`): the `Yuma IT Internal` tenant has a
+Kelpie integration whose token (`blaksoc-kelpie-token`, Yuma IT organisation, `cases:*`, `comments:write`,
+`observables:write`, 365 days) belongs to an organisation admin. Every open incident in that tenant becomes a
+Kelpie case. Incidents open automatically only for high and critical alerts and correlation findings
+(`AUTO_INCIDENT_SEVERITIES` in `src/lib/services/correlation.ts`); lower severities stay in the alert queue.
+Wazuh local rule 100100 (installed by `wazuh-host.sh`) silences promiscuous-mode alerts from Docker `veth`
+interfaces.
+
+Noise controls:
+
+- blakSOC stores Wazuh alerts from `low` up (`minSeverity` on the integration). Informational events (sessions,
+  sudo, login success) stay in Wazuh for 90 days (ISM policy `blaksoc-alerts-90d`).
+- The `yumait-aws` agent group's shared configuration (`deploy/wazuh/agent-yumait-aws.conf`, applied by
+  `wazuh-host.sh`) skips inode checks on `/boot/efi`: it is FAT, and Linux renumbers its inodes.
+
+Intel: OpenCTI on `threatsieve-opencti-production` runs public feed connectors next to ThreatSieve's (MITRE ATT&CK,
+CISA KEV, abuse.ch ThreatFox, URLhaus and SSL blacklist, OpenCTI datasets). They are defined in ThreatSieve's
+`infra/opencti/compose.yaml` and use the non-admin connector token; none needs an API key.
 
 Reach the Wazuh dashboard or OpenCTI with SSM port forwarding, for example:
 
@@ -76,9 +120,23 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 | --- | --- | --- | --- |
 | `soc.yumait.au` | CNAME | ALB hostname from `kubectl -n blaksoc get ingress` | DNS only |
 | `agents.soc.yumait.au` | CNAME | NLB hostname | DNS only (raw TCP) |
+| `wazuh-internal.soc.yumait.au` | A | the manager's fixed private address | DNS only |
 | ACM validation | CNAME | from the certificate | DNS only |
 
 ## Known gaps
+
+- Helm upgrades need cluster-admin on `yumait-prod`: the release's hooks manage External Secrets objects,
+  which namespace-scoped EKS access policies do not cover. The Agent Vault IAM user has namespace-scoped
+  admin on `blaksoc` and `kelpie` only, so image-only releases were rolled out with `kubectl set image`;
+  run the next `helm upgrade` with cluster-admin credentials to bring the release record in line.
+- The `r7g.large` Wazuh host stays below `m7g.xlarge` until the account's vCPU quota increase is granted.
+
+- The Wazuh indexer and API certificates name `wazuh.indexer` and `localhost`, so the Wazuh integration
+  connects to the manager's private address with `tlsVerify: false`. Traffic stays in the VPC and the ports admit only the VPC
+  range. Reissue the certificates with the IP (or a private name) in the SAN, then set `caPem` and turn
+  verification back on.
+- `BLAKSOC_ARCHIVE_S3_BUCKETS` is unset, so cold syslog lives on the worker's emptyDir. Create the AU buckets and
+  an IAM role for the service account, then set `archive.s3` and `backup` in `values-yumait-prod.yaml`.
 
 - Network policies are disabled here because the cluster does not enforce them. The chart now allows public
   HTTPS egress with private and metadata ranges excluded (`networkPolicy.publicHttps`). Before turning

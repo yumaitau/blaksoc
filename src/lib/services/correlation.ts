@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, notExists, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, notExists, or, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { systemDb } from "@/db/client";
 import {
@@ -8,13 +8,18 @@ import { withScope } from "@/db/scope";
 import { systemScope, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { evaluateRules, type CorrelationFinding, type CorrelationRule } from "@/lib/correlation/engine";
-import { alertFromFinding, contributingIds, CORRELATION_SOURCE, eventFromAlert } from "@/lib/correlation/events";
+import { alertFromFinding, contributingIds, CORRELATION_SOURCE, EVENT_RAW_PATHS, eventFromAlert } from "@/lib/correlation/events";
 import { planGroups, type GroupPlan } from "@/lib/correlation/grouping";
 import { BUILTIN_RULES, ruleById } from "@/lib/correlation/rules";
 import { ingestAlert } from "@/lib/pipeline/ingest";
 import { evaluateTriggers } from "@/lib/soar/engine";
 import { actor, AccessDenied, inTenant } from "./common";
 import { addTimeline, createIncidentFromAlerts, linkAlerts } from "./incidents";
+import { kelpieIntegration, kelpieLink } from "./kelpie";
+import { instantiate } from "@/lib/connectors/instances";
+import { kelpieSeverity } from "@/lib/kelpie/map";
+import { logger } from "@/lib/obs/log";
+import type { Severity } from "@/lib/providers/types";
 
 const HOUR = 3_600_000;
 /** First run for a tenant starts this far back. */
@@ -26,6 +31,11 @@ const MAX_EVENTS = 5000;
 export const GROUP_WINDOW = 6 * HOUR;
 const GROUP_LOOKBACK = 48 * HOUR;
 const OPEN_ALERT = ["NEW", "TRIAGING", "INVESTIGATING"] as const;
+/**
+ * Alerts that open or join an incident automatically: high and critical, and every correlation finding. Lower
+ * severities stay in the alert queue; grouping them filled incidents (and Kelpie cases) with benchmark noise.
+ */
+export const AUTO_INCIDENT_SEVERITIES = ["high", "critical"] as const;
 
 /** Look-back a rule needs so a re-run reproduces its findings (window, suppression, corroboration). */
 function span(rule: CorrelationRule): number {
@@ -55,7 +65,7 @@ export async function runCorrelation(tenantId: string, now = new Date()): Promis
           .select({
             id: alerts.id, source: alerts.source, ruleId: alerts.ruleId, title: alerts.title, category: alerts.category, severity: alerts.severity, riskScore: alerts.riskScore,
             userName: alerts.userName, assetId: alerts.assetId, hostname: sql<string | null>`coalesce(${assets.hostname}, ${assets.name})`, attackTechniques: alerts.attackTechniques,
-            raw: alerts.raw, occurredAt: alerts.occurredAt,
+            raw: slimRaw, occurredAt: alerts.occurredAt,
           })
           .from(alerts)
           .leftJoin(assets, eq(assets.id, alerts.assetId))
@@ -110,15 +120,65 @@ async function persistFinding(tenantId: string, rule: CorrelationRule, f: Correl
  * Group the tenant's open, unlinked alerts into incidents (see planGroups). Each plan is applied in its own
  * transaction and re-checked there, so an analyst acting between plan and apply wins.
  */
+/**
+ * The raw fields correlation reads, built in the database. Up to MAX_EVENTS whole Wazuh payloads ran the
+ * worker out of heap on a busy tenant's backlog.
+ */
+const slimRaw = (() => {
+  type Tree = { [key: string]: Tree | string[] };
+  const tree: Tree = {};
+  for (const path of EVENT_RAW_PATHS) {
+    const parts = path.split(".");
+    let node = tree;
+    parts.forEach((part, i) => {
+      if (i === parts.length - 1) node[part] = parts;
+      else node = (node[part] ??= {}) as Tree;
+    });
+  }
+  // Keys and paths are the constants above, so building the expression as text is safe.
+  const build = (node: Tree): string =>
+    `jsonb_build_object(${Object.entries(node).map(([k, v]) => `'${k}', ${Array.isArray(v) ? `"alerts"."raw" #> '{${v.join(",")}}'` : build(v)}`).join(", ")})`;
+  return sql<unknown>`${sql.raw(build(tree))}`;
+})();
+
+const SEVERITY_RANK: Record<Severity, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
+
+/**
+ * Kelpie owns a case's severity once it exists, and syncKelpie only reads it back. A raise caused by new
+ * evidence is pushed straight away; later analyst changes in Kelpie still win. Best effort: the next sync
+ * shows the case as it is, and a failure here never stops grouping.
+ */
+async function raiseKelpieSeverity(tenantId: string, incidentId: string, severity: Severity, why: string) {
+  try {
+    const target = await withScope(systemScope(tenantId), async (tx) => {
+      const row = await kelpieIntegration(tx, tenantId);
+      const link = row ? await kelpieLink(tx, incidentId) : null;
+      return row && link?.caseId ? { row, caseId: link.caseId } : null;
+    });
+    if (!target) return;
+    const inst = instantiate(target.row);
+    if (inst.kind !== "cases") return;
+    await inst.provider.updateSeverity(target.caseId, kelpieSeverity(severity), `blakSOC grouped a ${severity} alert into this case: ${why}`);
+  } catch (err) {
+    logger.warn("kelpie severity push failed", { tenantId, incidentId, err });
+  }
+}
+
+/** Alerts linked per transaction when applying a group. */
+export const GROUP_BATCH = 100;
+
 export async function runGrouping(tenantId: string, now = new Date()): Promise<{ plans: number; linked: number; opened: number }> {
   const plans = await withScope(systemScope(tenantId), async (tx) => {
     const since = new Date(now.getTime() - GROUP_LOOKBACK);
-    const cols = { id: alerts.id, occurredAt: alerts.occurredAt, userName: alerts.userName, assetId: alerts.assetId, techniques: alerts.attackTechniques, source: alerts.source, raw: alerts.raw };
+    // Only correlated alerts carry the matches grouping reads; nothing else needs its payload.
+    const raw = sql<unknown>`case when ${alerts.source} = ${CORRELATION_SOURCE} then jsonb_build_object('correlation', ${alerts.raw} -> 'correlation') end`;
+    const cols = { id: alerts.id, occurredAt: alerts.occurredAt, userName: alerts.userName, assetId: alerts.assetId, techniques: alerts.attackTechniques, source: alerts.source, raw };
     const candidates = await tx
       .select({ ...cols, incidentId: sql<string | null>`null` })
       .from(alerts)
       .where(and(
         eq(alerts.tenantId, tenantId), gte(alerts.occurredAt, since), lte(alerts.occurredAt, now), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT]),
+        or(inArray(alerts.severity, [...AUTO_INCIDENT_SEVERITIES]), eq(alerts.source, CORRELATION_SOURCE)),
         notExists(tx.select({ one: sql`1` }).from(incidentGroupExclusions).where(eq(incidentGroupExclusions.alertId, alerts.id))),
       ))
       .orderBy(desc(alerts.occurredAt))
@@ -139,22 +199,32 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
         id: a.id, occurredAt: a.occurredAt.getTime(), userName: a.userName, assetId: a.assetId, techniques: a.techniques, incidentId: a.incidentId,
         relatedIds: a.source === CORRELATION_SOURCE ? contributingIds(a.raw) : undefined,
       })),
-      { windowMs: GROUP_WINDOW, tactics: Object.fromEntries(tactics.map((t) => [t.id, t.tactics])) },
+      // One qualifying alert is enough to open an incident; related ones join it.
+      { windowMs: GROUP_WINDOW, tactics: Object.fromEntries(tactics.map((t) => [t.id, t.tactics])), minAlerts: 1 },
     );
   });
 
   let linked = 0;
   let opened = 0;
   for (const plan of plans) {
-    const res = await withScope(systemScope(tenantId), (tx) => applyPlan(tx, tenantId, plan));
-    if (!res) continue;
-    linked += plan.alertIds.length;
-    if (res.opened) opened++;
+    // A group can hold thousands of alerts (a new host's first benchmark scan). One transaction per batch
+    // keeps locks short: a single long transaction held up a deploy's migration and everything queued behind it.
+    // The first batch opens the incident; later ones link to it. A rerun skips alerts already linked.
+    let incidentId = plan.incidentId;
+    for (let i = 0; i < plan.alertIds.length; i += GROUP_BATCH) {
+      const part = { ...plan, incidentId, alertIds: plan.alertIds.slice(i, i + GROUP_BATCH) };
+      const res = await withScope(systemScope(tenantId), (tx) => applyPlan(tx, tenantId, part));
+      if (!res) break;
+      if (res.opened) opened++;
+      if (res.raisedTo) await raiseKelpieSeverity(tenantId, res.incidentId, res.raisedTo, plan.reason.summary);
+      incidentId = res.incidentId;
+      linked += part.alertIds.length;
+    }
   }
   return { plans: plans.length, linked, opened };
 }
 
-async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ incidentId: string; opened: boolean } | null> {
+async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ incidentId: string; opened: boolean; raisedTo: Severity | null } | null> {
   const rows = await tx.select().from(alerts).where(and(eq(alerts.tenantId, tenantId), inArray(alerts.id, plan.alertIds), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT])));
   if (rows.length !== plan.alertIds.length) return null;
   let incidentId = plan.incidentId;
@@ -173,13 +243,24 @@ async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ i
   for (const a of rows) {
     await tx.update(incidentAlerts).set({ origin: "auto", reason: plan.reason, priorStatus: a.status }).where(and(eq(incidentAlerts.incidentId, incidentId), eq(incidentAlerts.alertId, a.id)));
   }
+  // An incident joined by a later batch, or by a new alert, takes the most severe alert's severity.
+  let raisedTo: Severity | null = null;
+  if (plan.incidentId) {
+    const [inc] = await tx.select({ severity: incidents.severity }).from(incidents).where(eq(incidents.id, incidentId));
+    const top = rows.reduce<Severity>((m, a) => (SEVERITY_RANK[a.severity as Severity] > SEVERITY_RANK[m] ? (a.severity as Severity) : m), inc!.severity as Severity);
+    if (SEVERITY_RANK[top] > SEVERITY_RANK[inc!.severity as Severity]) {
+      await tx.update(incidents).set({ severity: top, updatedAt: new Date() }).where(eq(incidents.id, incidentId));
+      await addTimeline(tx, { tenantId, incidentId, origin: "machine", category: "status", title: `Severity raised ${inc!.severity} → ${top} by a grouped alert`, detail: plan.reason.summary });
+      raisedTo = top;
+    }
+  }
   await addTimeline(tx, {
     tenantId, incidentId, origin: "machine", category: "grouping",
     title: plan.incidentId ? `Grouped ${rows.length} related alert${rows.length === 1 ? "" : "s"} automatically` : `Opened by automatic grouping of ${rows.length} alerts`,
     detail: plan.reason.summary,
   });
   await audit(tx, { actorId: null, actorKind: "system", tenantId, action: "incident.auto_group", targetType: "incident", targetId: incidentId, detail: { alertIds: plan.alertIds, groupingKey: plan.groupingKey, reason: plan.reason.summary } });
-  return { incidentId, opened: !plan.incidentId };
+  return { incidentId, opened: !plan.incidentId, raisedTo };
 }
 
 /** Scheduled entry point: every tenant with recent alerts. One tenant failing never stops the rest. */

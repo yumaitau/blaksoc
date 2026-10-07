@@ -40,6 +40,12 @@ function pick(raw: Record<string, unknown>, paths: string[]): string | undefined
   return undefined;
 }
 
+/** Raw paths eventFromAlert reads. Loaders fetch only these, never whole provider payloads. */
+export const EVENT_RAW_PATHS = [
+  "eventType", "agent.name", "hostname", "srcIp", "src_ip", "data.srcip", "ipAddress", "ip",
+  "country", "location.countryOrRegion", "deviceId", "deviceDetail.deviceId", "device", "outcome",
+] as const;
+
 /** A stored alert as a correlation event. Field names follow the canonical set the rules use. */
 export function eventFromAlert(a: AlertForCorrelation): CorrelationEvent {
   const raw = a.raw && typeof a.raw === "object" ? (a.raw as Record<string, unknown>) : {};

@@ -98,6 +98,15 @@ type WazuhAgent = {
   os?: { name?: string; version?: string; platform?: string };
 };
 
+const VULN_PAGE = 5000;
+/** Upper bound per sync, so a misconfigured index cannot exhaust the worker. */
+const VULN_MAX = 500_000;
+/** Unique enough per document (agent, CVE, package) for search_after paging. */
+const VULN_SORT = [{ "agent.id": "asc" }, { "vulnerability.id": "asc" }, { "package.name": "asc" }, { "package.version": "asc" }];
+
+/** Wazuh 4.14 rejects a bare `os` in `select`; only named sub-fields are accepted. */
+export const AGENT_SELECT = "id,name,ip,status,group,lastKeepAlive,os.name,os.version,os.platform";
+
 function normaliseAgent(a: WazuhAgent): NormalisedAsset {
   const osName = [a.os?.name, a.os?.version].filter(Boolean).join(" ") || null;
   const server = /server/i.test(osName ?? "") || a.os?.platform === "ubuntu" || a.os?.platform === "rhel";
@@ -196,7 +205,7 @@ export class WazuhProvider implements SecurityEventProvider {
     const groups = (routingKeys ?? []).filter((k) => k.startsWith("group:")).map((k) => k.slice(6));
     const out: NormalisedAsset[] = [];
     for (let offset = 0; ; offset += 500) {
-      const qs = new URLSearchParams({ limit: "500", offset: String(offset), select: "id,name,ip,status,group,lastKeepAlive,os" });
+      const qs = new URLSearchParams({ limit: "500", offset: String(offset), select: AGENT_SELECT });
       if (groups.length === 1) qs.set("group", groups[0]!);
       const res = await this.api<{ data: { affected_items: WazuhAgent[]; total_affected_items: number } }>(`/agents?${qs}`);
       out.push(...res.data.affected_items.filter((a) => a.id !== "000").map(normaliseAgent));
@@ -217,22 +226,36 @@ export class WazuhProvider implements SecurityEventProvider {
       vulnerability?: { id?: string; description?: string; score?: { base?: number } };
       package?: { name?: string; version?: string };
     };
-    const res = await this.search<{ hits: { hits: { _source: Src }[] } }>(this.cfg.vulnerabilitiesIndex ?? "wazuh-states-vulnerabilities-*", {
-      size: 5000,
-      query: assetExternalIds?.length ? { terms: { "agent.id": assetExternalIds } } : { match_all: {} },
-    });
-    return res.hits.hits
-      .map((h) => h._source)
-      .filter((s) => s.agent?.id && s.vulnerability?.id)
-      .map((s) => ({
-        assetExternalId: s.agent!.id!,
-        cve: s.vulnerability!.id!,
-        title: s.vulnerability?.description?.slice(0, 300) ?? null,
-        packageName: s.package?.name ?? null,
-        packageVersion: s.package?.version ?? null,
-        fixedVersion: null,
-        cvss: s.vulnerability?.score?.base ?? null,
-      }));
+    type Hit = { _source: Src; sort?: unknown[] };
+    // Paged on a stable key. One 5,000-hit query covered three of seventeen hosts in production.
+    const out: NormalisedVulnerability[] = [];
+    let after: unknown[] | undefined;
+    for (;;) {
+      const res = await this.search<{ hits: { hits: Hit[] } }>(this.cfg.vulnerabilitiesIndex ?? "wazuh-states-vulnerabilities-*", {
+        size: VULN_PAGE,
+        query: assetExternalIds?.length ? { terms: { "agent.id": assetExternalIds } } : { match_all: {} },
+        sort: VULN_SORT,
+        ...(after ? { search_after: after } : {}),
+        _source: ["agent.id", "vulnerability.id", "vulnerability.description", "vulnerability.score.base", "package.name", "package.version"],
+      });
+      const hits = res.hits.hits;
+      for (const { _source: s } of hits) {
+        if (!s.agent?.id || !s.vulnerability?.id) continue;
+        out.push({
+          assetExternalId: s.agent.id,
+          cve: s.vulnerability.id,
+          title: s.vulnerability.description?.slice(0, 300) ?? null,
+          packageName: s.package?.name ?? null,
+          packageVersion: s.package?.version ?? null,
+          fixedVersion: null,
+          cvss: s.vulnerability.score?.base ?? null,
+        });
+      }
+      if (hits.length < VULN_PAGE || out.length >= VULN_MAX) break;
+      after = hits.at(-1)?.sort;
+      if (!after) break;
+    }
+    return out;
   }
 
   supportedActions(): ResponseActionRequest["action"][] {

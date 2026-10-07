@@ -18,6 +18,7 @@ export const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.notify, name: "escalate", every: 60_000 },
   { queue: QUEUES.surface, name: "scan", every: 15 * 60_000 },
   { queue: QUEUES.report, name: "board", every: 60 * 60_000 },
+  { queue: QUEUES.report, name: "retention", every: 6 * 60 * 60_000 },
 ];
 
 /** How often a running worker checks that its schedulers still exist in Redis. */
