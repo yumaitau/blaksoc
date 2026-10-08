@@ -10,3 +10,4 @@ coverage
 .DS_Store
 dist
 .claude/scheduled_tasks.lock
+__pycache__/
