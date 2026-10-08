@@ -50,7 +50,9 @@ reserved for the break-glass administrator (`BREAK_GLASS_*` in `blaksoc-eks-boot
 - Anyone in the domain can pass Access, but a new account holds no role until a platform admin grants one
   (`/admin`). `justin@yumait.com.au` and `josh@yumait.com.au` hold `platform_admin`.
 - To rotate the client secret: regenerate it on the Access app, update `STAFF_SSO_CLIENT_SECRET` in
-  `blaksoc-eks-bootstrap`, then re-register the provider from `/admin` (or update `sso_provider.oidc_config`).
+  `blaksoc-eks-bootstrap`, then replace `clientSecret` in the `oidc_config` JSON of the `yumait-staff` row in
+  `sso_provider` (or call the SSO plugin's `updateSSOProvider` with a platform admin session). Registering
+  again under the same provider ID fails: `providerId` is unique.
 
 ## Deploy a new version
 
