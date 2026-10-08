@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { alertStatus, assetKind, incidentStatus, severity } from "@/db/schema";
+import { PATTERN_ID } from "@/lib/tuning/pseudonym";
 
 /**
  * /api/v1 wire contract. Inputs are parsed with these schemas; outputs are passed through them
@@ -53,6 +54,7 @@ export const AlertListQuery = z.object({
   status: csv(alertStatus.enumValues).optional(),
   severity: csv(severity.enumValues).optional(),
   sinceHours: z.coerce.number().int().min(1).max(24 * 365).optional(),
+  lane: z.enum(["active", "passive"]).optional().meta({ description: "active: the triage queue; passive: known noise. Omit for both" }),
   limit: limit(500, 100),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -75,6 +77,7 @@ export const AlertSummary = z
     attackTechniques: z.array(z.string()),
     occurredAt: timestamp,
     incidentId: id.nullable(),
+    lane: z.enum(["active", "passive"]),
   })
   .meta({ id: "AlertSummary" });
 
@@ -198,3 +201,124 @@ export const Asset = z
   .meta({ id: "Asset" });
 
 export const AssetList = z.object({ data: z.array(Asset) }).meta({ id: "AssetList" });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Tuning API (/tuning/*): aggregates and opaque ids only. Response schemas are the allow-list: a field not
+// declared here never reaches the caller, whatever the service returns.
+
+const count = z.number().int().min(0);
+const confidence = z.enum(["low", "medium", "high"]);
+
+export const PatternIdParam = z.object({ patternId: z.string().regex(PATTERN_ID).meta({ description: "Opaque pattern id from GET /tuning/patterns" }) });
+
+export const TuningPatternsQuery = z.object({ days: z.coerce.number().int().min(1).max(90).default(7) });
+
+const Dispositions = z.object({ falsePositive: count, resolved: count, escalated: count.meta({ description: "ESCALATED or CONTAINED" }), open: count, passive: count });
+
+export const TuningPattern = z
+  .object({
+    patternId: z.string(),
+    tenantRef: z.string().meta({ description: "Stable pseudonym of the tenant; never its name or id" }),
+    source: z.string(),
+    ruleId: z.string(),
+    ruleLevel: z.number().int().meta({ description: "Wazuh rule level, else the source's native severity; 0 when unknown" }),
+    ruleGroups: z.array(z.string()),
+    mitre: z.array(z.string()),
+    severity: z.object({ informational: count, low: count, medium: count, high: count, critical: count }),
+    counts: z.object({
+      total: count,
+      byDay: z.array(count).meta({ description: "UTC days, oldest (partial) first, ending today; sums to total" }),
+      byHourOfDay: z.array(count).length(24).meta({ description: "UTC hours 0–23" }),
+    }),
+    distinctAssets: count,
+    distinctUsers: count,
+    dispositions: z.object({ d30: Dispositions, d90: Dispositions }),
+    incidentsOpened: count,
+    analystOverrides: count.meta({ description: "Agent actions on this pattern analysts undid, plus alerts they reopened" }),
+    medianMinutesToFirstTriage: z.number().nullable(),
+    firstSeen: timestamp.nullable(),
+    lastSeen: timestamp.nullable(),
+    noiseRule: z.object({ id, status: z.string(), expiresAt: timestamp, hitCount: count }).nullable(),
+    annotations: z.array(z.object({ confidence, createdAt: timestamp, authorKind: z.enum(["service", "user"]), text: z.string() })),
+  })
+  .meta({ id: "TuningPattern" });
+
+export const TuningPatternList = z
+  .object({
+    windowDays: z.number().int(),
+    generatedAt: timestamp,
+    truncated: z.boolean(),
+    patterns: z.array(TuningPattern),
+    fleet: z.array(z.object({
+      source: z.string(),
+      ruleId: z.string(),
+      tenantsAffected: count,
+      total: count,
+      coFiring: z
+        .array(z.object({ source: z.string(), ruleId: z.string(), count, tenants: count }))
+        .meta({ description: "Rules firing in the same tenant in the same UTC hour: count of such tenant-hours, distinct tenants. Top 5." }),
+    })),
+  })
+  .meta({ id: "TuningPatternList" });
+
+export const AnnotationCreate = z.object({ text: z.string().min(1).max(1000), confidence });
+export const AnnotationResult = z.object({ id, actionId: id, createdAt: timestamp }).meta({ id: "TuningAnnotationResult" });
+
+export const CloseRequest = z.object({
+  reason: z.string().trim().min(1).max(500),
+  maxAlerts: z.number().int().min(1).max(5000).optional(),
+});
+export const CloseResult = z.object({ actionId: id.nullable(), affected: count, reversibleUntil: timestamp.nullable() }).meta({ id: "TuningCloseResult" });
+
+export const AgentNoiseRuleCreate = z.object({
+  patternId: z.string().regex(PATTERN_ID),
+  reason: z.string().trim().min(1).max(500),
+  expiresInDays: z.number().int().min(1).max(30).default(30),
+});
+export const AgentNoiseRuleResult = z.object({ noiseRuleId: id, actionId: id, expiresAt: timestamp, movedToPassive: count }).meta({ id: "TuningNoiseRuleResult" });
+
+export const PurgeResult = z.object({ actionId: id.nullable(), deleted: count }).meta({ id: "TuningPurgeResult" });
+
+export const TuningActionsQuery = z.object({ since: z.iso.datetime({ offset: true }).optional().meta({ description: "Default: 7 days ago" }) });
+export const TuningActionList = z
+  .object({
+    actions: z.array(z.object({
+      id,
+      kind: z.enum(["annotate", "close", "noise_rule", "purge"]),
+      patternId: z.string(),
+      tenantRef: z.string(),
+      source: z.string(),
+      ruleId: z.string(),
+      createdAt: timestamp,
+      affected: count,
+      undoneAt: timestamp.nullable(),
+      reopenedCount: count,
+      status: z.enum(["applied", "undone"]),
+    })),
+  })
+  .meta({ id: "TuningActionList" });
+
+const ReportStats = z.object({ executed: count, refused: count, dryRun: count, patternsReviewed: count });
+export const ReportCreate = z.object({
+  periodStart: z.iso.datetime({ offset: true }),
+  periodEnd: z.iso.datetime({ offset: true }),
+  markdown: z.string().min(1).meta({ description: "Plain markdown, at most 50 KB; HTML is refused" }),
+  stats: ReportStats,
+});
+export const ReportListQuery = z.object({ limit: limit(100, 10) });
+export const ReportCreated = z.object({ id, createdAt: timestamp }).meta({ id: "HermesReportCreated" });
+export const HermesReport = z.object({ id, periodStart: timestamp, periodEnd: timestamp, markdown: z.string(), stats: ReportStats, createdAt: timestamp }).meta({ id: "HermesReport" });
+export const HermesReportList = z.object({ reports: z.array(HermesReport) }).meta({ id: "HermesReportList" });
+
+const NoteKind = z.enum(["model", "outcome", "human"]);
+export const HermesMemory = z
+  .object({ version: count, notes: z.array(z.object({ id, kind: NoteKind, text: z.string(), createdAt: timestamp, updatedAt: timestamp })) })
+  .meta({ id: "HermesMemory" });
+export const MemoryPut = z.object({
+  version: z.number().int().min(0).meta({ description: "The version last read; a stale one is refused with 409" }),
+  notes: z
+    .array(z.object({ id: z.string().max(64).nullable().optional(), kind: NoteKind, text: z.string().max(10_000) }))
+    .max(2000)
+    .meta({ description: "The agent's complete set of model/outcome notes (at most 500, 2000 characters each): with id updates, without id adds, omitted removes. human notes are ignored and always kept." }),
+});
+export const MemoryPutResult = z.object({ version: count, added: count, removed: count, changed: count, unchanged: count }).meta({ id: "HermesMemoryUpdate" });

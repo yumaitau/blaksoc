@@ -59,7 +59,8 @@ export const STEP_ACTIONS: Record<string, { label: string; handler: StepHandler 
     handler: async (tx, s, run, ctx) => {
       if (ctx.incidentId) return { status: "SKIPPED", output: "incident exists" };
       if (!ctx.alertId) return { status: "SKIPPED", output: "no alert" };
-      const [a] = await tx.select({ incidentId: alerts.incidentId }).from(alerts).where(eq(alerts.id, ctx.alertId));
+      const [a] = await tx.select({ incidentId: alerts.incidentId, lane: alerts.lane }).from(alerts).where(eq(alerts.id, ctx.alertId));
+      if (a?.lane === "passive") return { status: "SKIPPED", output: "alert is known noise (passive lane)" };
       if (a?.incidentId) {
         ctx.incidentId = a.incidentId;
         return { status: "SKIPPED", output: "alert already in incident" };
@@ -166,6 +167,8 @@ export async function evaluateTriggers(tenantId: string, event: PlaybookTrigger[
   await withScope(systemScope(tenantId), async (tx) => {
     const books = await tx.select().from(playbooks).where(and(eq(playbooks.enabled, true), or(eq(playbooks.tenantId, tenantId), isNull(playbooks.tenantId))));
     const [alert] = payload.alertId ? await tx.select().from(alerts).where(eq(alerts.id, payload.alertId)) : [];
+    // A new passive (known-noise) alert demands nothing: no playbook notifies about it or opens an incident for it.
+    if (event === "alert.created" && alert?.lane === "passive") return;
     const [asset] = alert?.assetId ? await tx.select().from(assets).where(eq(assets.id, alert.assetId)) : [];
     const responseHint = responseHintOf(alert?.raw);
     const ctx: RunCtx = { tenantId, alertId: payload.alertId, incidentId: payload.incidentId ?? alert?.incidentId ?? undefined, alert: alert ? { ...alert, raw: undefined, responseHint } : undefined, asset };

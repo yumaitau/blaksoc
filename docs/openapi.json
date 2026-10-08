@@ -144,6 +144,19 @@
             }
           },
           {
+            "name": "lane",
+            "in": "query",
+            "required": false,
+            "description": "active: the triage queue; passive: known noise. Omit for both",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "passive"
+              ]
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -737,6 +750,1146 @@
           }
         }
       }
+    },
+    "/tuning/patterns": {
+      "get": {
+        "operationId": "listTuningPatterns",
+        "summary": "Alert patterns (tenant pseudonym, source, rule id) seen in the window, as aggregates only: no titles, hosts, users, addresses or tenant names. Listing a pattern registers its id for the other tuning calls.",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 90
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningPatternList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/patterns/{patternId}/annotations": {
+      "post": {
+        "operationId": "annotateTuningPattern",
+        "summary": "Leave a plain-text note on a pattern; analysts see it as an AI note",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:annotate"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patternId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque pattern id from GET /tuning/patterns",
+            "schema": {
+              "type": "string",
+              "pattern": "^P-[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1000
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  }
+                },
+                "required": [
+                  "text",
+                  "confidence"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningAnnotationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the identity's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body or report too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused by a guardrail, or content that looks like it holds identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/patterns/{patternId}/close": {
+      "post": {
+        "operationId": "closeTuningPattern",
+        "summary": "Close the pattern's open informational–medium alerts (not on an incident, no intel match) as false positives. Guardrails: ≥10 alerts closed by analysts in 90 days, ≥80% false positive, no escalation in 30 days, the act switch on, 20,000 closures a week platform-wide. 409 when acting is off; 422 when a guardrail refuses.",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:act"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patternId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque pattern id from GET /tuning/patterns",
+            "schema": {
+              "type": "string",
+              "pattern": "^P-[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "maxAlerts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 5000
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningCloseResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the identity's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body or report too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused by a guardrail, or content that looks like it holds identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/patterns/{patternId}/purge": {
+      "post": {
+        "operationId": "purgeTuningPattern",
+        "summary": "Delete alerts this agent closed at least 7 days ago that no analyst touched since. 409 while only younger closures exist.",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:act"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patternId",
+            "in": "path",
+            "required": true,
+            "description": "Opaque pattern id from GET /tuning/patterns",
+            "schema": {
+              "type": "string",
+              "pattern": "^P-[A-Za-z0-9_-]{22}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningPurgeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the identity's scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body or report too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused by a guardrail, or content that looks like it holds identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/noise-rules": {
+      "post": {
+        "operationId": "createTuningNoiseRule",
+        "summary": "Create an active noise rule for a whole pattern (no host scope, up to medium severity, ≤ 30 days). Same guardrails as close; 10 per tenant per 7 days.",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:act"
+            ]
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "patternId": {
+                    "type": "string",
+                    "pattern": "^P-[A-Za-z0-9_-]{22}$"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "expiresInDays": {
+                    "default": 30,
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 30
+                  }
+                },
+                "required": [
+                  "patternId",
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningNoiseRuleResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body or report too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused by a guardrail, or content that looks like it holds identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/actions": {
+      "get": {
+        "operationId": "listTuningActions",
+        "summary": "This platform's agent actions since a time, with outcomes (undone, reopened)",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:read"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Default: 7 days ago",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TuningActionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/reports": {
+      "get": {
+        "operationId": "listTuningReports",
+        "summary": "Previous run reports, newest first (platform identity)",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:report"
+            ]
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HermesReportList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTuningReport",
+        "summary": "Store a run report (plain markdown ≤ 50 KB) for analysts (platform identity)",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:report"
+            ]
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "periodStart": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "periodEnd": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "markdown": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Plain markdown, at most 50 KB; HTML is refused"
+                  },
+                  "stats": {
+                    "type": "object",
+                    "properties": {
+                      "executed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "refused": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "dryRun": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "patternsReviewed": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "executed",
+                      "refused",
+                      "dryRun",
+                      "patternsReviewed"
+                    ]
+                  }
+                },
+                "required": [
+                  "periodStart",
+                  "periodEnd",
+                  "markdown",
+                  "stats"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HermesReportCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body or report too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused by a guardrail, or content that looks like it holds identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tuning/memory": {
+      "get": {
+        "operationId": "getTuningMemory",
+        "summary": "The agent's memory notes and their version (platform identity)",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:read"
+            ]
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HermesMemory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putTuningMemory",
+        "summary": "Replace the agent's own notes if `version` is current (409 otherwise). Notes that look like they hold emails, IP addresses or host names are refused with 422.",
+        "security": [
+          {
+            "oauth2": [
+              "tuning:memory"
+            ]
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "The version last read; a stale one is refused with 409"
+                  },
+                  "notes": {
+                    "maxItems": 2000,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 64
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "model",
+                            "outcome",
+                            "human"
+                          ]
+                        },
+                        "text": {
+                          "type": "string",
+                          "maxLength": 10000
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "text"
+                      ]
+                    },
+                    "description": "The agent's complete set of model/outcome notes (at most 500, 2000 characters each): with id updates, without id adds, omitted removes. human notes are ignored and always kept."
+                  }
+                },
+                "required": [
+                  "version",
+                  "notes"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HermesMemoryUpdate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, expired or revoked token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The identity lacks the scope, or the resource is outside its tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body or report too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused by a guardrail, or content that looks like it holds identifiers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-identity rate limit exceeded; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -753,6 +1906,12 @@
               "alert:read": "alert:read",
               "alert:triage": "alert:triage",
               "alert:assign": "alert:assign",
+              "alert:tune": "alert:tune",
+              "tuning:read": "tuning:read",
+              "tuning:annotate": "tuning:annotate",
+              "tuning:act": "tuning:act",
+              "tuning:report": "tuning:report",
+              "tuning:memory": "tuning:memory",
               "incident:read": "incident:read",
               "incident:write": "incident:write",
               "incident:close": "incident:close",
@@ -1064,6 +2223,13 @@
                 "type": "null"
               }
             ]
+          },
+          "lane": {
+            "type": "string",
+            "enum": [
+              "active",
+              "passive"
+            ]
           }
         },
         "required": [
@@ -1082,7 +2248,8 @@
           "intelVerdict",
           "attackTechniques",
           "occurredAt",
-          "incidentId"
+          "incidentId",
+          "lane"
         ],
         "additionalProperties": false
       },
@@ -1235,6 +2402,196 @@
         },
         "required": [
           "error"
+        ],
+        "additionalProperties": false
+      },
+      "HermesMemory": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "model",
+                    "outcome",
+                    "human"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updatedAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "text",
+                "createdAt",
+                "updatedAt"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "version",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "HermesMemoryUpdate": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "changed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unchanged": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "version",
+          "added",
+          "removed",
+          "changed",
+          "unchanged"
+        ],
+        "additionalProperties": false
+      },
+      "HermesReport": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "markdown": {
+            "type": "string"
+          },
+          "stats": {
+            "type": "object",
+            "properties": {
+              "executed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "refused": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "dryRun": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "patternsReviewed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "executed",
+              "refused",
+              "dryRun",
+              "patternsReviewed"
+            ],
+            "additionalProperties": false
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "periodStart",
+          "periodEnd",
+          "markdown",
+          "stats",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "HermesReportCreated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "HermesReportList": {
+        "type": "object",
+        "properties": {
+          "reports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HermesReport"
+            }
+          }
+        },
+        "required": [
+          "reports"
         ],
         "additionalProperties": false
       },
@@ -1614,6 +2971,646 @@
           "token_type",
           "expires_in",
           "scope"
+        ],
+        "additionalProperties": false
+      },
+      "TuningActionList": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "annotate",
+                    "close",
+                    "noise_rule",
+                    "purge"
+                  ]
+                },
+                "patternId": {
+                  "type": "string"
+                },
+                "tenantRef": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "ruleId": {
+                  "type": "string"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "affected": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "undoneAt": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reopenedCount": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "applied",
+                    "undone"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "patternId",
+                "tenantRef",
+                "source",
+                "ruleId",
+                "createdAt",
+                "affected",
+                "undoneAt",
+                "reopenedCount",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "actions"
+        ],
+        "additionalProperties": false
+      },
+      "TuningAnnotationResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "actionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "actionId",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "TuningCloseResult": {
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "affected": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "reversibleUntil": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "actionId",
+          "affected",
+          "reversibleUntil"
+        ],
+        "additionalProperties": false
+      },
+      "TuningNoiseRuleResult": {
+        "type": "object",
+        "properties": {
+          "noiseRuleId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "actionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "movedToPassive": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "noiseRuleId",
+          "actionId",
+          "expiresAt",
+          "movedToPassive"
+        ],
+        "additionalProperties": false
+      },
+      "TuningPattern": {
+        "type": "object",
+        "properties": {
+          "patternId": {
+            "type": "string"
+          },
+          "tenantRef": {
+            "type": "string",
+            "description": "Stable pseudonym of the tenant; never its name or id"
+          },
+          "source": {
+            "type": "string"
+          },
+          "ruleId": {
+            "type": "string"
+          },
+          "ruleLevel": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Wazuh rule level, else the source's native severity; 0 when unknown"
+          },
+          "ruleGroups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mitre": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "severity": {
+            "type": "object",
+            "properties": {
+              "informational": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "low": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "medium": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "high": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "critical": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "informational",
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ],
+            "additionalProperties": false
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "byDay": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "description": "UTC days, oldest (partial) first, ending today; sums to total"
+              },
+              "byHourOfDay": {
+                "minItems": 24,
+                "maxItems": 24,
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "description": "UTC hours 0–23"
+              }
+            },
+            "required": [
+              "total",
+              "byDay",
+              "byHourOfDay"
+            ],
+            "additionalProperties": false
+          },
+          "distinctAssets": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "distinctUsers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "dispositions": {
+            "type": "object",
+            "properties": {
+              "d30": {
+                "type": "object",
+                "properties": {
+                  "falsePositive": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "resolved": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "escalated": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "ESCALATED or CONTAINED"
+                  },
+                  "open": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "passive": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "falsePositive",
+                  "resolved",
+                  "escalated",
+                  "open",
+                  "passive"
+                ],
+                "additionalProperties": false
+              },
+              "d90": {
+                "type": "object",
+                "properties": {
+                  "falsePositive": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "resolved": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "escalated": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "ESCALATED or CONTAINED"
+                  },
+                  "open": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "passive": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "falsePositive",
+                  "resolved",
+                  "escalated",
+                  "open",
+                  "passive"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "d30",
+              "d90"
+            ],
+            "additionalProperties": false
+          },
+          "incidentsOpened": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "analystOverrides": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Agent actions on this pattern analysts undid, plus alerts they reopened"
+          },
+          "medianMinutesToFirstTriage": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "firstSeen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastSeen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "noiseRule": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "hitCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "status",
+                  "expiresAt",
+                  "hitCount"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "annotations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "confidence": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "authorKind": {
+                  "type": "string",
+                  "enum": [
+                    "service",
+                    "user"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "confidence",
+                "createdAt",
+                "authorKind",
+                "text"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "patternId",
+          "tenantRef",
+          "source",
+          "ruleId",
+          "ruleLevel",
+          "ruleGroups",
+          "mitre",
+          "severity",
+          "counts",
+          "distinctAssets",
+          "distinctUsers",
+          "dispositions",
+          "incidentsOpened",
+          "analystOverrides",
+          "medianMinutesToFirstTriage",
+          "firstSeen",
+          "lastSeen",
+          "noiseRule",
+          "annotations"
+        ],
+        "additionalProperties": false
+      },
+      "TuningPatternList": {
+        "type": "object",
+        "properties": {
+          "windowDays": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "patterns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TuningPattern"
+            }
+          },
+          "fleet": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "ruleId": {
+                  "type": "string"
+                },
+                "tenantsAffected": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "coFiring": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string"
+                      },
+                      "ruleId": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "tenants": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "ruleId",
+                      "count",
+                      "tenants"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Rules firing in the same tenant in the same UTC hour: count of such tenant-hours, distinct tenants. Top 5."
+                }
+              },
+              "required": [
+                "source",
+                "ruleId",
+                "tenantsAffected",
+                "total",
+                "coFiring"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "windowDays",
+          "generatedAt",
+          "truncated",
+          "patterns",
+          "fleet"
+        ],
+        "additionalProperties": false
+      },
+      "TuningPurgeResult": {
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deleted": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "actionId",
+          "deleted"
         ],
         "additionalProperties": false
       }

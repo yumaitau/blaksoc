@@ -1,5 +1,5 @@
 "use client";
-import { FilePlus2, ShieldAlert, UserCheck } from "lucide-react";
+import { BellOff, FilePlus2, ShieldAlert, Undo2, UserCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ActionError, useAction } from "@/components/soc/use-action";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 import { Input, Label, Select, Textarea } from "@/components/ui/input";
 import { RESPONSE_ACTIONS, type ResponseActionKey } from "@/lib/soar/actions";
-import { assignAlertsToMe, createIncidentFromSelection, requestAlertResponse, setAlertStatus } from "../actions";
+import { assignAlertsToMe, createIncidentFromSelection, markAlertAsNoise, moveToActiveQueue, requestAlertResponse, setAlertStatus } from "../actions";
 
 type Props = {
   alertId: string;
@@ -51,6 +51,80 @@ export function AlertActions({ alertId, tenantId, status, statuses, assignedToMe
       </div>
       <ActionError error={error} />
     </div>
+  );
+}
+
+/** Passive → active queue; for the alert page and each row of the passive tab. */
+export function MoveToActiveButton({ ids, compact }: { ids: string[]; compact?: boolean }) {
+  const { pending, run } = useAction();
+  return (
+    <Button size="sm" variant="secondary" className={compact ? "h-7 px-2 text-xs" : undefined} disabled={pending} onClick={() => run(() => moveToActiveQueue(ids), undefined, { success: (n) => `${n ?? ids.length} alert${(n ?? ids.length) === 1 ? "" : "s"} moved to the active queue` })}>
+      <Undo2 /> Move to active queue
+    </Button>
+  );
+}
+
+/**
+ * "Mark as noise…": creates an active noise rule (this host or every host of the customer) that keeps matching
+ * alerts out of the queue until it expires. Nothing is closed; the alerts stay stored and searchable.
+ */
+export function MarkAsNoiseDialog({ alertId, ruleId, source, hostLabel, title }: { alertId: string; ruleId: string; source: string; hostLabel: string | null; title: string }) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<"host" | "tenant">(hostLabel ? "host" : "tenant");
+  const [reason, setReason] = useState("");
+  const [days, setDays] = useState(30);
+  const [pattern, setPattern] = useState("");
+  const { pending, error, run } = useAction();
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    run(
+      () => markAlertAsNoise({ alertId, scope, reason, expiresInDays: days, titlePattern: pattern || undefined }),
+      () => setOpen(false),
+      { success: (d) => `Noise rule created. ${d?.moved ?? 0} alert${d?.moved === 1 ? "" : "s"} moved to the passive lane.` },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline"><BellOff /> Mark as noise…</Button>
+      </DialogTrigger>
+      <DialogContent title="Mark as noise" description={`Alerts from ${source} rule ${ruleId} that match go to the passive lane: stored, searchable and on their asset, but out of the queue. Nothing is closed.`}>
+        <form className="space-y-3" onSubmit={submit}>
+          <fieldset className="space-y-1.5">
+            <legend className="text-xs font-medium text-muted">Applies to</legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" name="noise-scope" checked={scope === "host"} disabled={!hostLabel} onChange={() => setScope("host")} />
+              This host only{hostLabel ? <span className="text-muted">({hostLabel})</span> : <span className="text-faint">(host unknown)</span>}
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="radio" name="noise-scope" checked={scope === "tenant"} onChange={() => setScope("tenant")} />
+              Every host of this customer
+            </label>
+          </fieldset>
+          <div>
+            <Label htmlFor="noise-pattern">Title pattern (optional)</Label>
+            <Input id="noise-pattern" value={pattern} maxLength={200} onChange={(e) => setPattern(e.target.value)} placeholder={`e.g. ${title.split(" ").slice(0, 2).join(" ")}*  (blank: any title)`} />
+            <p className="mt-1 text-[11px] text-faint">Case-insensitive; * matches anything. Must match this alert&apos;s title.</p>
+          </div>
+          <div>
+            <Label htmlFor="noise-days">Expires after (days)</Label>
+            <Input id="noise-days" type="number" min={1} max={180} required value={days} onChange={(e) => setDays(Number(e.target.value))} />
+            <p className="mt-1 text-[11px] text-faint">Every noise rule expires: 30 days by default, 180 at most.</p>
+          </div>
+          <div>
+            <Label htmlFor="noise-reason">Reason (required, shown on every alert it affects and recorded in the audit log)</Label>
+            <Textarea id="noise-reason" required minLength={5} maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Nightly backup job's service account; confirmed with the customer" />
+          </div>
+          <p className="text-xs text-muted">Matching open alerts (new or triaging) move to the passive lane now. Alerts with a threat-intel match always stay in the queue.</p>
+          <ActionError error={error} />
+          <div className="flex justify-end">
+            <Button type="submit" disabled={pending}>Create noise rule</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

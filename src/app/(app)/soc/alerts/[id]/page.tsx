@@ -1,4 +1,4 @@
-import { Sparkles } from "lucide-react";
+import { BellOff, Bot, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { IntelMatch } from "@/db/schema";
@@ -12,10 +12,11 @@ import { requireAccess } from "@/lib/auth/session";
 import { alertHistory, alertProvenance } from "@/lib/services/alert-provenance";
 import { ALERT_STATUSES, getAlert } from "@/lib/services/alerts";
 import { entityLinks } from "@/lib/services/entities";
+import { annotationsForAlert, closingAction } from "@/lib/services/tuning";
 import { RESPONSE_ACTIONS, isResponseAction } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { fmtDateTime, timeAgo } from "@/lib/utils";
-import { AlertActions, RequestResponseDialog } from "./alert-actions";
+import { AlertActions, MarkAsNoiseDialog, MoveToActiveButton, RequestResponseDialog } from "./alert-actions";
 import { HistoryCard, ProvenanceCard } from "./provenance";
 
 export const metadata = { title: "Alert" };
@@ -29,11 +30,16 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
   const tenantId = a.tenantId;
   const canTriage = can(ctx, "alert:triage", tenantId);
   const matches = a.intel?.matches ?? [];
-  const [graph, provenance, history] = await Promise.all([
+  const [graph, provenance, history, hermesNotes, closedBy] = await Promise.all([
     entityLinks(ctx, tenantId, { alertId: a.id, userName: a.userName }),
     alertProvenance(ctx, a.id),
     alertHistory(ctx, a.id),
+    annotationsForAlert(ctx, a),
+    closingAction(ctx, a),
   ]);
+  const raw = a.raw as { agent?: { name?: unknown }; hostname?: unknown } | null;
+  const rawHost = typeof raw?.agent?.name === "string" ? raw.agent.name : typeof raw?.hostname === "string" ? raw.hostname : null;
+  const canTune = can(ctx, "alert:tune", tenantId) && a.lane === "active" && !!a.ruleId;
 
   return (
     <div className="space-y-5">
@@ -59,6 +65,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
             </div>
           </div>
           <div className="flex flex-wrap items-start gap-2">
+            {canTune ? <MarkAsNoiseDialog alertId={a.id} ruleId={a.ruleId!} source={a.source} hostLabel={asset?.name ?? rawHost} title={a.title} /> : null}
             {can(ctx, "ai:use", tenantId) ? (
               <Button asChild size="sm" variant="secondary">
                 <Link href={`/assistant?alert=${a.id}`}><Sparkles /> Ask AI analyst</Link>
@@ -106,6 +113,35 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
           />
         ) : null}
       </div>
+
+      {a.lane === "passive" ? (
+        <div role="note" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-surface-2 px-4 py-3 text-sm">
+          <div className="flex min-w-0 items-start gap-2">
+            <BellOff className="mt-0.5 size-4 shrink-0 text-muted" />
+            <div className="min-w-0">
+              <div className="font-medium">Passive lane: kept out of the triage queue</div>
+              <div className="text-xs text-muted">
+                {a.passiveReason ?? "Known noise."} Stored and searchable; not counted as work and never opens an incident on its own.
+                {a.noiseRuleId && can(ctx, "alert:tune", tenantId) ? <> · <Link href="/soc/tuning" className="text-accent hover:underline">Noise rule</Link></> : null}
+              </div>
+            </div>
+          </div>
+          {canTriage ? <MoveToActiveButton ids={[a.id]} /> : null}
+        </div>
+      ) : null}
+
+      {closedBy ? (
+        <div role="note" className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm">
+          <Bot className="mt-0.5 size-4 shrink-0 text-warn" />
+          <div>
+            <div className="font-medium">Closed as a false positive by Hermes (AI){closedBy.undoneAt ? ", since undone" : ""}</div>
+            <div className="text-xs text-muted">
+              {typeof closedBy.params.reason === "string" ? `“${closedBy.params.reason}” · ` : ""}{fmtDateTime(closedBy.createdAt)}
+              {!closedBy.undoneAt && can(ctx, "alert:tune", tenantId) ? <> · <Link href="/soc/hermes" className="text-accent hover:underline">Undo on the Hermes page</Link></> : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {a.description ? <p className="max-w-4xl whitespace-pre-wrap text-sm text-muted">{a.description}</p> : null}
 
@@ -209,6 +245,23 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
               </div>
             )}
           </Card>
+
+          {hermesNotes.length ? (
+            <Card>
+              <CardHeader><CardTitle>Hermes (AI) notes</CardTitle><span className="text-xs text-muted">On this rule, not this alert</span></CardHeader>
+              <div className="divide-y divide-border">
+                {hermesNotes.map((n) => (
+                  <div key={n.id} className="px-4 py-2.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider">
+                      <span className="font-semibold text-warn">Hermes (AI) note · interpretation</span>
+                      <span className="normal-case tracking-normal text-faint">{n.confidence} confidence · {timeAgo(n.createdAt)}</span>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">{n.text}</p>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
 
           {history ? <HistoryCard entries={history.entries} truncated={history.truncated} /> : null}
         </div>

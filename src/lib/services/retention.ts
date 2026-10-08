@@ -72,7 +72,7 @@ export async function purgeTenantAlerts(tenantId: string, now = new Date(), rete
  * Graph data for deleted alerts: their own nodes (edges cascade), and the evidence they gave other edges
  * (user → device). An edge left without evidence goes; one with evidence left points at its latest record.
  */
-async function removeAlertGraph(tx: Tx, tenantId: string, alertIds: string[]) {
+export async function removeAlertGraph(tx: Tx, tenantId: string, alertIds: string[]) {
   const touched = (
     await tx
       .delete(entityRelationshipEvidence)

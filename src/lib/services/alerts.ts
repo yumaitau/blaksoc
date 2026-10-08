@@ -22,6 +22,8 @@ export type AlertFilters = {
   category?: string;
   minRisk?: number;
   sinceHours?: number;
+  /** `active` is the triage queue, `passive` known noise; omitted means both. */
+  lane?: "active" | "passive";
   sort?: "risk" | "newest" | "oldest";
   limit?: number;
   offset?: number;
@@ -63,6 +65,7 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
       if (f.technique) where.push(sql`exists (select 1 from unnest(${alerts.attackTechniques}) t where t like ${`${f.technique}%`})`);
       if (f.category) where.push(eq(alerts.category, f.category));
       if (f.minRisk != null) where.push(gte(alerts.riskScore, f.minRisk));
+      if (f.lane) where.push(eq(alerts.lane, f.lane));
       if (f.sinceHours) where.push(gte(alerts.occurredAt, new Date(Date.now() - f.sinceHours * 3600_000)));
       const order = f.sort === "newest" ? [desc(alerts.occurredAt)] : f.sort === "oldest" ? [asc(alerts.occurredAt)] : [desc(alerts.riskScore), desc(alerts.occurredAt)];
 
@@ -91,6 +94,9 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
           assigneeId: alerts.assigneeId,
           assigneeName: user.name,
           incidentId: alerts.incidentId,
+          lane: alerts.lane,
+          passiveReason: alerts.passiveReason,
+          noiseRuleId: alerts.noiseRuleId,
         })
         .from(alerts)
         .innerJoin(tenants, eq(tenants.id, alerts.tenantId))
@@ -129,7 +135,7 @@ export async function getAlert(ctx: AccessContext, id: string) {
       .where(eq(alertObservables.alertId, id));
     const related = a.alert.assetId || a.alert.userName
       ? await tx
-          .select({ id: alerts.id, title: alerts.title, severity: alerts.severity, riskScore: alerts.riskScore, status: alerts.status, occurredAt: alerts.occurredAt })
+          .select({ id: alerts.id, title: alerts.title, severity: alerts.severity, riskScore: alerts.riskScore, status: alerts.status, lane: alerts.lane, occurredAt: alerts.occurredAt })
           .from(alerts)
           .where(and(
             eq(alerts.tenantId, a.alert.tenantId),

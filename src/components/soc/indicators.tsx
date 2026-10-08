@@ -28,8 +28,11 @@ export function riskTone(score: number) {
 }
 
 /** 0–100 risk with a bar. Factors are shown in a native tooltip; the detail page lists them in full. */
+/** "+6", "−10": risk points with their sign. */
+const signed = (n: number) => (n < 0 ? `−${-n}` : `+${n}`);
+
 export function RiskScore({ score, factors, className }: { score: number; factors?: RiskFactor[]; className?: string }) {
-  const title = factors?.length ? factors.map((f) => `+${f.points} ${f.label}: ${f.evidence}`).join("\n") : undefined;
+  const title = factors?.length ? factors.map((f) => `${signed(f.points)} ${f.label}: ${f.evidence}`).join("\n") : undefined;
   return (
     <span className={cn("inline-flex items-center gap-2", className)} title={title}>
       <span className={cn("num w-7 text-right text-sm font-semibold", riskTone(score))}>{score}</span>
@@ -46,7 +49,7 @@ export function RiskFactors({ factors, total }: { factors: RiskFactor[]; total: 
     <div className="space-y-1.5">
       {factors.map((f) => (
         <div key={f.key} className="flex items-start gap-3 text-sm">
-          <span className="num w-9 shrink-0 text-right font-semibold text-accent">+{f.points}</span>
+          <span className={cn("num w-9 shrink-0 text-right font-semibold", f.points < 0 ? "text-ok" : "text-accent")}>{signed(f.points)}</span>
           <div className="min-w-0">
             <div className="font-medium">{f.label}</div>
             <div className="text-xs text-muted">

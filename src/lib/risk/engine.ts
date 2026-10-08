@@ -1,5 +1,6 @@
 import type { RiskFactor } from "@/db/schema";
 import type { IntelContext } from "@/db/schema";
+import { dispositionFactors, type DispositionStats } from "@/lib/tuning/disposition";
 
 /**
  * blakSOC risk engine. Deterministic and additive: every point in the 0–100 score is
@@ -19,6 +20,8 @@ export type AlertRiskInput = {
   cves: { cve: string; kev: boolean; epss: number | null }[];
   /** Tenant currently has an open incident touching the same asset. */
   openIncidentOnAsset: boolean;
+  /** Analysts' past decisions on this rule (disposition memory). Omitted when the alert has no rule id. */
+  disposition?: DispositionStats | null;
 };
 
 const SEVERITY_POINTS = { informational: 2, low: 8, medium: 16, high: 24, critical: 30 } as const;
@@ -109,6 +112,8 @@ export function scoreAlert(input: AlertRiskInput): { score: number; factors: Ris
   if (input.openIncidentOnAsset) {
     push({ key: "active_incident", label: "Asset in active incident", points: 5, evidence: "Affected asset is part of an open incident" });
   }
+  // The only factor that subtracts: a rule analysts keep closing as a false positive.
+  for (const f of dispositionFactors(input.disposition ?? null)) push(f);
 
   const raw = factors.reduce((s, f) => s + f.points, 0);
   return { score: Math.max(0, Math.min(100, raw)), factors: factors.sort((a, b) => b.points - a.points) };

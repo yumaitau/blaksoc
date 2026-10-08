@@ -1,0 +1,99 @@
+{{- if .Values.hermes.enabled }}
+{{- $h := .Values.hermes }}
+{{- include "blaksoc.assertAuRegion" (dict "what" "hermes.model.region" "region" $h.model.region) }}
+{{- $profile := index (splitList "." $h.model.id) 0 }}
+{{- if has $profile (list "us" "us-gov" "eu" "apac" "global" "jp" "ca" "uk") }}
+{{- fail (printf "hermes.model.id must be an Australian (au.) inference profile or an in-region model, got %q" $h.model.id) }}
+{{- end }}
+{{- range $kind, $max := dict "close" 10 "noiseRules" 5 "purge" 10 "annotations" 50 }}
+{{- if gt (int (index $h.caps $kind)) $max }}{{ fail (printf "hermes.caps.%s may not exceed %d" $kind $max) }}{{ end }}
+{{- end }}
+{{- if $h.serviceAccount.create }}
+# Hermes runs as its own account. Bind it with EKS Pod Identity to a role that may only invoke the
+# configured Bedrock model (deploy/aws/README.md). It holds no Kubernetes RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "blaksoc.hermesServiceAccountName" . }}
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hermes
+  {{- with $h.serviceAccount.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+{{- end }}
+# Weekly noise review. The controller (hermes/warden) fetches anonymised patterns, runs one Hermes agent
+# with only its memory tool and the blakSOC tuning toolset, and submits the report. Exits non-zero on
+# failure; never retried, because a retry could repeat actions.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "blaksoc.hermesName" . }}
+  labels: {{- include "blaksoc.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hermes
+spec:
+  schedule: {{ $h.schedule | quote }}
+  timeZone: {{ $h.timeZone | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ $h.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: {{ $h.backoffLimit }}
+      activeDeadlineSeconds: {{ $h.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels: {{- include "blaksoc.labels" . | nindent 12 }}
+            app.kubernetes.io/component: hermes
+        spec:
+          restartPolicy: Never
+          serviceAccountName: {{ include "blaksoc.hermesServiceAccountName" . }}
+          # EKS Pod Identity projects its own token; the Kubernetes API token is not needed.
+          automountServiceAccountToken: false
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext: {{- toYaml $h.podSecurityContext | nindent 12 }}
+          containers:
+            - name: hermes
+              image: {{ include "blaksoc.hermesImage" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              env:
+                - { name: BLAKSOC_API_URL, value: {{ include "blaksoc.hermesApiUrl" . | quote }} }
+                # Only this key of the runtime Secret reaches Hermes.
+                - name: HERMES_BLAKSOC_TOKEN
+                  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: {{ $h.tokenSecretKey }} } }
+                - { name: HERMES_DRY_RUN, value: {{ ternary "true" "false" (ne (toString $h.dryRun) "false") | quote }} }
+                - { name: HERMES_MODEL, value: {{ $h.model.id | quote }} }
+                - { name: HERMES_BEDROCK_REGION, value: {{ $h.model.region | quote }} }
+                - { name: AWS_REGION, value: {{ $h.model.region | quote }} }
+                - { name: AWS_DEFAULT_REGION, value: {{ $h.model.region | quote }} }
+                - { name: AWS_EC2_METADATA_DISABLED, value: "true" }
+                - { name: HERMES_MAX_TURNS, value: {{ $h.model.maxTurns | quote }} }
+                - { name: HERMES_MAX_TOKENS, value: {{ $h.model.maxTokens | quote }} }
+                - { name: HERMES_MAX_OUTPUT_TOKENS, value: {{ $h.model.maxOutputTokens | quote }} }
+                - { name: HERMES_RUN_SECONDS, value: {{ $h.model.runSeconds | quote }} }
+                - { name: HERMES_PATTERN_DAYS, value: {{ $h.patternDays | quote }} }
+                - { name: HERMES_OUTCOME_LOOKBACK_DAYS, value: {{ $h.outcomeLookbackDays | quote }} }
+                - { name: HERMES_CAP_CLOSE, value: {{ $h.caps.close | quote }} }
+                - { name: HERMES_CAP_NOISE_RULES, value: {{ $h.caps.noiseRules | quote }} }
+                - { name: HERMES_CAP_PURGE, value: {{ $h.caps.purge | quote }} }
+                - { name: HERMES_CAP_ANNOTATIONS, value: {{ $h.caps.annotations | quote }} }
+                - { name: HERMES_HOME, value: /hermes-home }
+                - { name: HOME, value: /hermes-home }
+              resources: {{- toYaml $h.resources | nindent 16 }}
+              securityContext: {{- toYaml .Values.securityContext | nindent 16 }}
+              # Hermes state lives for one run; durable memory is stored in blakSOC.
+              volumeMounts: [{ name: hermes-home, mountPath: /hermes-home }, { name: tmp, mountPath: /tmp }]
+          volumes:
+            - { name: hermes-home, emptyDir: { sizeLimit: 256Mi } }
+            - { name: tmp, emptyDir: { sizeLimit: 256Mi } }
+          {{- with .Values.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations: {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

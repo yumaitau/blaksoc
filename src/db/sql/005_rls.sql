@@ -152,7 +152,8 @@ DECLARE
     'entity_aliases',
     'entity_relationships',
     'entity_relationship_evidence',
-    'correlation_findings','correlation_rule_settings','correlation_cursors','incident_group_exclusions'
+    'correlation_findings','correlation_rule_settings','correlation_cursors','incident_group_exclusions',
+    'noise_rules','tuning_patterns','tuning_actions','pattern_annotations'
   ];
   -- tenant_id NULL means a global/platform row.
   shared_tables text[] := ARRAY['sigma_rules','sigma_rule_versions','sigma_rule_tests','playbooks'];
@@ -198,6 +199,19 @@ BEGIN
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', t);
     EXECUTE format(
       'CREATE POLICY tenant_isolation ON %I USING ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id))) WITH CHECK ((tenant_id IS NULL AND app_is_platform()) OR (tenant_id IS NOT NULL AND app_can_touch(tenant_id)))', t);
+  END LOOP;
+END $$;
+
+-- Platform-level tuning data (no tenant): the Hermes switch, its reports and memory. Platform staff and
+-- platform service identities only; the worker reads through blaksoc_system.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['platform_settings', 'hermes_reports', 'hermes_memory_notes'] LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS platform_only ON %I', t);
+    EXECUTE format('CREATE POLICY platform_only ON %I USING (app_is_platform()) WITH CHECK (app_is_platform())', t);
   END LOOP;
 END $$;
 

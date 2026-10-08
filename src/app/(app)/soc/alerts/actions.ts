@@ -6,6 +6,7 @@ import { ALERT_STATUSES, saveView, updateAlerts } from "@/lib/services/alerts";
 import { addAlertsToIncident, createIncidentFromAlerts } from "@/lib/services/incidents";
 import { RESPONSE_ACTIONS, type ResponseActionKey } from "@/lib/soar/actions";
 import { requestFromUser } from "@/lib/soar/response";
+import { markAsNoise, moveAlertsToActive } from "@/lib/services/tuning";
 
 const alertIds = z.array(z.guid()).min(1).max(500);
 const status = z.enum(ALERT_STATUSES);
@@ -89,5 +90,32 @@ export async function requestAlertResponse(input: z.input<typeof responseInput>)
     revalidatePath(`/soc/alerts/${v.alertId}`);
     revalidatePath("/soc/approvals");
     return { needsApproval: res.needsApproval };
+  });
+}
+
+const noiseInput = z.object({
+  alertId: z.guid(),
+  scope: z.enum(["host", "tenant"]),
+  reason: z.string().trim().min(5).max(1000),
+  expiresInDays: z.number().int().min(1).max(180),
+  titlePattern: z.string().trim().max(200).optional(),
+});
+
+/** "Mark as noise…": an active noise rule from this alert. Needs alert:tune; audited as noise_rule.create. */
+export async function markAlertAsNoise(input: z.input<typeof noiseInput>) {
+  return withAccess(async (ctx) => {
+    const v = noiseInput.parse(input);
+    const res = await markAsNoise(ctx, v.alertId, { scope: v.scope, reason: v.reason, expiresInDays: v.expiresInDays, titlePattern: v.titlePattern || null });
+    refresh([v.alertId]);
+    revalidatePath("/soc/tuning");
+    return res;
+  });
+}
+
+export async function moveToActiveQueue(ids: string[]) {
+  return withAccess(async (ctx) => {
+    const n = await moveAlertsToActive(ctx, alertIds.parse(ids));
+    refresh(ids);
+    return n;
   });
 }

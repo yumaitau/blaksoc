@@ -163,6 +163,23 @@ const DESCRIBE: Record<string, Describer> = {
   "alert.update": alertUpdate,
   "correlation.finding": ({ d }) => `Correlation rule${str(d.ruleId) ? ` ${str(d.ruleId)}` : ""} raised an alert${howMany(d.eventIds) ? ` from ${count(howMany(d.eventIds)!, "event")}` : ""}`,
   "correlation.rule_toggle": ({ d }) => `${onOff(d.enabled, "Enabled", "Disabled")} a correlation rule`,
+  "alert.lane": ({ d }) => (d.lane === "active" ? "Moved the alert back to the active queue" : "Moved the alert to the passive lane"),
+
+  // Noise tuning and the Hermes tuning agent
+  "noise_rule.create": ({ d }) => `Created a noise rule${str(d.scope) ? ` for ${str(d.scope, 120)}` : ""}${howMany(d.alertIds) ? `; ${count(howMany(d.alertIds)!, "open alert")} moved to the passive lane` : ""}`,
+  "noise_rule.approve": ({ d }) => `Approved a proposed noise rule${howMany(d.alertIds) ? `; ${count(howMany(d.alertIds)!, "open alert")} moved to the passive lane` : ""}`,
+  "noise_rule.reject": "Rejected a proposed noise rule",
+  "noise_rule.expire": "Expired a noise rule",
+  "noise_rule.extend": ({ d }) => `Extended a noise rule${str(d.to) ? ` to ${str(d.to)!.slice(0, 10)}` : ""}`,
+  "tuning.switch": ({ d }) => `${onOff(d.enabled, "Allowed", "Stopped")} Hermes ${d.enabled === false ? "from acting" : "to act"}`,
+  "tuning.annotate": "Hermes annotated an alert pattern",
+  "tuning.close": ({ d }) => `Hermes closed ${typeof d.affected === "number" ? count(d.affected, "alert") : "alerts"} as false positives`,
+  "tuning.purge": ({ d }) => `Hermes purged ${typeof d.deleted === "number" ? count(d.deleted, "closed alert") : "closed alerts"} past the undo window`,
+  "tuning.undo": ({ d }) => `Undid a Hermes ${d.kind === "noise_rule" ? "noise rule" : "closure"}${typeof d.restored === "number" ? ` (${count(d.restored, "alert")} restored)` : ""}`,
+  "tuning.report": "Hermes posted a run report",
+  "tuning.memory": ({ d }) => `Hermes updated its memory (${[d.added, d.changed, d.removed].every((n) => typeof n === "number") ? `${d.added} added, ${d.changed} changed, ${d.removed} removed` : "changes"})`,
+  "tuning.memory_note_add": "Added a note to Hermes' memory",
+  "tuning.memory_note_delete": "Deleted a note from Hermes' memory",
   "incident.create": ({ d }) => `Opened an incident${howMany(d.alertIds) ? ` from ${count(howMany(d.alertIds)!, "alert")}` : ""}`,
   "incident.update": incidentUpdate,
   "incident.auto_group": ({ d }) => `Grouped ${howMany(d.alertIds) ? count(howMany(d.alertIds)!, "alert") : "alerts"} into the incident automatically${str(d.reason) ? `: ${str(d.reason)}` : ""}`,
@@ -271,6 +288,10 @@ export function auditTargetHref(targetType: string | null | undefined, targetId:
     case "playbook_run": return `/soar/runs/${id}`;
     case "report": return `/reports/${id}`;
     case "sigma_rule": return `/detections/rules/${id}`;
+    case "noise_rule": return "/soc/tuning";
+    case "tuning_action":
+    case "hermes_report":
+    case "hermes_memory": return "/soc/hermes";
     case "tenant": return `/soc/alerts?tenant=${id}`;
     // No per-user page: show everything that happened to this person instead.
     case "user": return `/admin/audit?targetType=user&targetId=${id}`;

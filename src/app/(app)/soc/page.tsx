@@ -5,7 +5,7 @@ import { ToolCards } from "@/components/soc/tool-cards";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAccess } from "@/lib/auth/session";
-import { socDashboard } from "@/lib/services/dashboard";
+import { fatigueMetrics, socDashboard } from "@/lib/services/dashboard";
 import { socTools } from "@/lib/services/soc-tools";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
@@ -21,7 +21,7 @@ export default async function SocDashboard() {
   const ctx = await requireAccess();
   if (!ctx.isPlatform) redirect("/portal");
   const ws = await currentWorkspace(ctx);
-  const [d, tools] = await Promise.all([socDashboard(ctx, ws.tenantIds), socTools(ctx)]);
+  const [d, tools, fatigue] = await Promise.all([socDashboard(ctx, ws.tenantIds), socTools(ctx), fatigueMetrics(ctx, ws.tenantIds)]);
   const scope = ws.tenant ? ws.tenant.name : "all customers";
 
   return (
@@ -39,6 +39,8 @@ export default async function SocDashboard() {
         <StatLink label="Active incidents" value={d.activeIncidents.length} href="/soc/incidents" hint="Work cases" />
         <StatLink label="Pending approvals" value={d.pendingApprovals} href="/soc/approvals" tone={d.pendingApprovals ? "warn" : "ok"} hint="Decide" />
       </section>
+
+      <FatigueCard f={fatigue} />
 
       <section className="grid gap-5 xl:grid-cols-3">
         {/* What should we investigate? */}
@@ -244,5 +246,58 @@ export default async function SocDashboard() {
         </Card>
       </section>
     </div>
+  );
+}
+
+const pct = (x: number | null) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+
+function duration(seconds: number | null): string {
+  if (seconds == null) return "—";
+  if (seconds < 90) return `${Math.round(seconds)}s`;
+  if (seconds < 90 * 60) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 48 * 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  return `${(seconds / 86400).toFixed(1)}d`;
+}
+
+/** Is the queue humane? Volume, how much known noise was kept out, what waits, how fast people act, how often closures were noise. */
+function FatigueCard({ f }: { f: Awaited<ReturnType<typeof fatigueMetrics>> }) {
+  const stats: [string, string, string, string?][] = [
+    ["Alerts stored", f.stored.toLocaleString("en-AU"), "/soc/alerts?sort=newest"],
+    ["Kept out as noise", pct(f.passiveShare), "/soc/alerts?lane=passive", `${f.passive.toLocaleString("en-AU")} passive`],
+    ["Awaiting triage", f.awaiting.toLocaleString("en-AU"), "/soc/alerts?status=NEW"],
+    ["Median time to first triage", duration(f.medianSecondsToFirstTriage), "/soc/alerts?status=NEW", "from storage to first analyst action"],
+    ["False-positive rate", pct(f.falsePositiveRate), "/soc/alerts?status=FALSE_POSITIVE", `of ${f.closed.toLocaleString("en-AU")} closed`],
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Alert fatigue ({f.days} days)</CardTitle>
+        <Link href="/soc/tuning" className="text-xs text-accent hover:underline">Noise tuning →</Link>
+      </CardHeader>
+      <CardContent className="grid gap-4 lg:grid-cols-[1fr_minmax(0,22rem)]">
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          {stats.map(([label, value, href, hint]) => (
+            <Link key={label} href={href} className="rounded-md border border-border px-3 py-2 hover:bg-surface-2/60">
+              <dt className="text-[11px] uppercase tracking-wider text-faint">{label}</dt>
+              <dd className="num mt-1 text-lg font-semibold">{value}</dd>
+              {hint ? <dd className="text-[11px] text-muted">{hint}</dd> : null}
+            </Link>
+          ))}
+        </dl>
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-faint">Top noise rules by hits</div>
+          {f.topRules.length === 0 ? <p className="mt-1 text-sm text-muted">No alerts kept out as noise.</p> : (
+            <ul className="mt-1 space-y-1">
+              {f.topRules.map((r) => (
+                <li key={r.id} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="min-w-0 truncate" title={r.reason}><span className="text-muted">{r.tenantName} · {r.source}</span> <span className="font-mono">{r.ruleId}</span> · {r.reason}</span>
+                  <span className="num shrink-0 font-semibold">{r.hits}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

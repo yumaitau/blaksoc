@@ -109,6 +109,17 @@ jobs:
             echo "::endgroup::"
           done
 
+  # Hermes controller and toolset (hermes/): standard library only, so no install step.
+  hermes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit tests (mocked blakSOC tuning API)
+        run: python3 -m unittest discover -s hermes/tests -t hermes -v
+
   image:
     name: image (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -116,7 +127,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [web, worker]
+        include:
+          - { target: web, file: Dockerfile, user: "100:101" }
+          - { target: worker, file: Dockerfile, user: "100:101" }
+          - { target: hermes, file: hermes/Dockerfile, user: "10000:10000" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -126,6 +140,7 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          file: ${{ matrix.file }}
           target: ${{ matrix.target }}
           push: false
           load: true
@@ -133,10 +148,18 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=${{ matrix.target }}
       - name: Image runs as the numeric non-root user the chart expects
+        env:
+          EXPECTED_USER: ${{ matrix.user }}
         run: |
           user="$(docker image inspect --format '{{.Config.User}}' "blaksoc-${{ matrix.target }}:ci")"
           echo "image user: ${user}"
-          [ "$user" = "100:101" ]
+          [ "$user" = "$EXPECTED_USER" ]
+      - name: Hermes image refuses to start without configuration
+        if: matrix.target == 'hermes'
+        run: |
+          set +e
+          docker run --rm --network none --read-only blaksoc-hermes:ci
+          [ "$?" = "2" ]
       - name: Web image ships public/ (service worker, PWA icons)
         if: matrix.target == 'web'
         run: docker run --rm --entrypoint test blaksoc-web:ci -f public/sw.js

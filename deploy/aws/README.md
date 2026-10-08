@@ -16,7 +16,7 @@ outside AWS ──agents──► NLB agents.soc.yumait.au ┘
 | Resource | Name | Notes |
 | --- | --- | --- |
 | EKS release | `blaksoc` in namespace `blaksoc` | Chart `deploy/helm/blaksoc`, values `values-yumait-prod.yaml` |
-| Images | ECR `blaksoc-web`, `blaksoc-worker` | Immutable tags = 12-character main commit. amd64. |
+| Images | ECR `blaksoc-web`, `blaksoc-worker`, `blaksoc-hermes` | Immutable tags = 12-character main commit, the same tag for all three. amd64. |
 | Database | RDS `blaksoc-eks-postgres` | PostgreSQL 16, `db.t4g.small`, encrypted, 7-day backups, deletion protection |
 | Queue and events | ElastiCache `blaksoc-eks-cache` | Redis 7, TLS, `maxmemory-policy noeviction` for BullMQ |
 | Runtime env | Secrets Manager `blaksoc-eks-runtime` | Synced to `blaksoc/blaksoc-runtime` by External Secrets |
@@ -27,6 +27,7 @@ outside AWS ──agents──► NLB agents.soc.yumait.au ┘
 | OpenCTI | EC2 `threatsieve-opencti-production` (ThreatSieve) | OpenCTI 7. Published on its private address, port 8080; its security group admits port 8080 from the EKS cluster SG only |
 | Host credentials | `blaksoc-wazuh-credentials` | Indexer, API, dashboard and enrolment passwords, plus blakSOC's own API and indexer users. Read by the Wazuh host's role |
 | OpenCTI token | `blaksoc-opencti-service-token` | blakSOC service account in OpenCTI's Connectors group (not admin). Expires after 365 days |
+| Hermes model access | IAM role `blaksoc-eks-hermes` (to create) | Bedrock invoke on the AU Sonnet 4.5 inference profile only, through EKS Pod Identity on service account `blaksoc/blaksoc-hermes`. See [Hermes](#hermes-in-cluster-agent) |
 | Backups | S3 `coolify-yumabackups` (shared, ap-southeast-2) | blakSOC writes only under `blaksoc/`: nightly `pg_dump` to `blaksoc/postgres/`, cold syslog to `blaksoc/archive/`. IAM role `blaksoc-eks-storage` (inline policy `blaksoc-backups-prefix`) through EKS Pod Identity on service account `blaksoc/blaksoc` |
 | Wazuh dashboard | `https://wazuh.yumait.au` | Cloudflare Tunnel `blaksoc-wazuh` (cloudflared on the Wazuh host, outbound only) behind Cloudflare Access: `yumait.com.au` Google identities, 12-hour session |
 | Dashboard users | `blaksoc-wazuh-dashboard-users` | Personal Wazuh dashboard logins. `admin` (`INDEXER_PASSWORD` in `blaksoc-wazuh-credentials`) is the fallback |
@@ -56,7 +57,19 @@ reserved for the break-glass administrator (`BREAK_GLASS_*` in `blaksoc-eks-boot
 
 ## Deploy a new version
 
-1. Merge to main. Build both targets for `linux/amd64` and push with the main commit as the tag.
+1. Merge to main. Build the three images for `linux/amd64` and push with the main commit as the tag:
+
+   ```bash
+   sha=$(git rev-parse --short=12 HEAD)
+   ecr=959038055523.dkr.ecr.ap-southeast-2.amazonaws.com
+   for target in web worker; do
+     docker --context homelab buildx build --builder homelab --platform linux/amd64 --target "$target" \
+       -t "$ecr/blaksoc-$target:$sha" --push .
+   done
+   docker --context homelab buildx build --builder homelab --platform linux/amd64 -f hermes/Dockerfile \
+     -t "$ecr/blaksoc-hermes:$sha" --push .
+   ```
+
 2. Install or upgrade:
 
    ```bash
@@ -93,6 +106,172 @@ Backups connect as `blaksoc_backup`, a read-only role that bypasses RLS so the d
 master cannot bypass FORCE RLS). It logs in only when the migration job has `BLAKSOC_BACKUP_DB_PASSWORD`; the
 CronJob reads `DATABASE_BACKUP_URL` (`backup.databaseUrlKey`), built the same way as `DATABASE_SYSTEM_URL`. Both
 keys are in `blaksoc-eks-bootstrap` and `blaksoc-eks-runtime`.
+
+## Hermes (in-cluster agent)
+
+Hermes is blakSOC's alert-noise analyst. A CronJob (`blaksoc-blaksoc-hermes`, Mondays 09:30 Sydney time) runs
+one container from ECR `blaksoc-hermes`: the official Hermes Agent image (v0.20.5, pinned by digest in
+`hermes/Dockerfile`) plus a deterministic controller and the blakSOC tuning toolset (`hermes/warden`). It ships
+**off** in `values.yaml` and **on, in dry-run**, in `values-yumait-prod.yaml`.
+
+### What it reads
+
+Only blakSOC's tuning API, inside the cluster (`http://blaksoc-blaksoc-web.blaksoc.svc:80`): anonymised alert
+patterns for the last 7 days (counts, rule ids and groups, MITRE ids, severity and disposition distributions,
+fleet co-firing), its own past actions with their outcomes, its memory notes and earlier reports. Never alert
+titles, raw events, hostnames, usernames, IP or email addresses or customer names. blakSOC enforces that
+server-side; the controller also:
+
+- aborts the run, before any model call, if a response contains a key such as `title`, `hostname`, `username`,
+  `ip`, `email` or `description` (any spelling, any depth), or an email or IP address in a kept value. The log
+  line names the keys, never the values;
+- keeps only allowlisted fields (`hermes/warden/api.py`) and logs dropped field names;
+- drops analysts' annotation text and redacts identifier-shaped text everywhere else (blakSOC refusal
+  messages, memory notes, the report), and rejects any action reason or report that contains one.
+
+### Tools and guardrails
+
+Hermes runs with every default toolset off (no terminal, browser, web, file, code execution, delegation or
+cron) and Hermes' tool-search bridge, plugins and lazy installs disabled. It has exactly two toolsets, and the
+controller refuses to start the run if the agent reports any other tool:
+
+- its built-in `memory` tool;
+- `blaksoc_tuning`, registered in-process into Hermes' tool registry: `get_patterns`, `get_past_actions`,
+  `annotate_pattern`, `close_pattern_alerts`, `create_noise_rule`, `purge_pattern_noise`,
+  `submit_weekly_report`. Reads return the controller's sanitised snapshot; Hermes cannot choose what is
+  fetched.
+
+Every write passes local guardrails first, whatever the model says (`hermes/warden/policy.py`): the pattern
+must be in this run's data; no pattern with any high or critical alert; no pattern with analyst overrides;
+no close on a pattern escalated or with an incident in the last 30 days; no close, noise rule or purge on a
+pattern whose earlier Hermes action analysts undid or reopened; a reason of 10–500 characters (annotations
+1,000) with no identifiers; noise rules 1–30 days; one action of each kind per pattern per run; and per-run caps of at most
+10 closes, 5 noise rules, 10 purges and 50 annotations (`hermes.caps`, which can only be lowered). Every
+attempt is recorded as executed, dry-run, refused by blakSOC, held back by a guardrail, or failed (outcome
+unknown; writes are never retried after an ambiguous failure). The run is bounded by `hermes.model.maxTurns`
+model calls, `maxTokens` tokens, `runSeconds` of wall clock and the Job's `activeDeadlineSeconds`, and is
+never retried (`backoffLimit: 0`) so actions cannot repeat.
+
+### Dry-run and the blakSOC switch
+
+Two independent locks must both be open before Hermes changes anything:
+
+1. `hermes.dryRun` (default `true`): Hermes records what it would do and calls no write endpoint
+   (annotations included). Memory and the weekly report are still saved.
+2. blakSOC's **Allow Hermes to act** switch: while it is off every write answers 409. Hermes then treats the
+   rest of the run as dry-run and says so at the top of the report.
+
+To start acting, review a few dry-run reports on the Hermes page, set `hermes.dryRun: false` in
+`values-yumait-prod.yaml`, upgrade, and turn the switch on in blakSOC. Turning the switch off stops writes
+immediately, without a deploy.
+
+### Memory and the weekly report
+
+Memory lives in blakSOC's database (`GET`/`PUT /api/v1/tuning/memory`, versioned), not on a volume. At the
+start of a run the controller writes the notes into Hermes' memory file (an `emptyDir`); at the end it reads
+them back, redacts identifiers, de-duplicates, caps them (40 notes, 6,000 characters) and saves them with the
+version it read (a concurrent edit in blakSOC is merged and retried once). Actions analysts undid or reopened
+become `[outcome]` lessons written by the controller, not the model; Hermes cannot remove them, they block
+further closes on that pattern, and they expire after 180 days.
+
+The report (`POST /api/v1/tuning/reports`) contains Hermes' sections (what was noisy, what it did, what it
+held back, analyst feedback, Wazuh rule tuning recommendations by rule id) and the controller's own table
+of every attempted action with counts of executed, dry-run, refused, held back and failed. A report is
+submitted even when the model fails, and the Job then exits non-zero with one `run_failed` log line. Exit
+codes: 2 configuration, 3 prohibited fields in a blakSOC response, 4 blakSOC API, 5 model run.
+
+### Model and residency
+
+Amazon Bedrock in `ap-southeast-2` through the Australian cross-region inference profile
+`au.anthropic.claude-sonnet-4-5-20250929-v1:0`, which keeps inference in Sydney and Melbourne
+(`hermes.model.id`, `hermes.model.region`). Rendering fails for a non-AU profile (`us.`, `eu.`, `apac.`,
+`global.` …) or a region outside `ap-southeast-2`/`ap-southeast-4`; the controller checks the same at start.
+Credentials come only from EKS Pod Identity: no AWS keys exist in the Secret or the pod.
+
+To switch to `au.anthropic.claude-opus-5-5` once AWS enables it for this account (it currently answers
+AccessDenied): add its inference-profile ARN and the matching `anthropic.claude-opus-5-5…` foundation-model
+ARNs in both regions to the policy below, then set `hermes.model.id` in `values-yumait-prod.yaml` and upgrade.
+
+### IAM role and Pod Identity
+
+Create role `blaksoc-eks-hermes` with the Pod Identity trust policy (principal `pods.eks.amazonaws.com`,
+actions `sts:AssumeRole` and `sts:TagSession`) and this inline policy, `blaksoc-hermes-bedrock`. Converse and
+ConverseStream are authorised by `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`; there are
+no separate IAM actions for them.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "InvokeAuSonnetProfile",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": "arn:aws:bedrock:ap-southeast-2:959038055523:inference-profile/au.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    },
+    {
+      "Sid": "InvokeSonnetOnlyThroughTheAuProfile",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:ap-southeast-2::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:ap-southeast-4::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "bedrock:InferenceProfileArn": "arn:aws:bedrock:ap-southeast-2:959038055523:inference-profile/au.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        }
+      }
+    }
+  ]
+}
+```
+
+Then associate it with the service account the chart creates:
+
+```bash
+aws eks create-pod-identity-association --cluster-name yumait-prod --region ap-southeast-2 \
+  --namespace blaksoc --service-account blaksoc-hermes \
+  --role-arn arn:aws:iam::959038055523:role/blaksoc-eks-hermes
+```
+
+The pod's network policy (rendered when `networkPolicy.enabled`) allows only DNS, the web pods on 3000, the
+Pod Identity agent (`169.254.170.23:80`) and public HTTPS for Bedrock. With a `bedrock-runtime` VPC interface
+endpoint, set `hermes.networkPolicy.bedrockPublicHttps: false` and list its subnets' CIDRs in
+`hermes.networkPolicy.bedrockCidrs`.
+
+### blakSOC credential
+
+1. In blakSOC, **Admin → API clients** (Service identities), create a platform identity (no tenant) named
+   `hermes` with scopes `tuning:read`, `tuning:annotate`, `tuning:act`, `tuning:report` and `tuning:memory`,
+   and copy the client ID and secret (shown once).
+2. Add `HERMES_BLAKSOC_TOKEN` to Secrets Manager `blaksoc-eks-runtime` as `<client id>:<client secret>`. The
+   controller exchanges it at `/api/v1/oauth/token` (client credentials) at the start of each run, because
+   access tokens last 15 minutes. A bearer access token (`bsa_…`) also works, for a manual run inside its
+   lifetime. External Secrets syncs the key into `blaksoc-runtime`; only the Hermes pod mounts it (web and
+   worker do not list it in `runtimeSecretKeys`).
+3. Rotate by rotating the identity's secret in blakSOC and updating the key; revoke the identity to stop
+   Hermes at once.
+
+### Build, check and run manually
+
+Build and push with the other images (see [Deploy a new version](#deploy-a-new-version)). Tests:
+`python3 -m unittest discover -s hermes/tests -t hermes` (standard library only; CI job `hermes`) and
+`pnpm test` for the chart. After bumping the Hermes base digest, confirm the tool surface offline: build the
+image and check that an agent constructed with the `memory` and `blaksoc_tuning` toolsets lists exactly
+`memory` and the seven tuning tools (the controller refuses to run otherwise).
+
+```bash
+ctx=arn:aws:eks:ap-southeast-2:959038055523:cluster/yumait-prod
+kubectl --context $ctx -n blaksoc create job hermes-manual-$(date +%Y%m%d%H%M) --from=cronjob/blaksoc-blaksoc-hermes
+kubectl --context $ctx -n blaksoc logs -f job/hermes-manual-<suffix>
+kubectl --context $ctx -n blaksoc get cronjob blaksoc-blaksoc-hermes   # last schedule and active jobs
+```
+
+A manual run takes the same guards, caps and dry-run setting as the scheduled one; with the Monday run still
+active it is not blocked by `concurrencyPolicy`, so avoid overlapping them. Suspend the schedule with
+`kubectl patch cronjob blaksoc-blaksoc-hermes -p '{"spec":{"suspend":true}}'` (the next upgrade resets it), or
+set `hermes.enabled: false`.
 
 ## Data plane hosts
 
@@ -194,4 +373,7 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
   enforcement on, set `networkPolicy.dataStoresInCluster: false`, add the VPC range to
   `networkPolicy.egressCidrs` for RDS, ElastiCache, Wazuh and OpenCTI, and replace the ingress-nginx namespace
   rule with one that admits the ALB.
+- Hermes needs, before its first run: ECR repository `blaksoc-hermes` (immutable tags), IAM role
+  `blaksoc-eks-hermes` with its Pod Identity association, the `hermes` service identity in blakSOC and
+  `HERMES_BLAKSOC_TOKEN` in `blaksoc-eks-runtime`. None of these exist yet.
 - One RDS instance, single AZ, and one Redis node, the same as the other apps on this cluster.

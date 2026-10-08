@@ -8,3 +8,4 @@ coverage
 tests
 deploy/helm
 *.tsbuildinfo
+**/__pycache__

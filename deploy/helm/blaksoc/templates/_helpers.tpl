@@ -122,3 +122,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "blaksoc.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}{{ .Values.serviceAccount.name | default (include "blaksoc.fullname" .) }}{{ else }}{{ .Values.serviceAccount.name | default "default" }}{{ end }}
 {{- end -}}
+
+{{/* Hermes (in-cluster agent). */}}
+{{- define "blaksoc.hermesName" -}}{{ include "blaksoc.fullname" . }}-hermes{{- end -}}
+{{- define "blaksoc.hermesServiceAccountName" -}}
+{{- if .Values.hermes.serviceAccount.create }}{{ .Values.hermes.serviceAccount.name | default (include "blaksoc.hermesName" .) }}{{ else }}{{ .Values.hermes.serviceAccount.name | default "default" }}{{ end }}
+{{- end -}}
+{{- define "blaksoc.hermesImage" -}}
+{{- $h := .Values.hermes.image -}}
+{{- $tag := $h.tag | default .Values.image.tag | default .Chart.AppVersion -}}
+{{- if $h.repository }}{{ $h.repository }}:{{ $tag }}{{ else }}{{ .Values.image.repository }}-hermes:{{ $tag }}{{ end }}
+{{- end -}}
+{{/* In-cluster blakSOC API: the web Service. Hermes calls nothing else in the cluster. */}}
+{{- define "blaksoc.hermesApiUrl" -}}http://{{ include "blaksoc.fullname" . }}-web.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}{{- end -}}
