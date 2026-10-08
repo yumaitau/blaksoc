@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import { connection } from "next/server";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 // Self-hosted at build time: no runtime requests to third-party font CDNs (sovereign deployments).
@@ -18,7 +19,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   await connection();
   return (
     <html lang="en-AU" data-theme="dark" className={`${inter.variable} ${mono.variable}`}>
-      <body className="min-h-screen antialiased">{children}</body>
+      <body className="min-h-screen antialiased">
+        {children}
+        {/* One toast region for the whole app; its colours come from the design tokens in globals.css. */}
+        <Toaster position="bottom-right" theme="dark" richColors closeButton containerAriaLabel="Notifications" />
+      </body>
     </html>
   );
 }

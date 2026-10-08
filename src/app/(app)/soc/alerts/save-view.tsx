@@ -29,7 +29,7 @@ export function SaveView({ filters }: { filters: Record<string, string> }) {
             run(() => saveAlertView({ name, filters, shared }), () => {
               setOpen(false);
               setName("");
-            });
+            }, { success: `View ${name.trim()} saved${shared ? " and shared with the SOC team" : ""}` });
           }}
         >
           <div>

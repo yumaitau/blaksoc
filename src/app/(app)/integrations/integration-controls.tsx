@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ToggleSwitch } from "@/components/soc/toggle-switch";
 import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,7 @@ export function IntegrationToggle({ id, name, enabled, disabled }: { id: string;
             const res = await updateIntegrationAction(id, { enabled: v });
             if (!res.ok) setOn(!v);
             return res;
-          });
+          }, undefined, { success: `${name} ${v ? "enabled" : "disabled"}` });
         }}
       />
       {error ? <span role="alert" className="text-danger" title={error}>Failed</span> : null}
@@ -45,7 +46,15 @@ export function TestConnection({ id }: { id: string }) {
         disabled={pending}
         onClick={() => {
           setResult(null);
-          run(() => testIntegrationAction(id), (r) => { setResult(r ?? null); router.refresh(); });
+          run(
+            () => testIntegrationAction(id),
+            (r) => {
+              setResult(r ?? null);
+              if (r && !r.ok) toast.error(`Connection test failed: ${r.error ?? "unknown error"}`, { duration: 8_000 });
+              router.refresh();
+            },
+            { success: (r) => (r?.ok ? `Connection test passed (${r.latencyMs} ms)` : null) },
+          );
         }}
       >
         {pending ? "Testing…" : "Test connection"}
@@ -72,7 +81,6 @@ const FLOOR_OPTIONS: { value: Severity; label: string }[] = [
 export function AlertFloor({ id, value, disabled }: { id: string; value: Severity; disabled?: boolean }) {
   const router = useRouter();
   const [floor, setFloor] = useState<Severity>(value);
-  const [saved, setSaved] = useState(false);
   const { pending, error, run } = useAction();
   return (
     <div className="space-y-2">
@@ -85,21 +93,21 @@ export function AlertFloor({ id, value, disabled }: { id: string; value: Severit
           const next = e.target.value as Severity;
           const prev = floor;
           setFloor(next);
-          setSaved(false);
           run(
             async () => {
               const res = await setAlertFloorAction(id, next);
               if (!res.ok) setFloor(prev);
               return res;
             },
-            () => { setSaved(true); router.refresh(); },
+            () => router.refresh(),
+            { success: "Alert floor saved. Applies from the next poll." },
           );
         }}
       >
         {FLOOR_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </Select>
       <p className="text-xs text-muted">Lower alerts are not stored in blakSOC and stay searchable in the source. Alerts already stored are not changed.</p>
-      {pending ? <span className="text-xs text-muted">Saving…</span> : saved ? <span role="status" className="text-xs text-ok">Saved. Applies from the next poll.</span> : null}
+      {pending ? <span className="text-xs text-muted">Saving…</span> : null}
       <ActionError error={error} />
     </div>
   );

@@ -1,5 +1,6 @@
 "use client";
-import { useState, useTransition } from "react";
+import { useState } from "react";
+import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, Label, Select } from "@/components/ui/input";
@@ -7,8 +8,7 @@ import { EXPOSURES } from "../asset-bits";
 import { saveAssetContext } from "./actions";
 
 export function EditAsset({ id, criticality, exposure, owner, privileged, isIdentity }: { id: string; criticality: number; exposure: string; owner: string | null; privileged: boolean; isIdentity: boolean }) {
-  const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const { pending, error, run } = useAction();
   const [priv, setPriv] = useState(privileged);
 
   return (
@@ -17,15 +17,17 @@ export function EditAsset({ id, criticality, exposure, owner, privileged, isIden
       onSubmit={(e) => {
         e.preventDefault();
         const f = new FormData(e.currentTarget);
-        start(async () => {
-          const r = await saveAssetContext(id, {
-            criticality: Number(f.get("criticality")),
-            exposure: String(f.get("exposure")),
-            owner: String(f.get("owner") ?? ""),
-            ...(isIdentity ? { privileged: priv } : {}),
-          });
-          setMsg(r.ok ? { ok: true, text: "Saved." } : { ok: false, text: r.error });
-        });
+        run(
+          () =>
+            saveAssetContext(id, {
+              criticality: Number(f.get("criticality")),
+              exposure: String(f.get("exposure")),
+              owner: String(f.get("owner") ?? ""),
+              ...(isIdentity ? { privileged: priv } : {}),
+            }),
+          undefined,
+          { success: "Asset context saved" },
+        );
       }}
     >
       <div className="grid grid-cols-2 gap-3">
@@ -58,7 +60,7 @@ export function EditAsset({ id, criticality, exposure, owner, privileged, isIden
       ) : null}
       <div className="flex items-center gap-3">
         <Button type="submit" size="sm" disabled={pending}>{pending ? "Saving…" : "Save context"}</Button>
-        {msg ? <span role="status" className={msg.ok ? "text-xs text-ok" : "text-xs text-danger"}>{msg.text}</span> : null}
+        <ActionError error={error} />
       </div>
     </form>
   );

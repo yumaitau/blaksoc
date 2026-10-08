@@ -21,6 +21,8 @@ type Selection = {
   clear: () => void;
 };
 
+const plural = (n: number) => `${n} alert${n === 1 ? "" : "s"}`;
+
 const SelectionContext = createContext<Selection | null>(null);
 
 function useSelection() {
@@ -75,7 +77,7 @@ export function BulkBar({ statuses, openIncidents, canTriage }: { statuses: read
   return (
     <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-3 py-2" role="region" aria-label="Bulk actions">
       <span className="num text-sm font-medium">{ids.length} selected</span>
-      <Button size="sm" variant="secondary" disabled={pending} onClick={() => run(() => assignAlertsToMe(ids), clear)}>
+      <Button size="sm" variant="secondary" disabled={pending} onClick={() => run(() => assignAlertsToMe(ids), clear, { success: (n) => `${plural(n ?? ids.length)} assigned to you` })}>
         <UserCheck /> Assign to me
       </Button>
       <DropdownMenu>
@@ -85,11 +87,11 @@ export function BulkBar({ statuses, openIncidents, canTriage }: { statuses: read
         <DropdownMenuContent>
           <DropdownMenuLabel>Set status</DropdownMenuLabel>
           {statuses.map((s) => (
-            <DropdownMenuItem key={s} onSelect={() => run(() => setAlertStatus(ids, s), clear)}>{s.replaceAll("_", " ")}</DropdownMenuItem>
+            <DropdownMenuItem key={s} onSelect={() => run(() => setAlertStatus(ids, s), clear, { success: (n) => `${plural(n ?? ids.length)} marked ${s.replaceAll("_", " ")}` })}>{s.replaceAll("_", " ")}</DropdownMenuItem>
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button size="sm" variant="secondary" disabled={pending} onClick={() => run(() => createIncidentFromSelection(ids, tenantIds), (d) => d && router.push(`/soc/incidents/${d.id}`))}>
+      <Button size="sm" variant="secondary" disabled={pending} onClick={() => run(() => createIncidentFromSelection(ids, tenantIds), (d) => d && router.push(`/soc/incidents/${d.id}`), { success: `Incident created from ${plural(ids.length)}` })}>
         <FilePlus2 /> Create incident
       </Button>
       <Button size="sm" variant="secondary" disabled={pending} onClick={() => setAddOpen(true)}>
@@ -104,7 +106,7 @@ export function BulkBar({ statuses, openIncidents, canTriage }: { statuses: read
         onOpenChange={setAddOpen}
         incidents={openIncidents.filter((i) => tenantIds.length === 1 && i.tenantId === tenantIds[0])}
         mixedTenants={tenantIds.length > 1}
-        onPick={(incidentId) => run(() => addSelectionToIncident(incidentId, ids), (d) => { setAddOpen(false); clear(); if (d) router.push(`/soc/incidents/${d.id}`); })}
+        onPick={(incidentId) => run(() => addSelectionToIncident(incidentId, ids), (d) => { setAddOpen(false); clear(); if (d) router.push(`/soc/incidents/${d.id}`); }, { success: `${plural(ids.length)} added to the incident` })}
         pending={pending}
         error={error}
       />

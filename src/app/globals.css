@@ -62,6 +62,36 @@ html, body {
 /* Scrollbars that don't shout on dark backgrounds */
 * { scrollbar-width: thin; scrollbar-color: var(--color-border-strong) transparent; }
 
+/*
+ * Toasts (sonner). Its palette is swapped for ours so toasts follow [data-theme] and use the same
+ * ok/warn/danger colours as badges. The extra :root outranks sonner's runtime-injected stylesheet.
+ */
+:root [data-sonner-toaster][data-sonner-theme] {
+  font-family: var(--font-sans);
+  --normal-bg: var(--color-surface);
+  --normal-bg-hover: var(--color-surface-2);
+  --normal-border: var(--color-border-strong);
+  --normal-border-hover: var(--color-border-strong);
+  --normal-text: var(--color-fg);
+  --success-bg: color-mix(in srgb, var(--color-ok) 12%, var(--color-surface));
+  --success-border: color-mix(in srgb, var(--color-ok) 40%, var(--color-surface));
+  --success-text: var(--color-ok);
+  --warning-bg: color-mix(in srgb, var(--color-warn) 12%, var(--color-surface));
+  --warning-border: color-mix(in srgb, var(--color-warn) 40%, var(--color-surface));
+  --warning-text: var(--color-warn);
+  --error-bg: color-mix(in srgb, var(--color-danger) 12%, var(--color-surface));
+  --error-border: color-mix(in srgb, var(--color-danger) 40%, var(--color-surface));
+  --error-text: var(--color-danger);
+  --info-bg: var(--color-surface);
+  --info-border: var(--color-border-strong);
+  --info-text: var(--color-fg);
+}
+:root [data-sonner-toast]:focus-visible,
+:root [data-sonner-toast] [data-close-button]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .portal-root { font-family: ui-sans-serif, system-ui, sans-serif; }
 .portal-root a:focus-visible,
 .portal-root button:focus-visible {

@@ -1,5 +1,6 @@
 "use client";
-import { useState, useTransition } from "react";
+import { useState } from "react";
+import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ToggleSwitch } from "@/components/soc/toggle-switch";
@@ -13,14 +14,10 @@ const label = (t: string) => t.replaceAll("_", " ").toLowerCase().replace(/^\w/,
 export function TagRelevance({ entity, current, allTags }: { entity: { id: string; entityType: string; name: string }; current: string[]; allTags: readonly SectorTag[] }) {
   const [open, setOpen] = useState(false);
   const [tags, setTags] = useState<string[]>(current);
-  const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const { pending, error, run } = useAction();
   const save = () =>
-    start(async () => {
-      setError(null);
-      const r = await tagIntelAction({ openctiId: entity.id, entityType: entity.entityType, name: entity.name, tags: tags as SectorTag[] });
-      if (r.ok) setOpen(false);
-      else setError(r.error);
+    run(() => tagIntelAction({ openctiId: entity.id, entityType: entity.entityType, name: entity.name, tags: tags as SectorTag[] }), () => setOpen(false), {
+      success: `Relevance tags saved for ${entity.name}`,
     });
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (o) setTags(current); }}>
@@ -37,7 +34,7 @@ export function TagRelevance({ entity, current, allTags }: { entity: { id: strin
             </label>
           ))}
         </fieldset>
-        {error ? <p role="alert" className="mt-3 text-sm text-danger">{error}</p> : null}
+        <div className="mt-3 empty:hidden"><ActionError error={error} /></div>
         <div className="mt-4 flex justify-end gap-2">
           <DialogClose asChild><Button variant="ghost" size="sm">Cancel</Button></DialogClose>
           <Button size="sm" onClick={save} disabled={pending}>{pending ? "Saving…" : "Save tags"}</Button>
@@ -48,21 +45,14 @@ export function TagRelevance({ entity, current, allTags }: { entity: { id: strin
 }
 
 export function ShareSightingButton({ matchId, disabled }: { matchId: string; disabled?: boolean }) {
-  const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const { pending, error, run } = useAction();
   return (
     <div className="flex flex-col items-end gap-1">
       <Button
         variant="secondary"
         size="sm"
         disabled={disabled || pending}
-        onClick={() =>
-          start(async () => {
-            setError(null);
-            const r = await requestSightingAction(matchId);
-            if (!r.ok) setError(r.error);
-          })
-        }
+        onClick={() => run(() => requestSightingAction(matchId), undefined, { success: "Anonymised sighting queued for sharing" })}
       >
         {pending ? "Queuing…" : "Share anonymised sighting"}
       </Button>
@@ -72,21 +62,14 @@ export function ShareSightingButton({ matchId, disabled }: { matchId: string; di
 }
 
 export function FeedToggle({ feedKey, name, enabled, canManage }: { feedKey: string; name: string; enabled: boolean; canManage: boolean }) {
-  const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const { pending, error, run } = useAction();
   return (
     <div className="flex items-center gap-2">
       <ToggleSwitch
         checked={enabled}
         disabled={!canManage || pending}
         label={`${name} enabled`}
-        onChange={(v) =>
-          start(async () => {
-            setError(null);
-            const r = await setFeedEnabledAction(feedKey, v);
-            if (!r.ok) setError(r.error);
-          })
-        }
+        onChange={(v) => run(() => setFeedEnabledAction(feedKey, v), undefined, { success: `${name} feed ${v ? "enabled" : "disabled"}` })}
       />
       <span className="text-xs text-muted">{enabled ? "Enabled" : "Disabled"}</span>
       {error ? <span role="alert" className="text-xs text-danger">{error}</span> : null}
@@ -95,8 +78,7 @@ export function FeedToggle({ feedKey, name, enabled, canManage }: { feedKey: str
 }
 
 export function EntitlementToggles({ feedKey, feedName, tenants, entitled, canManage }: { feedKey: string; feedName: string; tenants: { id: string; name: string }[]; entitled: string[]; canManage: boolean }) {
-  const [error, setError] = useState<string | null>(null);
-  const [pending, start] = useTransition();
+  const { pending, error, run } = useAction();
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap gap-x-4 gap-y-1.5">
@@ -107,10 +89,8 @@ export function EntitlementToggles({ feedKey, feedName, tenants, entitled, canMa
               checked={entitled.includes(t.id)}
               disabled={!canManage || pending}
               onCheckedChange={(c) =>
-                start(async () => {
-                  setError(null);
-                  const r = await setFeedEntitlementAction(feedKey, t.id, c === true);
-                  if (!r.ok) setError(r.error);
+                run(() => setFeedEntitlementAction(feedKey, t.id, c === true), undefined, {
+                  success: c === true ? `${t.name} now receives ${feedName}` : `${t.name} no longer receives ${feedName}`,
                 })
               }
             />

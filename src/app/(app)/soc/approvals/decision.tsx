@@ -15,7 +15,7 @@ export function Decision({ approvalId, destructive }: { approvalId: string; dest
       setError("Add a note explaining why this is rejected.");
       return;
     }
-    run(() => decide({ approvalId, decision, note }));
+    run(() => decide({ approvalId, decision, note }), undefined, { success: decision === "APPROVED" ? "Approved. The action is queued to run." : "Rejected. Nothing will run." });
   }
 
   return (

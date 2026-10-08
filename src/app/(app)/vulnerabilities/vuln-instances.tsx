@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useState } from "react";
 import { RiskScore } from "@/components/soc/indicators";
+import { ActionError, useAction } from "@/components/soc/use-action";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -28,8 +29,7 @@ const STATUS_VARIANT: Record<string, "warn" | "ok" | "default"> = { open: "warn"
 export function VulnInstances({ rows, canWrite }: { rows: Instance[]; canWrite: boolean }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [note, setNote] = useState("");
-  const [pending, start] = useTransition();
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const { pending, error, run } = useAction();
   const open = rows.filter((r) => r.status === "open");
   const allChecked = open.length > 0 && open.every((r) => selected.has(r.id));
 
@@ -41,16 +41,22 @@ export function VulnInstances({ rows, canWrite }: { rows: Instance[]; canWrite: 
       return n;
     });
 
-  const apply = (status: "patched" | "accepted" | "open") =>
-    start(async () => {
-      const ids = [...selected];
-      const r = await markVulns(ids, status, note);
-      if (r.ok) {
+  const apply = (status: "patched" | "accepted" | "open") => {
+    const ids = [...selected];
+    run(
+      () => markVulns(ids, status, note),
+      () => {
         setSelected(new Set());
         setNote("");
-        setMsg({ ok: true, text: `${r.data ?? ids.length} instance${ids.length === 1 ? "" : "s"} marked ${status === "accepted" ? "risk accepted" : status}.` });
-      } else setMsg({ ok: false, text: r.error });
-    });
+      },
+      {
+        success: (n) => {
+          const count = typeof n === "number" ? n : ids.length;
+          return `${count} instance${count === 1 ? "" : "s"} ${status === "accepted" ? "marked risk accepted" : status === "open" ? "reopened" : "marked patched"}`;
+        },
+      },
+    );
+  };
 
   return (
     <div>
@@ -61,7 +67,7 @@ export function VulnInstances({ rows, canWrite }: { rows: Instance[]; canWrite: 
           <Input className="h-7 w-72 text-xs" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reason (required to accept risk)" aria-label="Reason for accepting risk" />
           <Button size="sm" variant="secondary" disabled={pending || !selected.size} onClick={() => apply("accepted")}>Accept risk</Button>
           <Button size="sm" variant="ghost" disabled={pending || !selected.size} onClick={() => apply("open")}>Reopen</Button>
-          {msg ? <span role="status" className={msg.ok ? "text-xs text-ok" : "text-xs text-danger"}>{msg.text}</span> : null}
+          <ActionError error={error} />
         </div>
       ) : null}
       <Table>

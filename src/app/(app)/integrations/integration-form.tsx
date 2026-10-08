@@ -22,11 +22,9 @@ export function IntegrationForm(props: Props) {
   const [config, setConfig] = useState(props.configJson);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [enabled, setEnabled] = useState(props.mode === "edit" ? props.enabled : true);
-  const [saved, setSaved] = useState(false);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    setSaved(false);
     let parsed: unknown;
     try {
       parsed = JSON.parse(config || "{}");
@@ -35,13 +33,14 @@ export function IntegrationForm(props: Props) {
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setError("Configuration must be a JSON object.");
     if (props.mode === "create") {
-      run(() => createIntegrationAction({ tenantId: owner || null, provider: props.provider, name, config: parsed, secrets }), (id) => router.push(id ? `/integrations/${id}` : "/integrations"));
+      run(() => createIntegrationAction({ tenantId: owner || null, provider: props.provider, name, config: parsed, secrets }), (id) => router.push(id ? `/integrations/${id}` : "/integrations"), {
+        success: `Integration ${name.trim()} added`,
+      });
     } else {
       run(() => updateIntegrationAction(props.id, { name, config: parsed, secrets, enabled }), () => {
         setSecrets({});
-        setSaved(true);
         router.refresh();
-      });
+      }, { success: `Integration ${name.trim()} saved` });
     }
   }
 
@@ -50,7 +49,7 @@ export function IntegrationForm(props: Props) {
       <div className="grid gap-4 md:grid-cols-2">
         <div>
           <Label htmlFor={`${uid}-name`}>Name</Label>
-          <Input id={`${uid}-name`} value={name} required maxLength={120} onChange={(e) => { setSaved(false); setName(e.target.value); }} />
+          <Input id={`${uid}-name`} value={name} required maxLength={120} onChange={(e) => setName(e.target.value)} />
         </div>
         {props.mode === "create" ? (
           <div>
@@ -64,7 +63,7 @@ export function IntegrationForm(props: Props) {
           <div>
             <span className="mb-1 block text-xs font-medium text-muted">Status</span>
             <span className="inline-flex h-9 items-center gap-2 text-sm">
-              <ToggleSwitch checked={enabled} onChange={(v) => { setSaved(false); setEnabled(v); }} label="Integration enabled" />
+              <ToggleSwitch checked={enabled} onChange={(v) => setEnabled(v)} label="Integration enabled" />
               {enabled ? "Enabled" : "Disabled"}
             </span>
           </div>
@@ -73,7 +72,7 @@ export function IntegrationForm(props: Props) {
 
       <div>
         <Label htmlFor={`${uid}-config`}>Configuration (JSON, non-secret)</Label>
-        <Textarea id={`${uid}-config`} value={config} rows={Math.min(16, Math.max(5, config.split("\n").length + 1))} spellCheck={false} className="font-mono text-xs" onChange={(e) => { setSaved(false); setConfig(e.target.value); }} />
+        <Textarea id={`${uid}-config`} value={config} rows={Math.min(16, Math.max(5, config.split("\n").length + 1))} spellCheck={false} className="font-mono text-xs" onChange={(e) => setConfig(e.target.value)} />
         <p className="mt-1 text-[11px] text-faint">Do not put passwords, tokens or keys here. Use the secret fields below.</p>
       </div>
 
@@ -93,7 +92,7 @@ export function IntegrationForm(props: Props) {
                   value={secrets[f.key] ?? ""}
                   required={props.mode === "create" && !f.optional}
                   placeholder={props.mode === "edit" && props.hasSecret ? "•••••••• (unchanged)" : ""}
-                  onChange={(e) => { setSaved(false); setSecrets((s) => ({ ...s, [f.key]: e.target.value })); }}
+                  onChange={(e) => setSecrets((s) => ({ ...s, [f.key]: e.target.value }))}
                 />
               </div>
             ))}
@@ -103,7 +102,6 @@ export function IntegrationForm(props: Props) {
 
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>{pending ? "Saving…" : props.mode === "create" ? "Add integration" : "Save changes"}</Button>
-        {saved ? <span role="status" className="text-sm text-ok">Saved.</span> : null}
         <ActionError error={error} />
       </div>
     </form>
