@@ -32,6 +32,13 @@ const schema = z.object({
   M365_CONNECTOR_CLIENT_SECRET: z.string().optional(),
   /** Comma-separated OIDC issuer origins allowed for SSO discovery (Entra endpoints are preconfigured). */
   SSO_TRUSTED_ORIGINS: z.string().default(""),
+  /** Companion tools linked from the SOC dashboard. Each card shows "not configured" while its address is unset. */
+  WAZUH_DASHBOARD_URL: z.string().url().optional(),
+  THREATSIEVE_URL: z.string().url().optional(),
+  /** ThreatSieve API origin; its public /health endpoint gives the card's status. */
+  THREATSIEVE_API_URL: z.string().url().optional(),
+  /** Defaults to the Kelpie integration's baseUrl. */
+  KELPIE_URL: z.string().url().optional(),
   /** Break-glass accounts must also pass TOTP. Disable only for local dev. */
   BREAK_GLASS_REQUIRE_MFA: z.enum(["true", "false"]).default("true"),
   /**

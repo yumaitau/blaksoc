@@ -11,6 +11,8 @@ import { syncVeeamBackups } from "@/lib/services/backup";
 import { stampSyslogTenant } from "@/lib/services/syslog";
 import { encryptSecret } from "@/lib/crypto";
 import { logger } from "@/lib/obs/log";
+import { ALERT_FLOOR_SEVERITIES, supportsAlertFloor } from "@/lib/integrations/alert-floor";
+import type { Severity } from "@/lib/providers/types";
 import { actor, AccessDenied, scoped } from "./common";
 
 /** Columns safe for the browser. secretCiphertext is never selected here. */
@@ -95,6 +97,18 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
   });
   if (followUp) await syncVeeamBackups(followUp);
   await refreshSubscriptions();
+}
+
+/**
+ * Lowest alert severity stored from an integration. Lower alerts are dropped at ingest and stay searchable in
+ * the source; alerts already stored are not touched.
+ */
+export async function setAlertFloor(ctx: AccessContext, id: string, severity: Severity) {
+  if (!ALERT_FLOOR_SEVERITIES.includes(severity)) throw new Error(`Unknown severity "${severity}"`);
+  const [cur] = await scoped(ctx, "integration:read", (tx) => tx.select({ provider: integrations.provider, config: integrations.config }).from(integrations).where(eq(integrations.id, id)));
+  if (!cur) throw new AccessDenied("integration not found");
+  if (!supportsAlertFloor(cur.provider)) throw new Error(`The ${connectorDef(cur.provider)?.name ?? cur.provider} connector has no alert floor setting`);
+  await updateIntegration(ctx, id, { config: { ...(cur.config as Record<string, unknown>), minSeverity: severity } });
 }
 
 export async function linkTenant(ctx: AccessContext, integrationId: string, tenantId: string, selector: { agentGroups?: string[] }) {

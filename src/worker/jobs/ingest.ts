@@ -13,8 +13,8 @@ import { syncAssets } from "@/lib/pipeline/assets";
 import { queue, QUEUES } from "@/lib/queue";
 import { redis } from "@/lib/redis";
 import { evaluateTriggers } from "@/lib/soar/engine";
-import type { Severity } from "@/lib/providers/types";
 import { wazuhLevelToSeverity } from "@/lib/providers/wazuh";
+import { minSeverityFor, SEVERITY_RANK } from "@/lib/integrations/alert-floor";
 import { logger } from "@/lib/obs/log";
 import { ingestAlerts, ingestLag, integrationPolls } from "@/lib/obs/metrics";
 
@@ -23,13 +23,6 @@ type Log = (m: string) => void;
 /** Vulnerability rows per upsert statement. */
 const VULN_BATCH = 500;
 
-const SEVERITY_RANK: Record<Severity, number> = { informational: 0, low: 1, medium: 2, high: 3, critical: 4 };
-/**
- * Lowest severity stored per provider unless the integration's `minSeverity` says otherwise. Wazuh's
- * informational events (session opened, sudo, login success) were 95% of the volume and feed no detection;
- * they stay searchable in Wazuh for its retention period.
- */
-const DEFAULT_MIN_SEVERITY: Partial<Record<string, Severity>> = { wazuh: "low" };
 
 /** Batched upserts, one short transaction each, instead of one round trip per row. Rows must be unique by key. */
 export async function storeVulnerabilities(tenantId: string, list: (typeof vulnerabilities.$inferInsert)[]) {
@@ -44,12 +37,6 @@ export async function storeVulnerabilities(tenantId: string, list: (typeof vulne
         }),
     );
   }
-}
-
-export function minSeverityFor(row: IntegrationRow): Severity {
-  const configured = (row.config as { minSeverity?: unknown }).minSeverity;
-  if (typeof configured === "string" && configured in SEVERITY_RANK) return configured as Severity;
-  return DEFAULT_MIN_SEVERITY[row.provider] ?? "informational";
 }
 
 async function eventIntegrations(): Promise<IntegrationRow[]> {

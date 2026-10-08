@@ -2,7 +2,8 @@
 import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
 import { withAccess } from "@/lib/actions";
-import { createIntegration, linkTenant, testIntegration, updateIntegration } from "@/lib/services/integrations";
+import { createIntegration, linkTenant, setAlertFloor, testIntegration, updateIntegration } from "@/lib/services/integrations";
+import type { Severity } from "@/lib/providers/types";
 
 /** Zod issues name the field and rule only, never the submitted value, so they are safe to show. */
 async function explain<T>(p: Promise<T>): Promise<T> {
@@ -46,6 +47,13 @@ export async function testIntegrationAction(id: string) {
 export async function linkTenantAction(id: string, tenantId: string, agentGroups: string[]) {
   return withAccess(async (ctx) => {
     await linkTenant(ctx, id, tenantId, { agentGroups: agentGroups.map((g) => g.trim()).filter(Boolean) });
+    refresh(id);
+  });
+}
+
+export async function setAlertFloorAction(id: string, severity: Severity) {
+  return withAccess(async (ctx) => {
+    await explain(setAlertFloor(ctx, id, severity));
     refresh(id);
   });
 }

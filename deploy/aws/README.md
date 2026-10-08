@@ -129,9 +129,15 @@ Kelpie case. Incidents open automatically only for high and critical alerts and 
 Wazuh local rule 100100 (installed by `wazuh-host.sh`) silences promiscuous-mode alerts from Docker `veth`
 interfaces.
 
+The SOC dashboard shows a card for Wazuh, ThreatSieve and Kelpie with a link and a status. Wazuh and Kelpie
+come from their integrations' health checks (every 5 minutes); ThreatSieve from its public API `/health`
+(checked at most once a minute). The links are `WAZUH_DASHBOARD_URL`, `THREATSIEVE_URL`, `THREATSIEVE_API_URL`
+and `KELPIE_URL` in `values-yumait-prod.yaml`.
+
 Noise controls:
 
-- blakSOC stores Wazuh alerts from `low` up (`minSeverity` on the integration). Informational events (sessions,
+- blakSOC stores Wazuh alerts from `low` up. Change it under Integrations → the Wazuh integration → **Alert
+  floor** (for example "high and critical only"); lower alerts then stay in Wazuh only. Informational events (sessions,
   sudo, login success) stay in Wazuh for 90 days (ISM policy `blaksoc-alerts-90d`).
 - The `yumait-aws` agent group's shared configuration (`deploy/wazuh/agent-yumait-aws.conf`, applied by
   `wazuh-host.sh`) skips inode checks on `/boot/efi`: it is FAT, and Linux renumbers its inodes.
