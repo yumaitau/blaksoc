@@ -104,7 +104,8 @@ export async function listPatterns(ctx: AccessContext, days: number, now = new D
     const since90 = new Date(now.getTime() - 90 * DAY);
     const f = (cond: SQL, from: Date) => sql<number>`count(*) filter (where ${cond} and ${alerts.occurredAt} >= ${ts(from)})::int`;
     const outcome = (from: Date) => ({
-      falsePositive: f(sql`${alerts.status} = 'FALSE_POSITIVE'`, from),
+      // Analysts' decisions only: Hermes' own closures would otherwise feed its next week's evidence.
+      falsePositive: f(sql`${alerts.status} = 'FALSE_POSITIVE' and ${alerts.tuningActionId} is null`, from),
       resolved: f(sql`${alerts.status} = 'RESOLVED'`, from),
       escalated: f(sql`${alerts.status} in ('ESCALATED','CONTAINED')`, from),
       open: f(sql`${alerts.status} in ('NEW','TRIAGING','INVESTIGATING')`, from),

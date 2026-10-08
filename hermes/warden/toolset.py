@@ -165,6 +165,8 @@ class Toolset:
             return json.dumps(getattr(self, name)(**args), ensure_ascii=False)
         except TypeError as error:
             return _err("invalid arguments: " + str(error)[:200])
+        except Exception as error:  # one bad call must not end the weekly run
+            return _err(f"{type(error).__name__}: could not run {name}")
 
     # -- reads --
 

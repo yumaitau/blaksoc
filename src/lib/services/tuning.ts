@@ -29,20 +29,21 @@ export type DispositionKey = { tenantId: string; source: string; ruleId: string;
 /**
  * What analysts decided about this tenant's rule over the last 90 days (the newest DISPOSITION_SAMPLE_CAP
  * alerts, through alerts_disposition), with the same counts for one asset. An ESCALATED alert that automatic
- * grouping escalated is not a human decision and counts as `other`.
+ * grouping escalated, or one Hermes closed, is not a human decision and counts as `other`.
  */
 export async function dispositionStats(tx: Tx, key: DispositionKey, now = new Date()): Promise<DispositionStats> {
   const since = new Date(now.getTime() - DISPOSITION_WINDOW_DAYS * DAY);
   const rows = await tx.execute<{ outcome: keyof DispositionCounts; n: number; on_asset: number }>(sql`
     with r as (
-      select id, status, asset_id, incident_id from alerts
+      select id, status, asset_id, incident_id, tuning_action_id from alerts
       where tenant_id = ${key.tenantId} and source = ${key.source} and rule_id = ${key.ruleId}
         and occurred_at >= ${since.toISOString()}::timestamptz and occurred_at <= ${now.toISOString()}::timestamptz
       order by occurred_at desc
       limit ${DISPOSITION_SAMPLE_CAP}
     )
     select case
-        when status = 'FALSE_POSITIVE' then 'falsePositive'
+        -- Hermes' own closures are not analyst decisions; counting them would reinforce further closures.
+        when status = 'FALSE_POSITIVE' and tuning_action_id is null then 'falsePositive'
         when status = 'RESOLVED' then 'resolved'
         when status = 'CONTAINED' then 'contained'
         when status = 'ESCALATED' and not exists (

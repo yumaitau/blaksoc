@@ -933,7 +933,7 @@
             }
           },
           "409": {
-            "description": "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
             "content": {
               "application/json": {
                 "schema": {
@@ -1075,7 +1075,7 @@
             }
           },
           "409": {
-            "description": "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
             "content": {
               "application/json": {
                 "schema": {
@@ -1192,7 +1192,7 @@
             }
           },
           "409": {
-            "description": "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
             "content": {
               "application/json": {
                 "schema": {
@@ -1319,7 +1319,7 @@
             }
           },
           "409": {
-            "description": "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
             "content": {
               "application/json": {
                 "schema": {
@@ -1630,7 +1630,7 @@
             }
           },
           "409": {
-            "description": "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
             "content": {
               "application/json": {
                 "schema": {
@@ -1849,7 +1849,7 @@
             }
           },
           "409": {
-            "description": "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
+            "description": "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window",
             "content": {
               "application/json": {
                 "schema": {

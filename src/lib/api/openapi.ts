@@ -86,7 +86,7 @@ const errors = (op: Operation) => {
     ...(op.params ? { "404": { description: "Not found in the identity's scope", ...e } } : {}),
     ...(op.path.startsWith("/tuning/") && op.method !== "get"
       ? {
-          "409": { description: "Refused: acting is switched off (acting_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window", ...e },
+          "409": { description: "Refused: acting is switched off (hermes_actions_disabled), a weekly cap is reached, a duplicate, a stale memory version, or a closure still inside its undo window", ...e },
           "413": { description: "Body or report too large", ...e },
           "422": { description: "Refused by a guardrail, or content that looks like it holds identifiers", ...e },
         }

@@ -5,6 +5,8 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { withScope } from "@/db/scope";
+import { systemScope } from "@/lib/auth/access";
 import { GET as listActionsRoute } from "@/app/api/v1/tuning/actions/route";
 import { GET as getMemoryRoute, PUT as putMemoryRoute } from "@/app/api/v1/tuning/memory/route";
 import { POST as createNoiseRuleRoute } from "@/app/api/v1/tuning/noise-rules/route";
@@ -21,7 +23,7 @@ import { resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { redis } from "@/lib/redis";
 import { addHumanNote, getMemory, listReports, MEMORY_VERSION_KEY } from "@/lib/services/hermes";
 import { createServiceIdentity } from "@/lib/services/service-identities";
-import { annotationsForAlert, closingAction, HERMES_ACT_KEY, hermesSwitchState, listTuningActions, recentAnnotations, setHermesMayAct, undoTuningAction } from "@/lib/services/tuning";
+import { annotationsForAlert, closingAction, dispositionStats, HERMES_ACT_KEY, hermesSwitchState, listTuningActions, recentAnnotations, setHermesMayAct, undoTuningAction } from "@/lib/services/tuning";
 
 const BASE = "http://localhost/api/v1/tuning";
 const run = randomUUID().slice(0, 8);
@@ -203,6 +205,12 @@ describe("acting", () => {
     expect(rows.filter((r) => ["high", "critical"].includes(r.severity)).every((r) => r.status === "NEW")).toBe(true);
     expect(rows.find((r) => r.incidentId)!.status).toBe("NEW");
     expect(rows.find((r) => r.status === "INVESTIGATING")).toBeDefined();
+
+    // Hermes' closures are not analyst decisions: neither its next evidence nor ingest scoring may count them.
+    const listed = (await (await listPatternsRoute(new Request(`${BASE}/patterns?days=90`, call(tokens.hermes!)))).json()) as { patterns: { patternId: string; dispositions: Record<"d30" | "d90", { falsePositive: number }> }[] };
+    expect(listed.patterns.find((p) => p.patternId === patterns["hermes-fp"])!.dispositions.d90.falsePositive).toBe(12);
+    const stats = await withScope(systemScope(tenant), (tx) => dispositionStats(tx, { tenantId: tenant, source: "wazuh", ruleId: "hermes-fp", assetId: null }));
+    expect(stats.rule.falsePositive).toBe(12);
 
     const undone = await undoTuningAction(admin, closeAction);
     expect(undone.restored).toBe(4);

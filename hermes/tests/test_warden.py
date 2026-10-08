@@ -312,6 +312,21 @@ class GuardrailTests(Base):
         self.assertIn("confidence", call(toolset, "annotate_pattern", patternId="p-noisy", text="Noisy and benign.",
                                          confidence="certain")["error"])
 
+    def test_a_bad_tool_call_returns_an_error_instead_of_ending_the_run(self):
+        toolset, _ = self.make()
+        for args in ({"patternId": "p-noisy", "text": ["not", "a", "string"], "confidence": "low"},
+                     {"patternId": 42, "text": "Noisy and benign.", "confidence": "low"}):
+            with self.subTest(args=args):
+                self.assertNotEqual(call(toolset, "annotate_pattern", **args).get("status"), policy.EXECUTED)
+
+        def broken(**_):
+            raise RuntimeError("unexpected")
+        toolset.get_patterns = broken
+        result = call(toolset, "get_patterns")
+        self.assertIn("error", result)
+        self.assertNotIn("unexpected", result["error"])
+        self.assertEqual(self.api.action_writes(), [])
+
     def test_per_run_caps_and_hard_ceilings(self):
         self.assertEqual(policy.clamp_caps({"close": 99, "noise_rule": 99, "purge": 99, "annotate": 999}),
                          policy.HARD_CAPS)
