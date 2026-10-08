@@ -73,11 +73,11 @@ worker:
 # Hermes (in-cluster agent), weekly on Mondays at 09:30 Sydney time. Image ECR blaksoc-hermes, same tag
 # as web and worker. Service account blaksoc/blaksoc-hermes is bound by EKS Pod Identity to IAM role
 # blaksoc-eks-hermes (Bedrock invoke on the AU Sonnet 4.5 profile only; deploy/aws/README.md). Its
-# blakSOC credential is HERMES_BLAKSOC_TOKEN in blaksoc-eks-runtime. Dry-run until the first weekly
-# reports have been reviewed; acting also needs blakSOC's "Allow Hermes to act" switch.
+# blakSOC credential is HERMES_BLAKSOC_TOKEN in blaksoc-eks-runtime. Acting (owner's decision, 2026-10-08)
+# also needs blakSOC's "Allow Hermes to act" switch, which is on; turning either off stops all writes.
 hermes:
   enabled: true
-  dryRun: true
+  dryRun: false
   model:
     id: au.anthropic.claude-sonnet-4-5-20250929-v1:0
     region: ap-southeast-2

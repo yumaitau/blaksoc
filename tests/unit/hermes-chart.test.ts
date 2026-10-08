@@ -32,7 +32,7 @@ describe("Hermes (in-cluster agent) chart", () => {
     expect(out).toContain("image: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com/blaksoc-hermes:0123456789ab");
     expect(out).toContain("serviceAccountName: blaksoc-hermes");
     expect(out).toContain('{ name: BLAKSOC_API_URL, value: "http://blaksoc-blaksoc-web.blaksoc.svc:80" }');
-    expect(out).toContain('{ name: HERMES_DRY_RUN, value: "true" }');
+    expect(out).toContain('{ name: HERMES_DRY_RUN, value: "false" }'); // production acts (owner, 2026-10-08)
     expect(out).toContain('{ name: HERMES_MODEL, value: "au.anthropic.claude-sonnet-4-5-20250929-v1:0" }');
     expect(out).toContain('{ name: HERMES_BEDROCK_REGION, value: "ap-southeast-2" }');
   }, 60_000);
