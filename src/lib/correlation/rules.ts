@@ -120,14 +120,14 @@ export const ACCOUNT_TAKEOVER: CorrelationRule = {
  */
 const THREAT_SIGNAL = { category: { not: "sca" }, severity: { not: "informational" } };
 
-/** Risk accumulation: many moderate alerts on one user add up even when none is critical alone. */
+/** Volume is a triage signal, not evidence of a high-severity incident. */
 export const USER_RISK_ACCUMULATION: CorrelationRule = {
   id: "user-risk-accumulation",
-  // 2: ignores benchmark (SCA) and informational alerts.
-  version: 2,
+  // 3: advisory severity; accumulated scores must not manufacture high-severity incidents.
+  version: 3,
   title: "Risk accumulating on one user",
-  description: "The risk scores of alerts for one user add up to 150 or more inside 24 hours.",
-  severity: "high",
+  description: "Alert risk scores for one user total at least 150 in 24 hours. Review the source alerts; volume alone does not establish a high-severity threat.",
+  severity: "medium",
   category: "correlation",
   techniques: [],
   stage: "alerts",
@@ -141,7 +141,7 @@ export const HOST_RISK_ACCUMULATION: CorrelationRule = {
   ...USER_RISK_ACCUMULATION,
   id: "host-risk-accumulation",
   title: "Risk accumulating on one host",
-  description: "The risk scores of alerts for one host add up to 150 or more inside 24 hours.",
+  description: "Alert risk scores for one host total at least 150 in 24 hours. Review the source alerts; volume alone does not establish a high-severity threat.",
   groupBy: ["host"],
   clause: { type: "risk", id: "risk", label: "Alert risk for the host", within: 24 * HOUR, threshold: 150, match: THREAT_SIGNAL },
 };

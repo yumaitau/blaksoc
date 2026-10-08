@@ -295,6 +295,12 @@ describe("grouping a busy host", () => {
 });
 
 describe("risk accumulation signal", () => {
+  it("keeps accumulated volume at medium priority even when it crosses the threshold", () => {
+    const events = Array.from({ length: 7 }, (_, i) => ({ id: `r${i}`, at: T0 + i * MIN, fields: { host: "rangeros-app", risk_score: 25, category: "audit", severity: "low" } }));
+    const [finding] = evaluateRule(HOST_RISK_ACCUMULATION, events);
+    expect(finding).toBeDefined();
+    expect(alertFromFinding(HOST_RISK_ACCUMULATION, finding!).severity).toBe("medium");
+  });
   it("does not count benchmark (SCA) or informational alerts", () => {
     const at = (i: number) => T0 + i * MIN;
     const noise = Array.from({ length: 40 }, (_, i) => ({ id: `n${i}`, at: at(i), fields: { host: "web-01", risk_score: 25, category: i % 2 ? "sca" : "pam", severity: i % 2 ? "medium" : "informational" } }));

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gte } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
-import { auditLog, incidentLinks, incidents, incidentTasks, incidentTimeline, integrations, kelpieCases, tenants, user } from "@/db/schema";
+import { alerts, auditLog, incidentAlerts, incidentLinks, incidents, incidentTasks, incidentTimeline, integrations, kelpieCases, tenants, user } from "@/db/schema";
 import type { AccessContext } from "@/lib/auth/access";
 import { BUILTIN_ROLES, type Permission } from "@/lib/auth/permissions";
 import { secretAad } from "@/lib/connectors/instances";
@@ -28,11 +28,15 @@ class FakeKelpie {
     const existing = [...this.cases.values()].find((c) => c.ref === input.sourceReference);
     if (existing) return { id: existing.id, caseNumber: existing.caseNumber, created: false };
     const id = `case_${this.cases.size + 1}`;
-    const c = { id, ref: input.sourceReference, caseNumber: `KP-2026-${String(this.cases.size + 1).padStart(4, "0")}`, title: input.title, status: "open" as const, severity: input.severity ?? "medium", version: 1, closedAt: null, updatedAt: new Date().toISOString() };
+    const c = { id, ref: input.sourceReference, caseNumber: `KP-2026-${String(this.cases.size + 1).padStart(4, "0")}`, title: input.title, summary: input.summary, status: "open" as const, severity: input.severity ?? "medium", version: 1, closedAt: null, updatedAt: new Date().toISOString() };
     this.cases.set(id, c);
     return { id, caseNumber: c.caseNumber, created: true };
   }
   async getCase(id: string) { return this.cases.get(id)!; }
+  async updateSummary(id: string, summary: string, version: number) {
+    if (this.cases.get(id)!.version !== version) throw new KelpieError("Version conflict", 409);
+    this.move(id, { summary });
+  }
   async addComment(caseId: string, body: string) { this.comments.push({ caseId, body }); return { id: `cm_${this.comments.length}` }; }
   async addObservable(caseId: string, o: { type: string; value: string }) { this.observables.push({ caseId, ...o }); return { id: `ob_${this.observables.length}` }; }
   move(id: string, patch: Partial<KelpieCase>) { const c = this.cases.get(id)!; this.cases.set(id, { ...c, ...patch, version: c.version + 1 }); }
@@ -60,6 +64,9 @@ beforeAll(async () => {
   tenantId = t!.id;
   const [inc] = await adminDb().insert(incidents).values({ tenantId, title: "Inbox rule hides invoices", severity: "high", attackTechniques: ["T1564.008"] }).returning();
   incidentId = inc!.id;
+  const [wazuh] = await adminDb().insert(integrations).values({ tenantId, category: "siem", provider: "wazuh", name: "Test Wazuh", enabled: false, config: { dashboardUrl: "https://wazuh.example.au" } }).returning();
+  const [source] = await adminDb().insert(alerts).values({ tenantId, integrationId: wazuh!.id, source: "wazuh", externalId: "wazuh-doc-1", title: "File changed", ruleId: "550", severity: "medium", siemSeverity: 7, occurredAt: started, raw: { agent: { name: "WEB-03" }, syscheck: { path: "/etc/config", event: "modified" } } }).returning();
+  await adminDb().insert(incidentAlerts).values({ tenantId, incidentId, alertId: source!.id });
   await adminDb().insert(incidentLinks).values([
     { tenantId, incidentId, kind: "observable", refId: "ipv4:203.0.113.9", label: "203.0.113.9" },
     { tenantId, incidentId, kind: "asset", refId: randomUUID(), label: "WEB-03" },
@@ -106,6 +113,9 @@ describe("Kelpie case management", () => {
     const linked = await link();
     expect(linked).toMatchObject({ caseId: "case_1", caseNumber: "KP-2026-0001", caseUrl: "https://kelpie.example.au/cases/case_1", lastError: null });
     expect(fake.creates[0]).toMatchObject({ sourceSystem: "blaksoc", sourceReference: incidentId, severity: "high" });
+    expect(fake.creates[0]!.summary).toContain("Wazuh rule 550 matched on WEB-03");
+    expect(fake.creates[0]!.summary).toContain("Wazuh rule level: 7/15");
+    expect(fake.creates[0]!.summary).toContain("Wazuh alert: https://wazuh.example.au/app/discover");
     expect(fake.observables).toEqual([{ caseId: "case_1", type: "ip", value: "203.0.113.9", description: "From blakSOC detection", isIoc: true }]);
     expect(fake.comments).toEqual([{ caseId: "case_1", body: "Task from a blakSOC playbook: Reset the mailbox password" }]);
     const [task] = await adminDb().select().from(incidentTasks).where(eq(incidentTasks.incidentId, incidentId));
@@ -128,6 +138,18 @@ describe("Kelpie case management", () => {
     await expect(addNote(analyst(), incidentId, "SOC only", "internal")).rejects.toBeInstanceOf(KelpieManaged);
     const note = await addNote(analyst(), incidentId, "We are working on it.", "customer");
     expect(note.visibility).toBe("customer");
+  });
+
+  it("backfills an existing open case without replacing analyst text or repeating updates", async () => {
+    fake.move("case_1", { summary: "Analyst investigation notes" });
+    const later = new Date(Date.now() + 3 * 3600_000);
+    await syncKelpie({ connect, now: later });
+    const remote = await fake.getCase("case_1");
+    expect(remote.summary).toContain("Analyst investigation notes");
+    expect(remote.summary).toContain("[blakSOC detection context]");
+    const version = remote.version;
+    await syncKelpie({ connect, now: later });
+    expect((await fake.getCase("case_1")).version).toBe(version);
   });
 
   it("mirrors Kelpie status, severity and closure back", async () => {

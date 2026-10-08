@@ -19,6 +19,7 @@ import type { NormalisedAlert } from "@/lib/providers/types";
 import { redis } from "@/lib/redis";
 import { GROUP_BATCH, runCorrelation, runGrouping, setCorrelationRuleEnabled } from "@/lib/services/correlation";
 import { ungroupAlerts } from "@/lib/services/incidents";
+import { STEP_ACTIONS } from "@/lib/soar/engine";
 
 const run = randomUUID().slice(0, 8);
 const now = new Date();
@@ -140,6 +141,28 @@ describe("correlation engine", () => {
 });
 
 describe("automatic incident grouping", () => {
+  it("keeps medium correlations and legacy high risk-accumulation findings out of automatic incidents", async () => {
+    const [tenant] = await adminDb().insert(tenants).values({ name: "Review only", slug: `corr-review-${run}`, sectors: ["SMB"] }).returning();
+    try {
+      const rows = await adminDb().insert(alerts).values([
+        { tenantId: tenant!.id, source: CORRELATION_SOURCE, externalId: "volume-new", title: "Risk accumulating on one host", ruleId: "host-risk-accumulation", severity: "medium", occurredAt: now },
+        { tenantId: tenant!.id, source: CORRELATION_SOURCE, externalId: "volume-old", title: "Risk accumulating on one host", ruleId: "host-risk-accumulation", severity: "high", occurredAt: now },
+        { tenantId: tenant!.id, source: CORRELATION_SOURCE, externalId: "user-old", title: "Risk accumulating on one user", ruleId: "user-risk-accumulation", severity: "high", occurredAt: now },
+        { tenantId: tenant!.id, source: CORRELATION_SOURCE, externalId: "review", title: "Review", ruleId: "test-medium", severity: "medium", occurredAt: now },
+      ]).returning();
+      expect(await runGrouping(tenant!.id, now)).toEqual({ plans: 0, linked: 0, opened: 0 });
+      const stored = await adminDb().select().from(alerts).where(inArray(alerts.id, rows.map((a) => a.id)));
+      expect(stored.every((a) => a.incidentId === null && a.status === "NEW")).toBe(true);
+      const playbookStep = await withScope({ tenantIds: [tenant!.id], platform: false }, (tx) => STEP_ACTIONS["incident.create"]!.handler(
+        tx, { id: "create", action: "incident.create", name: "Create incident" }, { id: randomUUID(), tenantId: tenant!.id }, { tenantId: tenant!.id, alertId: rows[1]!.id },
+      ));
+      expect(playbookStep.status).toBe("SKIPPED");
+      await adminDb().insert(alerts).values({ tenantId: tenant!.id, source: "wazuh", externalId: "real-high", title: "High severity detection", ruleId: "100001", severity: "high", occurredAt: now });
+      expect((await runGrouping(tenant!.id, now)).opened).toBe(1);
+    } finally {
+      await adminDb().delete(tenants).where(eq(tenants.id, tenant!.id));
+    }
+  });
   let incidentId = "";
   let members: string[] = [];
 

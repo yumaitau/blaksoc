@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, notExists, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, notExists, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { systemDb } from "@/db/client";
 import {
@@ -32,7 +32,7 @@ export const GROUP_WINDOW = 6 * HOUR;
 const GROUP_LOOKBACK = 48 * HOUR;
 const OPEN_ALERT = ["NEW", "TRIAGING", "INVESTIGATING"] as const;
 /**
- * Alerts that open or join an incident automatically: high and critical, and every correlation finding. Lower
+ * Alerts that open or join an incident automatically: high and critical. Lower
  * severities stay in the alert queue; grouping them filled incidents (and Kelpie cases) with benchmark noise.
  */
 export const AUTO_INCIDENT_SEVERITIES = ["high", "critical"] as const;
@@ -70,7 +70,7 @@ export async function runCorrelation(tenantId: string, now = new Date()): Promis
           .from(alerts)
           .leftJoin(assets, eq(assets.id, alerts.assetId))
           // Correlated alerts are outputs, not inputs: feeding them back would let a rule fire on itself.
-          .where(and(eq(alerts.tenantId, tenantId), ne(alerts.source, CORRELATION_SOURCE), gte(alerts.occurredAt, start), lte(alerts.occurredAt, now)))
+          .where(and(eq(alerts.tenantId, tenantId), ne(alerts.source, CORRELATION_SOURCE), eq(alerts.lane, "active"), ne(alerts.status, "FALSE_POSITIVE"), gte(alerts.occurredAt, start), lte(alerts.occurredAt, now)))
           // Over the cap, keep the newest: they are the ones that can still complete a rule.
           .orderBy(desc(alerts.occurredAt), desc(alerts.id))
           .limit(MAX_EVENTS)
@@ -180,7 +180,9 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
         eq(alerts.tenantId, tenantId), gte(alerts.occurredAt, since), lte(alerts.occurredAt, now), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT]),
         // Passive (known-noise) alerts never open or join an incident on their own.
         eq(alerts.lane, "active"),
-        or(inArray(alerts.severity, [...AUTO_INCIDENT_SEVERITIES]), eq(alerts.source, CORRELATION_SOURCE)),
+        inArray(alerts.severity, [...AUTO_INCIDENT_SEVERITIES]),
+        // Older accumulation findings may still be stored as high; they remain review-only too.
+        sql`not (${alerts.source} = ${CORRELATION_SOURCE} and coalesce(${alerts.ruleId}, '') in ('host-risk-accumulation', 'user-risk-accumulation'))`,
         notExists(tx.select({ one: sql`1` }).from(incidentGroupExclusions).where(eq(incidentGroupExclusions.alertId, alerts.id))),
       ))
       .orderBy(desc(alerts.occurredAt))

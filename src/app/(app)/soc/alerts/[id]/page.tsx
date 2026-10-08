@@ -21,6 +21,7 @@ import { fmtDateTime, timeAgo } from "@/lib/utils";
 import { UndoButton } from "../../tuning/controls";
 import { AlertActions, MarkAsNoiseDialog, MoveToActiveButton, RequestResponseDialog } from "./alert-actions";
 import { HistoryCard, ProvenanceCard } from "./provenance";
+import { DetectionContext, WazuhAlertButton } from "@/components/soc/detection-context";
 
 export const metadata = { title: "Alert" };
 
@@ -69,6 +70,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
             </div>
           </div>
           <div className="flex flex-wrap items-start gap-2">
+            {data.wazuhUrl ? <WazuhAlertButton url={data.wazuhUrl} /> : null}
             {canTune ? <MarkAsNoiseDialog alertId={a.id} ruleId={a.ruleId!} source={a.source} hostLabel={asset?.name ?? rawHost} title={a.title} /> : null}
             {can(ctx, "ai:use", tenantId) ? (
               <Button asChild size="sm" variant="secondary">
@@ -134,7 +136,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
         </div>
       ) : null}
 
-      {a.description ? <p className="max-w-4xl whitespace-pre-wrap text-sm text-muted">{a.description}</p> : null}
+      {canTriage ? <DetectionContext alerts={[{ ...a, assetName: asset?.name ?? null, wazuhUrl: data.wazuhUrl, contributing: data.contributing }]} /> : a.description ? <p className="max-w-4xl whitespace-pre-wrap text-sm text-muted">{a.description}</p> : null}
 
       {provenance ? <ProvenanceCard p={provenance} /> : null}
 

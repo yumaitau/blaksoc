@@ -12,6 +12,7 @@ import { publish } from "@/lib/events";
 import { lookupWithCache, summariseIntel } from "@/lib/intel/enrich";
 import { queue, QUEUES } from "@/lib/queue";
 import { addTimeline, createIncidentFromAlerts } from "@/lib/services/incidents";
+import { isReviewOnlyCorrelation } from "@/lib/correlation/events";
 import { isResponseAction, RESPONSE_ACTIONS } from "./actions";
 import { allHold, evaluate, getPath } from "./conditions";
 import { responseHintOf, type ResponseHint } from "./hint";
@@ -59,8 +60,9 @@ export const STEP_ACTIONS: Record<string, { label: string; handler: StepHandler 
     handler: async (tx, s, run, ctx) => {
       if (ctx.incidentId) return { status: "SKIPPED", output: "incident exists" };
       if (!ctx.alertId) return { status: "SKIPPED", output: "no alert" };
-      const [a] = await tx.select({ incidentId: alerts.incidentId, lane: alerts.lane }).from(alerts).where(eq(alerts.id, ctx.alertId));
+      const [a] = await tx.select({ incidentId: alerts.incidentId, lane: alerts.lane, source: alerts.source, ruleId: alerts.ruleId }).from(alerts).where(eq(alerts.id, ctx.alertId));
       if (a?.lane === "passive") return { status: "SKIPPED", output: "alert is known noise (passive lane)" };
+      if (a && isReviewOnlyCorrelation(a)) return { status: "SKIPPED", output: "accumulated alert volume requires analyst review before opening an incident" };
       if (a?.incidentId) {
         ctx.incidentId = a.incidentId;
         return { status: "SKIPPED", output: "alert already in incident" };

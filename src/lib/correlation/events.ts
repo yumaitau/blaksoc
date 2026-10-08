@@ -3,6 +3,10 @@ import type { CorrelationEvent, CorrelationFinding, CorrelationRule } from "./en
 
 /** Source key for alerts the correlation engine raises. */
 export const CORRELATION_SOURCE = "blaksoc-correlation";
+export const REVIEW_ONLY_RULES = ["host-risk-accumulation", "user-risk-accumulation"] as const;
+export function isReviewOnlyCorrelation(a: { source: string; ruleId: string | null }): boolean {
+  return a.source === CORRELATION_SOURCE && REVIEW_ONLY_RULES.some((id) => id === a.ruleId);
+}
 
 /** Provider rule ids that mean the same thing as a canonical event type. */
 const EVENT_ALIASES: Record<string, string> = {

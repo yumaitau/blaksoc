@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { publish } from "@/lib/events";
 import type { HermesFilter } from "@/lib/tuning/hermes-ui";
 import { actor, AccessDenied, scoped } from "./common";
+import { contributingDetections, sourceAlertUrl } from "./incident-context";
 
 export const ALERT_STATUSES = ["NEW", "TRIAGING", "INVESTIGATING", "ESCALATED", "CONTAINED", "RESOLVED", "FALSE_POSITIVE"] as const;
 export type AlertStatus = (typeof ALERT_STATUSES)[number];
@@ -182,7 +183,10 @@ export async function getAlert(ctx: AccessContext, id: string) {
     const actions = await tx.select().from(responseActions).where(eq(responseActions.alertId, id)).orderBy(desc(responseActions.createdAt));
     // Raw payload is SOC-only; customers see normalised fields.
     const alert = can(ctx, "alert:triage", a.alert.tenantId) ? a.alert : { ...a.alert, raw: null };
-    return { ...a, alert, asset: asset ?? null, observables: obs, related, incident: incident ?? null, actions };
+    const [integration] = a.alert.integrationId ? await tx.select({ config: integrations.config }).from(integrations).where(eq(integrations.id, a.alert.integrationId)) : [];
+    const wazuhUrl = can(ctx, "alert:triage", a.alert.tenantId) ? sourceAlertUrl(a.alert, integration?.config ?? null) : null;
+    const contributing = can(ctx, "alert:triage", a.alert.tenantId) && a.alert.source === "blaksoc-correlation" ? await contributingDetections(tx, a.alert.tenantId, a.alert.raw) : [];
+    return { ...a, alert, asset: asset ?? null, observables: obs, related, incident: incident ?? null, actions, wazuhUrl, contributing };
   });
 }
 

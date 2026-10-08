@@ -12,6 +12,8 @@ import type {
 export type WazuhConfig = {
   apiUrl: string; // https://wazuh-manager:55000
   indexerUrl: string; // https://wazuh-indexer:9200
+  dashboardUrl?: string;
+  dashboardIndexPatternId?: string;
   alertsIndex?: string; // default wazuh-alerts-4.x-*
   /** Optional: also search the full event archive (logall_json), e.g. wazuh-archives-4.x-*. */
   archivesIndex?: string;

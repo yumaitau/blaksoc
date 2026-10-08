@@ -77,6 +77,8 @@ export const CONNECTORS: ConnectorDefinition[] = [
     config: z.object({
       apiUrl: z.string().url(),
       indexerUrl: z.string().url(),
+      dashboardUrl: z.string().url().optional(),
+      dashboardIndexPatternId: z.string().min(1).optional(),
       alertsIndex: z.string().optional(),
       archivesIndex: z.string().optional(),
       vulnerabilitiesIndex: z.string().optional(),

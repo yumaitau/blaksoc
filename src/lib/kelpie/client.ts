@@ -37,6 +37,7 @@ export type KelpieCase = {
   version: number;
   closedAt: string | null;
   updatedAt: string;
+  summary?: string | null;
 };
 
 export class KelpieError extends Error {
@@ -83,6 +84,10 @@ export class KelpieClient {
 
   getCase(id: string): Promise<KelpieCase> {
     return this.request<KelpieCase>("GET", `/api/v1/cases/${encodeURIComponent(id)}`);
+  }
+
+  updateSummary(caseId: string, summary: string, version: number): Promise<unknown> {
+    return this.request("PATCH", `/api/v1/cases/${encodeURIComponent(caseId)}`, { summary, version });
   }
 
   addComment(caseId: string, body: string): Promise<{ id: string }> {

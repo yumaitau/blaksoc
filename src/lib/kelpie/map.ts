@@ -1,4 +1,5 @@
 import type { KelpieCreateCase, KelpieObservableType, KelpieSeverity, KelpieStatus } from "./client";
+import { detectionContext, type DetectionAlert } from "@/lib/incidents/explanation";
 
 export const SOURCE_SYSTEM = "blaksoc";
 
@@ -33,6 +34,7 @@ export type IncidentForCase = {
   firstSeen: Date | null;
   tenantSlug: string;
   links: { kind: string; label: string }[];
+  alerts?: DetectionAlert[];
 };
 
 /** Case body for one incident. The incident id is the idempotency key, so a retry never makes a second case. */
@@ -50,7 +52,7 @@ export function caseFromIncident(inc: IncidentForCase, appUrl: string): KelpieCr
   const occurred = inc.firstSeen && inc.firstSeen <= inc.createdAt ? inc.firstSeen.toISOString() : detected;
   return {
     title: inc.title.slice(0, 500),
-    summary: lines.join("\n").slice(0, 50_000),
+    summary: [lines.join("\n").slice(0, 10_000), detectionContext(inc.alerts ?? [], appUrl)].filter(Boolean).join("\n\n"),
     severity: kelpieSeverity(inc.severity),
     tlp: "amber",
     // Kelpie asks producers to send "other" rather than guess a classification.

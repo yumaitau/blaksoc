@@ -169,6 +169,12 @@ per tenant over stored alerts, from a cursor minus each rule's look-back. New fi
 ingest path (`source = blaksoc-correlation`, so scoring, OCSF, SSE and playbooks apply) and a
 `correlation_findings` row records rule id, version and clause matches. Tenants can switch rules off.
 
+User/host risk accumulation is a **medium-priority review signal**: many low or medium alerts reaching a
+sum of 150 does not establish a high-severity threat. Known-noise and false-positive alerts do not feed
+correlation. Automatic grouping requires high or critical severity, and excludes risk accumulation
+findings, including older findings stored as high. Playbooks cannot open incidents from these volume-only
+findings either; an analyst can still escalate after reviewing the source events.
+
 Grouping (`src/lib/correlation/grouping.ts`) then links open alerts that share a user or asset inside 6 hours and
 share an ATT&CK technique or tactic, or that a correlated alert was built from. A group joins the open incident
 one of its alerts is in, or opens a new one (`incidents.grouping_key`). Links carry `origin = auto`, the reason and

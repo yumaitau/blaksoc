@@ -76,4 +76,12 @@ describe("Kelpie client", () => {
     expect(new KelpieError("x", 503).permanent).toBe(false);
     expect(new KelpieError("x", 429).permanent).toBe(false);
   });
+  it("guards summary updates with the case version and reports conflicts", async () => {
+    const seen: { body?: string }[] = [];
+    const k = new KelpieClient("https://k", "klp_secret", reply(200, {}, seen));
+    await k.updateSummary("case-1", "Evidence and analyst notes", 7);
+    expect(JSON.parse(seen[0]!.body!)).toEqual({ summary: "Evidence and analyst notes", version: 7 });
+    const conflicting = new KelpieClient("https://k", "klp_secret", reply(409, "Case changed"));
+    await expect(conflicting.updateSummary("case-1", "Evidence", 7)).rejects.toMatchObject({ status: 409 });
+  });
 });

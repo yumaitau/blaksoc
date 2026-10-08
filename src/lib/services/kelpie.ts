@@ -10,6 +10,8 @@ import { publish } from "@/lib/events";
 import { checkGovernedRegion } from "@/lib/governance/policy";
 import { KelpieError, type KelpieClient } from "@/lib/kelpie/client";
 import { caseFromIncident, incidentStatusFor, kelpieObservable } from "@/lib/kelpie/map";
+import { detectionContext, mergeDetectionContext } from "@/lib/incidents/explanation";
+import { incidentDetections } from "./incident-context";
 
 /** Raised when an analyst edits a case that Kelpie owns. The message is safe to show. */
 export class KelpieManaged extends Error {
@@ -75,7 +77,8 @@ async function pushCase(client: KelpieClient, row: typeof kelpieCases.$inferSele
       .from(incidentAlerts)
       .innerJoin(alerts, eq(alerts.id, incidentAlerts.alertId))
       .where(eq(incidentAlerts.incidentId, inc.id));
-    return caseFromIncident({ ...inc, firstSeen: first?.at ?? null, tenantSlug: slug, links }, env().APP_URL);
+    const detections = await incidentDetections(tx, inc.id);
+    return caseFromIncident({ ...inc, firstSeen: first?.at ?? null, tenantSlug: slug, links, alerts: detections }, env().APP_URL);
   });
   if (!body) return false;
   try {
@@ -120,6 +123,18 @@ async function forward(client: KelpieClient, row: typeof kelpieCases.$inferSelec
     sent++;
   }
   return sent;
+}
+
+/** Refresh our own evidence section after case status has been mirrored, so a failed write cannot block it. */
+async function forwardDetectionContext(client: KelpieClient, row: typeof kelpieCases.$inferSelect) {
+  const remote = await client.getCase(row.caseId!);
+  const detections = await withScope(systemScope(row.tenantId), (tx) => incidentDetections(tx, row.incidentId));
+  const summary = mergeDetectionContext(remote.summary, detectionContext(detections, env().APP_URL));
+  if (summary !== (remote.summary ?? "")) {
+    // Optimistic concurrency prevents overwriting an analyst's concurrent summary edit.
+    if (summary.length > 50_000) throw new Error("Kelpie summary has no room for detection context; shorten the analyst summary.");
+    await client.updateSummary(row.caseId!, summary, remote.version);
+  }
 }
 
 /** Mirrors Kelpie's status, severity and title onto the incident so the portal, paging and breach clocks follow Kelpie. */
@@ -212,6 +227,7 @@ export async function syncKelpie(opts: { now?: Date; connect?: KelpieConnect; li
       try {
         counts.forwarded += await forward(client, link, now);
         if (await pull(client, link, now)) counts.synced++;
+        await forwardDetectionContext(client, link);
       } catch (err) {
         counts.failed++;
         const permanent = err instanceof KelpieError && err.permanent;

@@ -21,6 +21,7 @@ import { isResponseAction, RESPONSE_ACTIONS } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { cn, fmtDateTime, fmtTime, timeAgo } from "@/lib/utils";
 import { CollectionPanel } from "./collection-panel";
+import { DetectionContext, WazuhAlertButton } from "@/components/soc/detection-context";
 import { CaseForm, EvidenceForm, NoteForm, TaskList, TimelineEventForm, UngroupButton } from "./incident-forms";
 
 export const metadata = { title: "Incident" };
@@ -58,6 +59,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
   const active = !["CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"].includes(inc.status);
   const breached = active && inc.slaDueAt && inc.slaDueAt.getTime() < new Date().getTime();
   const autoGrouped = data.alerts.filter((a) => a.origin === "auto");
+  const firstWazuh = data.detections.flatMap((a) => [a, ...(a.contributing ?? [])]).find((a) => a.wazuhUrl);
 
   // Group the timeline by Sydney calendar day, preserving chronological order.
   const days: { day: string; events: typeof data.timeline }[] = [];
@@ -90,6 +92,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
           <AttackChips techniques={inc.attackTechniques} max={8} />
         </div>
         <div className="flex flex-wrap gap-2">
+          {firstWazuh?.wazuhUrl ? <WazuhAlertButton url={firstWazuh.wazuhUrl} /> : null}
           {kelpie.link?.caseUrl ? (
             <Button asChild size="sm"><a href={kelpie.link.caseUrl} target="_blank" rel="noreferrer">Open in Kelpie {kelpie.link.caseNumber}</a></Button>
           ) : kelpie.managed ? (
@@ -106,6 +109,7 @@ export default async function IncidentDetail({ params }: { params: Promise<{ id:
 
       <div className="grid gap-5 xl:grid-cols-3">
         <div className="space-y-5 xl:col-span-2">
+          {can(ctx, "alert:triage", tenantId) ? <DetectionContext alerts={data.detections} /> : null}
           <Card>
             <CardHeader><CardTitle>Case</CardTitle></CardHeader>
             <CardContent>

@@ -10,6 +10,7 @@ import { publish } from "@/lib/events";
 import { queue, QUEUES } from "@/lib/queue";
 import { actor, AccessDenied, inTenant, scoped, userRef } from "./common";
 import { assertNotKelpieManaged, kelpieIntegration, kelpieLink } from "./kelpie";
+import { incidentDetections } from "./incident-context";
 
 export const INCIDENT_STATUSES = ["OPEN", "INVESTIGATING", "CONTAINED", "ERADICATED", "RECOVERED", "CLOSED"] as const;
 export type IncidentStatus = (typeof INCIDENT_STATUSES)[number];
@@ -79,6 +80,7 @@ export async function getIncident(ctx: AccessContext, id: string) {
       ...row,
       kelpie: { managed, link: managed ? await kelpieLink(tx, id) : null },
       alerts: alertRows,
+      detections: soc ? await incidentDetections(tx, id) : [],
       links,
       timeline: soc ? timeline : timeline.filter((t) => t.origin !== "ai"),
       notes,
