@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { EmptyState, IntelVerdict, PageHeader, RiskScore, SeverityBadge, StatLink, StatusBadge } from "@/components/soc/indicators";
+import { ToolCards } from "@/components/soc/tool-cards";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAccess } from "@/lib/auth/session";
 import { socDashboard } from "@/lib/services/dashboard";
+import { socTools } from "@/lib/services/soc-tools";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 
@@ -19,12 +21,14 @@ export default async function SocDashboard() {
   const ctx = await requireAccess();
   if (!ctx.isPlatform) redirect("/portal");
   const ws = await currentWorkspace(ctx);
-  const d = await socDashboard(ctx, ws.tenantIds);
+  const [d, tools] = await Promise.all([socDashboard(ctx, ws.tenantIds), socTools(ctx)]);
   const scope = ws.tenant ? ws.tenant.name : "all customers";
 
   return (
     <div className="space-y-5">
       <PageHeader eyebrow="Operate" title="SOC dashboard" description={`Live posture across ${scope}. Everything here links to the work it needs.`} />
+
+      <ToolCards tools={tools} />
 
       {/* What is happening / what matters */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-6">

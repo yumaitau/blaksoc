@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { minSeverityFor } from "@/worker/jobs/ingest";
+import { minSeverityFor } from "@/lib/integrations/alert-floor";
 
 const row = (provider: string, config: Record<string, unknown> = {}) => ({ provider, config }) as never;
 

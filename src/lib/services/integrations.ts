@@ -11,6 +11,8 @@ import { syncVeeamBackups } from "@/lib/services/backup";
 import { stampSyslogTenant } from "@/lib/services/syslog";
 import { encryptSecret } from "@/lib/crypto";
 import { logger } from "@/lib/obs/log";
+import { ALERT_FLOOR_SEVERITIES, supportsAlertFloor } from "@/lib/integrations/alert-floor";
+import type { Severity } from "@/lib/providers/types";
 import { actor, AccessDenied, scoped } from "./common";
 
 /** Columns safe for the browser. secretCiphertext is never selected here. */
@@ -73,7 +75,7 @@ async function refreshSubscriptions() {
 }
 
 /** Secrets are write-only: omitted keys keep their stored values. */
-export async function updateIntegration(ctx: AccessContext, id: string, input: { name?: string; config?: unknown; secrets?: Record<string, string>; enabled?: boolean }) {
+export async function updateIntegration(ctx: AccessContext, id: string, input: { name?: string; config?: unknown; configPatch?: Record<string, unknown>; secrets?: Record<string, string>; enabled?: boolean }) {
   const followUp = await scoped(ctx, "integration:manage", async (tx) => {
     const [cur] = await tx.select().from(integrations).where(eq(integrations.id, id));
     if (!cur) throw new AccessDenied("integration not found");
@@ -83,7 +85,9 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
     const patch: Partial<typeof integrations.$inferInsert> = {};
     if (input.name) patch.name = input.name;
     if (input.enabled !== undefined) patch.enabled = input.enabled;
-    if (input.config !== undefined) patch.config = stampSyslogTenant(cur.provider, def.config.parse(input.config) as Record<string, unknown>, cur.tenantId);
+    // configPatch merges into the settings read in this transaction, so a concurrent edit is not overwritten.
+    const config = input.config !== undefined ? input.config : input.configPatch ? { ...(cur.config as Record<string, unknown>), ...input.configPatch } : undefined;
+    if (config !== undefined) patch.config = stampSyslogTenant(cur.provider, def.config.parse(config) as Record<string, unknown>, cur.tenantId);
     if (input.secrets && Object.values(input.secrets).some(Boolean)) {
       const existing = cur.secretCiphertext ? (JSON.parse((await import("@/lib/crypto")).decryptSecret(cur.secretCiphertext, secretAad(id))) as Record<string, string>) : {};
       const merged = def.secrets.parse({ ...existing, ...Object.fromEntries(Object.entries(input.secrets).filter(([, v]) => v)) });
@@ -95,6 +99,18 @@ export async function updateIntegration(ctx: AccessContext, id: string, input: {
   });
   if (followUp) await syncVeeamBackups(followUp);
   await refreshSubscriptions();
+}
+
+/**
+ * Lowest alert severity stored from an integration. Lower alerts are dropped at ingest and stay searchable in
+ * the source; alerts already stored are not touched.
+ */
+export async function setAlertFloor(ctx: AccessContext, id: string, severity: Severity) {
+  if (!ALERT_FLOOR_SEVERITIES.includes(severity)) throw new Error(`Unknown severity "${severity}"`);
+  const [cur] = await scoped(ctx, "integration:read", (tx) => tx.select({ provider: integrations.provider }).from(integrations).where(eq(integrations.id, id)));
+  if (!cur) throw new AccessDenied("integration not found");
+  if (!supportsAlertFloor(cur.provider)) throw new Error(`The ${connectorDef(cur.provider)?.name ?? cur.provider} connector has no alert floor setting`);
+  await updateIntegration(ctx, id, { configPatch: { minSeverity: severity } });
 }
 
 export async function linkTenant(ctx: AccessContext, integrationId: string, tenantId: string, selector: { agentGroups?: string[] }) {

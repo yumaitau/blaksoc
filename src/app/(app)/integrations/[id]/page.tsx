@@ -7,9 +7,10 @@ import { requireAccess } from "@/lib/auth/session";
 import { CATEGORY_LABELS, secretFields } from "@/lib/integrations/form-spec";
 import type { ConnectorCategory } from "@/lib/connectors/registry";
 import { catalogue, integrationAudit, listIntegrations } from "@/lib/services/integrations";
+import { minSeverityFor, supportsAlertFloor } from "@/lib/integrations/alert-floor";
 import { fmtDateTime } from "@/lib/utils";
 import { IntegrationForm } from "../integration-form";
-import { TestConnection } from "../integration-controls";
+import { AlertFloor, TestConnection } from "../integration-controls";
 import { AuditHistory, ConnectionStatus, KeyValues } from "../parts";
 import { LinkTenantForm } from "./link-tenant-form";
 
@@ -75,6 +76,14 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
         </div>
 
         <aside className="space-y-5">
+          {supportsAlertFloor(row.provider) ? (
+            <Card>
+              <CardHeader><CardTitle>Alert floor</CardTitle></CardHeader>
+              <CardContent>
+                {manage ? <AlertFloor id={row.id} value={minSeverityFor(row)} /> : <p className="text-sm">Stores <span className="font-medium">{minSeverityFor(row)}</span> alerts and above.</p>}
+              </CardContent>
+            </Card>
+          ) : null}
           <Card>
             <CardHeader><CardTitle>Connection</CardTitle><ConnectionStatus status={row.status} enabled={row.enabled} /></CardHeader>
             <CardContent className="space-y-3 text-sm">

@@ -27,6 +27,11 @@ config:
   BREAK_GLASS_REQUIRE_MFA: "true"
   BLAKSOC_ARCHIVE_DIR: /tmp/blaksoc-archive
   DEMO_MODE: "false"
+  # Companion tool cards on the SOC dashboard.
+  WAZUH_DASHBOARD_URL: https://wazuh.yumait.au
+  THREATSIEVE_URL: https://threatsieve.yumait.au
+  THREATSIEVE_API_URL: https://api.threatsieve.yumait.au
+  KELPIE_URL: https://kelpie-app.yumait.au
 
 web:
   replicas: 2
