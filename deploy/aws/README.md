@@ -131,8 +131,9 @@ interfaces.
 
 The SOC dashboard shows a card for Wazuh, ThreatSieve and Kelpie with a link and a status. Wazuh and Kelpie
 come from their integrations' health checks (every 5 minutes); ThreatSieve from its public API `/health`
-(checked at most once a minute). The links are `WAZUH_DASHBOARD_URL`, `THREATSIEVE_URL`, `THREATSIEVE_API_URL`
-and `KELPIE_URL` in `values-yumait-prod.yaml`.
+(checked at most once a minute). In `values-yumait-prod.yaml`, the "Open" links are `WAZUH_DASHBOARD_URL`,
+`THREATSIEVE_URL` (the web app) and `KELPIE_URL`; `THREATSIEVE_API_URL` is the ThreatSieve API origin whose
+`/health` gives that card its status, not a link.
 
 Noise controls:
 

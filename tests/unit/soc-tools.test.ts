@@ -30,6 +30,16 @@ describe("ThreatSieve probe", () => {
     expect(calls).toBe(2);
   });
 
+  it("shares one in-flight probe between concurrent callers", async () => {
+    let calls = 0;
+    let release!: () => void;
+    const slow: HealthFetch = () => { calls++; return new Promise((r) => { release = () => r({ ok: true, status: 200, json: async () => ({ status: "ok" }) }); }); };
+    const both = Promise.all([probeThreatSieve("https://d.example.test", slow, 5_000), probeThreatSieve("https://d.example.test", slow, 5_100)]);
+    release();
+    expect((await both).map((s) => s.state)).toEqual(["ok", "ok"]);
+    expect(calls).toBe(1);
+  });
+
   it("explains a failed check", async () => {
     expect(await probeThreatSieve("https://a.example.test", reply(404, null))).toMatchObject({ state: "down", summary: "API health check returned HTTP 404" });
     expect(await probeThreatSieve("https://b.example.test", reply(200, { status: "degraded" }))).toMatchObject({ state: "down" });
