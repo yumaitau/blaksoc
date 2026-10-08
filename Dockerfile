@@ -7,8 +7,9 @@ FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2ee
 
 FROM base AS deps
 WORKDIR /app
-RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
+# Node 25+ no longer bundles corepack: install the pnpm release package.json pins.
+RUN npm install -g --no-fund --no-audit "$(node -p "require('./package.json').packageManager")"
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile
 
 FROM deps AS build
@@ -18,8 +19,9 @@ RUN pnpm build && pnpm build:worker
 
 FROM base AS prod-deps
 WORKDIR /app
-RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
+# Node 25+ no longer bundles corepack: install the pnpm release package.json pins.
+RUN npm install -g --no-fund --no-audit "$(node -p "require('./package.json').packageManager")"
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile --prod
 
 FROM base AS web
