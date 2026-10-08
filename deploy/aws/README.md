@@ -121,7 +121,8 @@ CISA KEV, abuse.ch ThreatFox, URLhaus and SSL blacklist, OpenCTI datasets). They
 
 Kubernetes visibility: Wazuh reads the EKS audit and authenticator logs every 5 minutes (aws-s3 wodle,
 `cloudwatchlogs`). Rules in `blaksoc_eks_rules.xml` (installed by `wazuh-host.sh`) watch people and unknown
-identities; Kubernetes controllers (`system:`) and EKS components (`eks:`) are ignored.
+identities; Kubernetes controllers (`system:`), EKS components (`eks:`) and AWS service-linked roles
+(`AWSServiceRoleFor*`) are ignored.
 
 | Rule | Level | Fires on |
 | --- | --- | --- |

@@ -223,7 +223,8 @@ if ! grep -q 'id="100100"' <<<"$current"; then
 fi
 cat > /tmp/blaksoc_eks_rules.xml <<'XML'
 <!-- blakSOC: EKS control plane (yumait-prod) audit and authenticator logs, read from CloudWatch by the aws-s3 wodle.
-     People and unknown identities are watched; Kubernetes controllers (system:) and EKS components (eks:) are not.
+     People and unknown identities are watched; Kubernetes controllers (system:), EKS components (eks:) and AWS
+     service-linked roles (AWSServiceRoleFor*, e.g. EKS Cluster Insights probing access) are not.
      Levels map to blakSOC severities: 10+ is high and opens a Kelpie case, 7-9 medium, 4-6 low. -->
 <group name="blaksoc,eks,kubernetes,">
   <rule id="100200" level="0">
@@ -235,7 +236,7 @@ cat > /tmp/blaksoc_eks_rules.xml <<'XML'
 
   <rule id="100201" level="0">
     <if_sid>100200</if_sid>
-    <field name="user.username" negate="yes">^system:|^eks:</field>
+    <field name="user.username" negate="yes">^system:|^eks:|:assumed-role/AWSServiceRoleFor</field>
     <description>EKS audit event by a person or unknown identity.</description>
   </rule>
 
