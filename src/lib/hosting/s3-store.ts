@@ -1,6 +1,6 @@
 import http from "node:http";
 import https from "node:https";
-import { GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
+import { GetBucketLocationCommand, GetObjectCommand, HeadBucketCommand, ListObjectsV2Command, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import { assertEgressUrl, guardedLookup } from "@/lib/net/egress";
 import { assertArchiveKey, assertAuRegion, AU_ARCHIVE_REGIONS, type AuArchiveRegion } from "@/lib/syslog/retain";
 import type { ArchiveStore } from "./store";
@@ -156,8 +156,15 @@ export class S3ArchiveStore implements ArchiveStore {
     for (const region of AU_ARCHIVE_REGIONS) {
       if (!this.config.buckets[region]) continue;
       const { client, bucket } = this.target(region);
-      const out = await client.send(new HeadBucketCommand({ Bucket: bucket }));
-      const actual = out.BucketRegion ?? null;
+      // GetBucketLocation needs no list permission, so a role confined to a prefix of a shared bucket can ask.
+      const location = await client.send(new GetBucketLocationCommand({ Bucket: bucket })).catch((err) => {
+        if (err instanceof S3ServiceException && err.name === "NotImplemented") return null;
+        throw err;
+      });
+      const constraint = location?.LocationConstraint;
+      let actual: string | null = constraint === "EU" ? "eu-west-1" : constraint || null;
+      // Empty means us-east-1 on AWS; S3-compatible stores often leave it empty and report through HeadBucket.
+      if (!actual) actual = (await client.send(new HeadBucketCommand({ Bucket: bucket }))).BucketRegion ?? null;
       if (actual !== null && actual !== region) throw new ArchiveResidencyError(`archive bucket ${bucket} is in ${actual}, configured for ${region}`);
       seen[region] = actual;
     }
