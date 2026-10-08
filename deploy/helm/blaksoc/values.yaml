@@ -91,6 +91,58 @@ backup:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 1Gi }
 
+# Hermes (in-cluster agent): a weekly CronJob that reads anonymised alert patterns from blakSOC's tuning
+# API, reduces noise through guarded actions and submits a PII-free report. Code and image: hermes/.
+# Model: Amazon Bedrock with an Australian inference profile, credentials from the hermes service account
+# (EKS Pod Identity), never keys. blakSOC token: key `tokenSecretKey` of existingSecret, only that key is
+# mounted. See deploy/aws/README.md, "Hermes (in-cluster agent)".
+hermes:
+  enabled: false
+  image:
+    repository: ""         # empty = <image.repository>-hermes (ECR blaksoc-hermes in production)
+    tag: ""                # empty = image.tag, then the chart appVersion
+  schedule: "30 9 * * 1"   # Mondays 09:30
+  timeZone: Australia/Sydney
+  # Never retried: a rerun could repeat actions. A failed run is visible in its Job and log line.
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  startingDeadlineSeconds: 3600
+  # Record intended actions without calling blakSOC's write endpoints. blakSOC's own "Allow Hermes to
+  # act" switch must also be on for any write to apply; when it is off every write answers 409.
+  dryRun: true
+  model:
+    # Australian cross-region profile: Sydney and Melbourne only. Non-AU profiles fail the render.
+    id: au.anthropic.claude-sonnet-4-5-20250929-v1:0
+    region: ap-southeast-2   # ap-southeast-2 or ap-southeast-4
+    maxTurns: 40             # model calls per run
+    maxTokens: 400000        # input + output tokens per run
+    maxOutputTokens: 4096
+    runSeconds: 1200         # wall clock for the agent; the Job deadline above is the backstop
+  patternDays: 7
+  outcomeLookbackDays: 90    # earlier actions read for undo/reopen feedback
+  # Per-run caps. The controller clamps to these maxima; larger values fail the render.
+  caps: { close: 10, noiseRules: 5, purge: 10, annotations: 50 }
+  tokenSecretKey: HERMES_BLAKSOC_TOKEN
+  serviceAccount:
+    create: true
+    name: ""               # empty = <release>-blaksoc-hermes
+    annotations: {}        # IRSA role annotation, if not using EKS Pod Identity
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  # The Hermes image user is 10000:10000, not the web/worker 100:101.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    fsGroup: 10000
+    seccompProfile: { type: RuntimeDefault }
+  networkPolicy:
+    # Bedrock runtime is a public AWS endpoint: TCP 443 to public addresses (private ranges excluded).
+    # Set false and list a bedrock-runtime VPC interface endpoint's CIDRs in bedrockCidrs instead.
+    bedrockPublicHttps: true
+    bedrockCidrs: []
+
 web:
   replicas: 2
   resources:

@@ -2,7 +2,8 @@
 {{- if and (not .Values.networkPolicy.dataStoresInCluster) (empty .Values.networkPolicy.egressCidrs) }}
 {{- fail "networkPolicy.dataStoresInCluster is false: list the Postgres and Redis CIDRs in networkPolicy.egressCidrs, or web and worker cannot reach them" }}
 {{- end }}
-# Web accepts traffic only from the ingress controller; nothing may reach the worker. With
+# Web accepts traffic only from the ingress controller (and Hermes pods when hermes.enabled); nothing
+# may reach the worker. With
 # observability.metrics.enabled, the scrape namespace may also reach both on the metrics port.
 # External scans run only on the worker (queue `surface`, job `scan`).
 # Per tenant: 1 scan at a time, 6 hosts per minute (src/lib/asm/scan.ts SCAN_LIMITS).
@@ -23,6 +24,12 @@ spec:
     - from:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }} } }
       ports: [{ port: 3000 }]
+{{- if .Values.hermes.enabled }}
+    # Hermes reaches blakSOC's tuning API on the web pods directly.
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: hermes } }
+      ports: [{ port: 3000 }]
+{{- end }}
 {{- include "blaksoc.metricsIngress" . }}
 {{- include "blaksoc.egress" . }}
 ---
@@ -54,5 +61,52 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress: []
 {{- include "blaksoc.egress" . }}
+{{- end }}
+{{- if .Values.hermes.enabled }}
+{{- range .Values.hermes.networkPolicy.bedrockCidrs }}
+{{- if has . (list "0.0.0.0/0" "::/0") }}{{ fail "hermes.networkPolicy.bedrockCidrs must list the Bedrock endpoint CIDRs, not the whole Internet" }}{{ end }}
+{{- end }}
+---
+# Hermes: no ingress. Egress only to DNS, the blakSOC web pods (tuning API), the EKS Pod Identity agent
+# (link-local, for Bedrock credentials) and Bedrock over HTTPS. Not the general cluster, not the
+# datastores, not other public ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "blaksoc.fullname" . }}-hermes
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: hermes }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: web } }
+      ports: [{ protocol: TCP, port: 3000 }]
+    - to:
+        - ipBlock: { cidr: 169.254.170.23/32 }
+        - ipBlock: { cidr: "fd00:ec2::23/128" }
+      ports: [{ protocol: TCP, port: 80 }]
+    {{- if .Values.hermes.networkPolicy.bedrockPublicHttps }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10, 127.0.0.0/8]
+        - ipBlock:
+            cidr: ::/0
+            except: ["fc00::/7", "fe80::/10", "::1/128", "fd00:ec2::/32"]
+      ports: [{ protocol: TCP, port: 443 }]
+    {{- end }}
+    {{- if .Values.hermes.networkPolicy.bedrockCidrs }}
+    - to:
+      {{- range .Values.hermes.networkPolicy.bedrockCidrs }}
+        - ipBlock: { cidr: {{ . | quote }} }
+      {{- end }}
+      ports: [{ protocol: TCP, port: 443 }]
+    {{- end }}
 {{- end }}
 {{- end }}
