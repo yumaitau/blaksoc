@@ -130,7 +130,10 @@ export type AlertProvenance = NonNullable<Awaited<ReturnType<typeof alertProvena
 export async function alertHistory(ctx: AccessContext, id: string) {
   return scoped(ctx, "alert:read", async (tx, tenantIds) => {
     const [a] = await tx
-      .select({ tenantId: alerts.tenantId, severity: alerts.severity, source: alerts.source, ingestedAt: alerts.ingestedAt, integrationName: integrations.name })
+      .select({
+        tenantId: alerts.tenantId, severity: alerts.severity, source: alerts.source, ingestedAt: alerts.ingestedAt, integrationName: integrations.name,
+        lane: alerts.lane, passiveReason: alerts.passiveReason, tuningActionId: alerts.tuningActionId,
+      })
       .from(alerts)
       .leftJoin(integrations, eq(integrations.id, alerts.integrationId))
       .where(and(eq(alerts.id, id), inArray(alerts.tenantId, tenantIds)));
@@ -153,6 +156,9 @@ export async function alertHistory(ctx: AccessContext, id: string) {
         or(
           and(eq(auditLog.targetType, "alert"), eq(auditLog.targetId, id)),
           and(eq(auditLog.targetType, "incident"), sql`${auditLog.detail} -> 'alertIds' @> ${JSON.stringify([id])}::jsonb`),
+          // Noise rules list the open alerts they moved to the passive lane when created or approved.
+          and(eq(auditLog.targetType, "noise_rule"), sql`${auditLog.detail} -> 'alertIds' @> ${JSON.stringify([id])}::jsonb`),
+          a.tuningActionId ? and(eq(auditLog.targetType, "tuning_action"), eq(auditLog.targetId, a.tuningActionId)) : undefined,
           actions.length ? and(eq(auditLog.targetType, "response_action"), inArray(auditLog.targetId, actions.map((r) => r.id))) : undefined,
           runs.length ? and(eq(auditLog.targetType, "playbook_run"), inArray(auditLog.targetId, runs.map((r) => r.id))) : undefined,
         ),

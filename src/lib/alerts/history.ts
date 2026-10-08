@@ -104,6 +104,20 @@ export function describeAuditEntry(row: AlertAuditRow, refs: HistoryRefs): { tex
       return { text: `Playbook “${str(d.playbook) ?? "unknown"}” started${str(d.event) === "alert.created" ? " when the alert was created" : ""}` };
     case "playbook.run_manual":
       return { text: `Ran playbook “${str(d.playbook) ?? "unknown"}”` };
+    case "alert.lane":
+      return { text: d.lane === "active" ? "Moved it from the passive lane back to the active queue" : "Moved it to the passive lane" };
+    case "noise_rule.create":
+    case "noise_rule.approve": {
+      const why = str(d.reason);
+      const verb = row.action === "noise_rule.approve" ? "Approved a noise rule" : "Created a noise rule";
+      return { text: `${verb}${why ? ` (“${clip(why, 120)}”)` : ""}; moved this alert to the passive lane`, href: "/soc/tuning" };
+    }
+    case "tuning.close": {
+      const why = str(d.reason);
+      return { text: `Closed it as a false positive${why ? ` (“${clip(why, 120)}”)` : ""}`, href: "/soc/hermes" };
+    }
+    case "tuning.undo":
+      return { text: "Undid the automated closure; the alert was reopened", href: "/soc/hermes" };
     default:
       return { text: row.action };
   }
@@ -114,7 +128,7 @@ export function describeAuditEntry(row: AlertAuditRow, refs: HistoryRefs): { tex
  * `ingestedAt` as the first entry.
  */
 export function alertHistory(
-  alert: { ingestedAt: Date; severity: string; source: string; integrationName: string | null },
+  alert: { ingestedAt: Date; severity: string; source: string; integrationName: string | null; lane?: string; passiveReason?: string | null },
   rows: AlertAuditRow[],
   refs: HistoryRefs,
 ): HistoryEntry[] {
@@ -124,6 +138,10 @@ export function alertHistory(
     actor: "system",
     text: `Stored as a ${alert.severity} alert from ${alert.integrationName ?? sourceLabel(alert.source)}`,
   };
+  // Passive from the start: a noise rule matched at ingest (which is not audited); later moves have their own rows.
+  if (alert.lane === "passive" && !rows.some((r) => r.action === "alert.lane" || r.action.startsWith("noise_rule."))) {
+    created.text += ` in the passive lane${alert.passiveReason ? ` (${clip(alert.passiveReason, 120)})` : ""}`;
+  }
   const rest = [...rows]
     .sort((a, b) => a.at.getTime() - b.at.getTime() || a.id - b.id)
     .map((r): HistoryEntry => ({ key: String(r.id), at: r.at, actor: actorLabel(r.actorKind, r.actorName), ...describeAuditEntry(r, refs) }));

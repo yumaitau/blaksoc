@@ -5,6 +5,12 @@ export const PERMISSIONS = [
   "alert:read",
   "alert:triage",
   "alert:assign",
+  "alert:tune",
+  "tuning:read",
+  "tuning:annotate",
+  "tuning:act",
+  "tuning:report",
+  "tuning:memory",
   "incident:read",
   "incident:write",
   "incident:close",
@@ -51,7 +57,7 @@ const L1: Permission[] = [
   "integration:read", "report:read", "ai:use",
 ];
 const L2: Permission[] = [
-  ...L1, "alert:assign", "incident:close", "asset:write", "vuln:write", "intel:write", "detection:write",
+  ...L1, "alert:assign", "alert:tune", "incident:close", "asset:write", "vuln:write", "intel:write", "detection:write",
   "report:generate",
 ];
 
@@ -69,7 +75,7 @@ export const BUILTIN_ROLES: readonly BuiltinRole[] = [
     scope: "platform",
     description: "Runs the SOC: approvals, detection deployment, playbooks, reporting.",
     permissions: [
-      ...L2, "intel:share", "detection:deploy", "playbook:write", "response:approve", "integration:manage", "audit:read",
+      ...L2, "tuning:read", "tuning:annotate", "tuning:act", "tuning:report", "tuning:memory", "intel:share", "detection:deploy", "playbook:write", "response:approve", "integration:manage", "audit:read",
     ],
   },
   { key: "soc_analyst_l2", name: "SOC Analyst L2/L3", scope: "platform", description: "Investigation and response.", permissions: L2 },

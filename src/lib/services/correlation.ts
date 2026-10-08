@@ -178,6 +178,8 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
       .from(alerts)
       .where(and(
         eq(alerts.tenantId, tenantId), gte(alerts.occurredAt, since), lte(alerts.occurredAt, now), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT]),
+        // Passive (known-noise) alerts never open or join an incident on their own.
+        eq(alerts.lane, "active"),
         or(inArray(alerts.severity, [...AUTO_INCIDENT_SEVERITIES]), eq(alerts.source, CORRELATION_SOURCE)),
         notExists(tx.select({ one: sql`1` }).from(incidentGroupExclusions).where(eq(incidentGroupExclusions.alertId, alerts.id))),
       ))
@@ -225,7 +227,7 @@ export async function runGrouping(tenantId: string, now = new Date()): Promise<{
 }
 
 async function applyPlan(tx: Tx, tenantId: string, plan: GroupPlan): Promise<{ incidentId: string; opened: boolean; raisedTo: Severity | null } | null> {
-  const rows = await tx.select().from(alerts).where(and(eq(alerts.tenantId, tenantId), inArray(alerts.id, plan.alertIds), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT])));
+  const rows = await tx.select().from(alerts).where(and(eq(alerts.tenantId, tenantId), inArray(alerts.id, plan.alertIds), isNull(alerts.incidentId), inArray(alerts.status, [...OPEN_ALERT]), eq(alerts.lane, "active")));
   if (rows.length !== plan.alertIds.length) return null;
   let incidentId = plan.incidentId;
   if (incidentId) {

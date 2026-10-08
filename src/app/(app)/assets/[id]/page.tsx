@@ -170,7 +170,7 @@ export default async function AssetPage({ params }: { params: Promise<{ id: stri
                         <SeverityBadge severity={x.severity} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm">{x.title}</div>
-                          <div className="truncate text-[11px] text-muted">{timeAgo(x.occurredAt)}{x.userName ? ` · ${x.userName}` : ""}</div>
+                          <div className="truncate text-[11px] text-muted">{timeAgo(x.occurredAt)}{x.userName ? ` · ${x.userName}` : ""}{x.lane === "passive" ? " · passive (known noise)" : ""}</div>
                         </div>
                         <StatusBadge status={x.status} />
                       </>

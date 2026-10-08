@@ -12,6 +12,7 @@ export async function GET(req: Request) {
       status: q.status,
       severity: q.severity,
       sinceHours: q.sinceHours,
+      lane: q.lane,
       limit: q.limit,
       offset: q.offset,
     });

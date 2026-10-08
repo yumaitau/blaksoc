@@ -35,6 +35,8 @@ export const NAV: NavGroup[] = [
       { href: "/detections", label: "Detections", icon: "ScanSearch", perm: "detection:read", platformOnly: true },
       { href: "/detections/attack", label: "ATT&CK coverage", icon: "Grid3x3", perm: "detection:read", platformOnly: true },
       { href: "/soar/playbooks", label: "Playbooks", icon: "Workflow", perm: "playbook:read", platformOnly: true },
+      { href: "/soc/tuning", label: "Noise tuning", icon: "BellOff", perm: "alert:tune", platformOnly: true },
+      { href: "/soc/hermes", label: "Hermes (AI tuning)", icon: "Bot", perm: "alert:tune", platformOnly: true },
     ],
   },
   {

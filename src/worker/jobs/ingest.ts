@@ -8,7 +8,7 @@ import { eventProvider, intelProviderFor, type IntegrationRow } from "@/lib/conn
 import { connectorDef } from "@/lib/connectors/registry";
 import { plansByTenant } from "@/lib/services/billing";
 import { DemoProvider } from "@/lib/providers/demo";
-import { ingestAlert } from "@/lib/pipeline/ingest";
+import { ingestAlert, newIngestBatch } from "@/lib/pipeline/ingest";
 import { syncAssets } from "@/lib/pipeline/assets";
 import { queue, QUEUES } from "@/lib/queue";
 import { redis } from "@/lib/redis";
@@ -177,6 +177,7 @@ export async function pollIntegration(row: IntegrationRow, tierOf: (id: string) 
     }
 
     const intelCache = new Map<string, Awaited<ReturnType<typeof intelProviderFor>>>();
+    const batch = newIngestBatch();
     let n = 0;
     const labels = { integration: row.id, provider: row.provider };
     const floor = SEVERITY_RANK[minSeverityFor(row)];
@@ -191,7 +192,7 @@ export async function pollIntegration(row: IntegrationRow, tierOf: (id: string) 
         continue;
       }
       if (!intelCache.has(tenantId)) intelCache.set(tenantId, await intelProviderFor(systemDb(), tenantId));
-      const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null });
+      const res = await ingestAlert({ tenantId, integrationId: row.id, source: row.provider === "demo" ? "wazuh" : row.provider, alert: a, intel: intelCache.get(tenantId)?.provider ?? null, batch });
       ingestAlerts().inc({ ...labels, outcome: res.created ? "created" : "duplicate" });
       if (res.created) {
         n++;
@@ -232,6 +233,7 @@ export async function runDetections() {
       const since = d.lastRunAt ?? new Date(Date.now() - 15 * 60_000);
       const res = await provider.searchEvents({ query: d.query, since, routingKeys: agents.map((a) => `agent:${a.externalId}`), limit: 100 });
       const intel = await intelProviderFor(systemDb(), d.tenantId);
+      const batch = newIngestBatch();
       for (const ev of res.events) {
         const e = ev as { _id: string; timestamp?: string; agent?: { id?: string; name?: string } };
         const level = { informational: 3, low: 5, medium: 8, high: 11, critical: 14 }[rule.severity];
@@ -240,6 +242,7 @@ export async function runDetections() {
           integrationId: row.id,
           source: "blaksoc-sigma",
           intel: intel?.provider ?? null,
+          batch,
           alert: {
             externalId: `${rule.id}:${e._id}`, ruleId: rule.sigmaId, title: rule.title, description: rule.description, category: "sigma", siemSeverity: level,
             severity: wazuhLevelToSeverity(level), occurredAt: e.timestamp ? new Date(e.timestamp) : new Date(), assetExternalId: e.agent?.id ?? null, hostname: e.agent?.name ?? null,

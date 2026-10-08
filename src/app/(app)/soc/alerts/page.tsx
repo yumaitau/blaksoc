@@ -10,12 +10,13 @@ import { ALERT_STATUSES, listAlerts, listSavedViews, SEVERITIES, type AlertFilte
 import { listIncidents } from "@/lib/services/incidents";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
+import { MoveToActiveButton } from "./[id]/alert-actions";
 import { BulkBar, QueueSelection, RowCheckbox, SelectAllCheckbox } from "./queue-selection";
 import { SaveView } from "./save-view";
 
 export const metadata = { title: "Alert queue" };
 
-const FILTER_KEYS = ["tenant", "status", "severity", "assignee", "intel", "intelLabel", "q", "technique", "category", "minRisk", "sort"] as const;
+const FILTER_KEYS = ["lane", "tenant", "status", "severity", "assignee", "intel", "intelLabel", "q", "technique", "category", "minRisk", "sort"] as const;
 const PAGE_SIZE = 50;
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -50,7 +51,10 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
   const offset = Math.max(0, Number(first(sp.offset)) || 0);
   const minRisk = filters.minRisk ? Number(filters.minRisk) : undefined;
 
+  // The queue is the active lane; known noise has its own tab and stays searchable there.
+  const passiveView = filters.lane === "passive";
   const query: AlertFilters = {
+    lane: passiveView ? "passive" : "active",
     tenantIds: filters.tenant ? [filters.tenant] : ws.tenantIds,
     status: csv(filters.status, ALERT_STATUSES),
     severity: csv(filters.severity, SEVERITIES),
@@ -79,6 +83,19 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
   return (
     <div className="space-y-4">
       <PageHeader eyebrow="Operate" title="Alert queue" description={`Triage queue for ${scope}. Sorted by blakSOC risk unless you choose otherwise.`} />
+
+      <nav aria-label="Queue lanes" className="flex items-center gap-1 border-b border-border">
+        {([["active", "Active queue"], ["passive", "Passive (known noise)"]] as const).map(([lane, label]) => {
+          const { lane: _lane, ...rest } = filters;
+          const current = (lane === "passive") === passiveView;
+          return (
+            <Link key={lane} href={queueHref(lane === "passive" ? { ...rest, lane } : rest)} aria-current={current ? "page" : undefined} className={cn("-mb-px border-b-2 px-3 py-2 text-sm", current ? "border-accent font-medium text-fg" : "border-transparent text-muted hover:text-fg")}>
+              {label}
+            </Link>
+          );
+        })}
+        {passiveView ? <span className="ml-auto pb-1 text-xs text-muted">Stored and searchable, out of the queue and dashboard counts. Move one back if it needs attention.</span> : null}
+      </nav>
 
       {/* Saved views */}
       <nav aria-label="Saved views" className="flex flex-wrap items-center gap-1.5">
@@ -122,7 +139,7 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
                   <TH>ATT&CK</TH>
                   <TH>Occurred</TH>
                   <TH>Status</TH>
-                  <TH>Assignee</TH>
+                  <TH>{passiveView ? "Why passive" : "Assignee"}</TH>
                 </TR>
               </THead>
               <TBody>
@@ -151,7 +168,14 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
                     <TD><AttackChips techniques={a.attackTechniques} max={2} /></TD>
                     <TD className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(a.occurredAt)}>{timeAgo(a.occurredAt)}</TD>
                     <TD><StatusBadge status={a.status} /></TD>
-                    <TD className="max-w-32 truncate text-xs">{a.assigneeName ?? <span className="text-faint">Unassigned</span>}</TD>
+                    {passiveView ? (
+                      <TD className="max-w-72 text-xs">
+                        <div className="truncate text-muted" title={a.passiveReason ?? undefined}>{a.passiveReason ?? "Known noise"}</div>
+                        {canTriage ? <div className="mt-1"><MoveToActiveButton ids={[a.id]} compact /></div> : null}
+                      </TD>
+                    ) : (
+                      <TD className="max-w-32 truncate text-xs">{a.assigneeName ?? <span className="text-faint">Unassigned</span>}</TD>
+                    )}
                   </TR>
                 ))}
               </TBody>
@@ -182,6 +206,7 @@ function FilterBar({ filters, customers }: { filters: Record<string, string>; cu
 
   return (
     <form action="/soc/alerts" className="grid grid-cols-2 gap-2 rounded-lg border border-border bg-surface p-3 md:grid-cols-4 xl:grid-cols-9">
+      {filters.lane ? <input type="hidden" name="lane" value={filters.lane} /> : null}
       <div className="col-span-2">
         <Label htmlFor="f-q">Search</Label>
         <Input id="f-q" name="q" defaultValue={filters.q} placeholder="Title, user or asset" />

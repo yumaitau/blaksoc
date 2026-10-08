@@ -16,8 +16,18 @@ import { validateOcsf } from "@/lib/ocsf/validate";
 import type { IntelProvider } from "@/lib/intel/types";
 import type { NormalisedAlert } from "@/lib/providers/types";
 import { scoreAlert } from "@/lib/risk/engine";
+import { dispositionStats, liveNoiseRules, recordNoiseHits } from "@/lib/services/tuning";
+import type { DispositionStats } from "@/lib/tuning/disposition";
+import { firstMatch, passiveReasonFor } from "@/lib/tuning/noise";
 
-export type IngestResult = { alertId: string; created: boolean; riskScore: number; intelVerdict: string };
+export type IngestResult = { alertId: string; created: boolean; riskScore: number; intelVerdict: string; lane: "active" | "passive" };
+
+/**
+ * Per-batch memo for one poll page or detection run: disposition memory is read once per tenant, rule and
+ * asset rather than once per alert. Alerts earlier in the batch are undecided, so they never change the answer.
+ */
+export type IngestBatch = { disposition: Map<string, DispositionStats> };
+export const newIngestBatch = (): IngestBatch => ({ disposition: new Map() });
 
 /**
  * Wazuh (or any provider) alert → observables → OpenCTI enrichment → risk → analyst queue.
@@ -29,6 +39,7 @@ export async function ingestAlert(opts: {
   source: string;
   alert: NormalisedAlert;
   intel: IntelProvider | null;
+  batch?: IngestBatch;
 }): Promise<IngestResult> {
   const { tenantId, alert } = opts;
   const obs: Observable[] = extractObservables({ ...alert.raw, _host: alert.hostname });
@@ -39,10 +50,10 @@ export async function ingestAlert(opts: {
 
   const result = await withScope(systemScope(tenantId), async (tx) => {
     const [dupe] = await tx
-      .select({ id: alerts.id, riskScore: alerts.riskScore, intelVerdict: alerts.intelVerdict })
+      .select({ id: alerts.id, riskScore: alerts.riskScore, intelVerdict: alerts.intelVerdict, lane: alerts.lane })
       .from(alerts)
       .where(and(eq(alerts.tenantId, tenantId), eq(alerts.source, opts.source), eq(alerts.externalId, alert.externalId)));
-    if (dupe) return { alertId: dupe.id, created: false, riskScore: dupe.riskScore, intelVerdict: dupe.intelVerdict };
+    if (dupe) return { alertId: dupe.id, created: false, riskScore: dupe.riskScore, intelVerdict: dupe.intelVerdict, lane: dupe.lane };
 
     intelMatchesFound = await filterByEntitlement(tx, tenantId, intelMatchesFound);
     const intel: IntelContext | null = opts.intel ? summariseIntel(intelMatchesFound) : null;
@@ -77,6 +88,23 @@ export async function ingestAlert(opts: {
           .limit(1)).length > 0
       : false;
 
+    const now = new Date();
+    let disposition: DispositionStats | null = null;
+    if (alert.ruleId) {
+      const key = `${tenantId}|${opts.source}|${alert.ruleId}|${asset?.id ?? ""}`;
+      disposition = opts.batch?.disposition.get(key) ?? (await dispositionStats(tx, { tenantId, source: opts.source, ruleId: alert.ruleId, assetId: asset?.id ?? null }, now));
+      opts.batch?.disposition.set(key, disposition);
+    }
+
+    // Known noise goes to the passive lane: stored and scored as usual, out of the queue. Intel matches stay active.
+    const noise = alert.ruleId
+      ? firstMatch(
+          await liveNoiseRules(tx, tenantId, opts.source, alert.ruleId, now),
+          { source: opts.source, ruleId: alert.ruleId, assetId: asset?.id ?? null, hostname: alert.hostname, title: alert.title, severity: alert.severity, intelVerdict: intel?.verdict },
+          now,
+        )
+      : null;
+
     const { score, factors } = scoreAlert({
       severity: alert.severity,
       siemSeverity: alert.siemSeverity,
@@ -88,6 +116,7 @@ export async function ingestAlert(opts: {
       repeatCount,
       cves: cves.map((c) => ({ cve: c.cve, kev: c.kev, epss: c.epss })),
       openIncidentOnAsset,
+      disposition,
     });
 
     const ingestedAt = new Date();
@@ -119,9 +148,13 @@ export async function ingestAlert(opts: {
         normalizationVersion: ocsf ? NORMALIZATION_VERSION : null,
         occurredAt: alert.occurredAt,
         ingestedAt,
+        lane: noise ? "passive" : "active",
+        passiveReason: noise ? passiveReasonFor(noise.reason) : null,
+        noiseRuleId: noise?.id ?? null,
       })
       .returning({ id: alerts.id });
     const alertId = row!.id;
+    if (noise) await recordNoiseHits(tx, noise.id, 1, now);
 
     const intelRows: { id: string; match: IntelMatch }[] = [];
     for (const o of obs) {
@@ -149,10 +182,11 @@ export async function ingestAlert(opts: {
       intel: intelRows,
     });
 
-    return { alertId, created: true, riskScore: score, intelVerdict: intel?.verdict ?? "unchecked" };
+    return { alertId, created: true, riskScore: score, intelVerdict: intel?.verdict ?? "unchecked", lane: noise ? ("passive" as const) : ("active" as const) };
   });
 
-  if (result.created) {
+  // A passive alert is not news: no live-queue event for it.
+  if (result.created && result.lane === "active") {
     await publish({ type: "alert.created", tenantId, id: result.alertId, title: alert.title, severity: alert.severity, riskScore: result.riskScore });
   }
   return result;

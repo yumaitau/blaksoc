@@ -1,5 +1,5 @@
 import { and, desc, eq, gte, inArray, ne, notInArray, sql } from "drizzle-orm";
-import { advisories, alerts, approvals, assets, incidents, intelMatches, responseActions, tenants, user, vulnerabilities } from "@/db/schema";
+import { advisories, alerts, approvals, assets, auditLog, incidents, intelMatches, noiseRules, responseActions, tenants, user, vulnerabilities } from "@/db/schema";
 import { db } from "@/db/client";
 import type { AccessContext } from "@/lib/auth/access";
 import { scoped } from "./common";
@@ -14,7 +14,8 @@ export async function socDashboard(ctx: AccessContext, tenantIds?: string[]) {
     ctx,
     "dashboard:read",
     async (tx, ids) => {
-      const openAlert = and(inArray(alerts.tenantId, ids), notInArray(alerts.status, [...OPEN_ALERT]));
+      // The queue: open alerts in the active lane. Known noise (passive) is stored but not counted as work.
+      const openAlert = and(inArray(alerts.tenantId, ids), notInArray(alerts.status, [...OPEN_ALERT]), eq(alerts.lane, "active"));
       const [counts] = await tx
         .select({
           critical: sql<number>`count(*) filter (where ${alerts.severity} = 'critical' or ${alerts.riskScore} >= 80)::int`,
@@ -47,8 +48,8 @@ export async function socDashboard(ctx: AccessContext, tenantIds?: string[]) {
       const customersAtRisk = await tx
         .select({
           tenantId: tenants.id, name: tenants.name,
-          risk: sql<number>`coalesce(max(${alerts.riskScore}) filter (where ${alerts.status} not in ('RESOLVED','FALSE_POSITIVE')), 0)::int`,
-          open: sql<number>`count(${alerts.id}) filter (where ${alerts.status} not in ('RESOLVED','FALSE_POSITIVE'))::int`,
+          risk: sql<number>`coalesce(max(${alerts.riskScore}) filter (where ${alerts.status} not in ('RESOLVED','FALSE_POSITIVE') and ${alerts.lane} = 'active'), 0)::int`,
+          open: sql<number>`count(${alerts.id}) filter (where ${alerts.status} not in ('RESOLVED','FALSE_POSITIVE') and ${alerts.lane} = 'active')::int`,
         })
         .from(tenants)
         .leftJoin(alerts, eq(alerts.tenantId, tenants.id))
@@ -126,9 +127,9 @@ export async function msspOverview(ctx: AccessContext) {
     tx
       .select({
         id: tenants.id, slug: tenants.slug, name: tenants.name, sectors: tenants.sectors, deploymentMode: tenants.deploymentMode,
-        risk: sql<number>`coalesce((select max(a.risk_score) from alerts a where a.tenant_id = tenants.id and a.status not in ('RESOLVED','FALSE_POSITIVE')), 0)::int`,
-        alerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.status not in ('RESOLVED','FALSE_POSITIVE'))::int`,
-        criticalAlerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.status = 'NEW' and a.risk_score >= 70)::int`,
+        risk: sql<number>`coalesce((select max(a.risk_score) from alerts a where a.tenant_id = tenants.id and a.status not in ('RESOLVED','FALSE_POSITIVE') and a.lane = 'active'), 0)::int`,
+        alerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.status not in ('RESOLVED','FALSE_POSITIVE') and a.lane = 'active')::int`,
+        criticalAlerts: sql<number>`(select count(*) from alerts a where a.tenant_id = tenants.id and a.status = 'NEW' and a.risk_score >= 70 and a.lane = 'active')::int`,
         incidents: sql<number>`(select count(*) from incidents i where i.tenant_id = tenants.id and i.status <> 'CLOSED')::int`,
         endpoints: sql<number>`(select count(*) from assets s where s.tenant_id = tenants.id and s.kind in ('endpoint','server'))::int`,
         endpointsOffline: sql<number>`(select count(*) from assets s where s.tenant_id = tenants.id and s.kind in ('endpoint','server') and s.agent_status is not null and s.agent_status <> 'active')::int`,
@@ -139,5 +140,63 @@ export async function msspOverview(ctx: AccessContext) {
       .from(tenants)
       .where(and(inArray(tenants.id, ids), eq(tenants.kind, "customer"), sql`coalesce((${tenants.settings}->>'training')::boolean, false) = false`))
       .orderBy(desc(sql`6`)),
+  );
+}
+
+/**
+ * Alert fatigue over the last `days` (by event time, through alerts_tenant_occurred): how much was stored, how
+ * much known noise kept out of the queue (and by which rules), what still waits, how fast a person first acts,
+ * and how often closed alerts were false positives.
+ */
+export async function fatigueMetrics(ctx: AccessContext, tenantIds?: string[], days = 7) {
+  const since = new Date(Date.now() - days * 86_400_000);
+  return scoped(
+    ctx,
+    "dashboard:read",
+    async (tx, ids) => {
+      const window = and(inArray(alerts.tenantId, ids), gte(alerts.occurredAt, since));
+      const [c] = await tx
+        .select({
+          stored: sql<number>`count(*)::int`,
+          passive: sql<number>`count(*) filter (where ${alerts.lane} = 'passive')::int`,
+          awaiting: sql<number>`count(*) filter (where ${alerts.lane} = 'active' and ${alerts.status} = 'NEW')::int`,
+          closed: sql<number>`count(*) filter (where ${alerts.status} in ('RESOLVED','FALSE_POSITIVE'))::int`,
+          falsePositive: sql<number>`count(*) filter (where ${alerts.status} = 'FALSE_POSITIVE')::int`,
+        })
+        .from(alerts)
+        .where(window);
+      // Partial index alerts_passive.
+      const topRules = await tx
+        .select({ id: noiseRules.id, source: noiseRules.source, ruleId: noiseRules.ruleId, reason: noiseRules.reason, tenantName: tenants.name, hits: sql<number>`count(*)::int` })
+        .from(alerts)
+        .innerJoin(noiseRules, eq(noiseRules.id, alerts.noiseRuleId))
+        .innerJoin(tenants, eq(tenants.id, noiseRules.tenantId))
+        .where(and(window, eq(alerts.lane, "passive")))
+        .groupBy(noiseRules.id, tenants.name)
+        .orderBy(desc(sql`count(*)`))
+        .limit(3);
+      // First person (or API client) to touch each alert: the earliest alert.update in the audit trail.
+      const first = tx
+        .select({ targetId: auditLog.targetId, at: sql<Date>`min(${auditLog.at})`.as("first_at") })
+        .from(auditLog)
+        .where(and(inArray(auditLog.tenantId, ids), gte(auditLog.at, since), eq(auditLog.action, "alert.update"), eq(auditLog.targetType, "alert")))
+        .groupBy(auditLog.targetId)
+        .as("first");
+      const [t] = await tx
+        .select({ median: sql<number | null>`percentile_cont(0.5) within group (order by extract(epoch from ${first.at} - ${alerts.ingestedAt}))` })
+        .from(alerts)
+        .innerJoin(first, sql`${first.targetId} = ${alerts.id}::text`)
+        .where(window);
+      const counts = c ?? { stored: 0, passive: 0, awaiting: 0, closed: 0, falsePositive: 0 };
+      return {
+        days,
+        ...counts,
+        passiveShare: counts.stored ? counts.passive / counts.stored : null,
+        falsePositiveRate: counts.closed ? counts.falsePositive / counts.closed : null,
+        medianSecondsToFirstTriage: t?.median == null ? null : Number(t.median),
+        topRules,
+      };
+    },
+    tenantIds,
   );
 }

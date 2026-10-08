@@ -170,6 +170,154 @@ export const incidents = pgTable(
   ],
 );
 
+export const NOISE_RULE_STATUSES = ["proposed", "active", "expired", "rejected"] as const;
+export type NoiseRuleStatus = (typeof NOISE_RULE_STATUSES)[number];
+
+/**
+ * Analyst-approved "this is known noise" for one tenant (src/lib/tuning/noise.ts). A matching alert is still
+ * stored, searchable and scored, but goes to the passive lane instead of the triage queue. Every rule expires;
+ * proposals (from automation) never match until a human approves them.
+ */
+export const noiseRules = pgTable(
+  "noise_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    ruleId: text("rule_id").notNull(),
+    /** One host. Cascades: a host-scoped rule must never widen to every host when its asset goes. */
+    assetId: uuid("asset_id").references(() => assets.id, { onDelete: "cascade" }),
+    /** Short host name (lower case, no domain), for alerts no asset was resolved for. */
+    hostname: text("hostname"),
+    /** Case-insensitive title glob; `*` matches anything. */
+    titlePattern: text("title_pattern"),
+    /** Highest severity the rule may make passive; null = any. Hermes-made rules stop at medium. */
+    maxSeverity: severity("max_severity"),
+    reason: text("reason").notNull(),
+    /** What the proposer saw (counts, examples). Required for service proposals. */
+    evidence: text("evidence"),
+    status: text("status").$type<NoiseRuleStatus>().notNull().default("proposed"),
+    createdBy: text("created_by"),
+    createdByKind: text("created_by_kind").$type<"user" | "service">().notNull(),
+    approvedBy: text("approved_by"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    hitCount: integer("hit_count").notNull().default(0),
+    lastHitAt: timestamp("last_hit_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("noise_rules_match").on(t.tenantId, t.source, t.ruleId).where(sql`${t.status} = 'active'`),
+    index("noise_rules_tenant").on(t.tenantId, t.status, t.createdAt),
+  ],
+);
+
+export const ALERT_LANES = ["active", "passive"] as const;
+export type AlertLane = (typeof ALERT_LANES)[number];
+
+export const TUNING_ACTION_KINDS = ["annotate", "close", "noise_rule", "purge"] as const;
+export type TuningActionKind = (typeof TUNING_ACTION_KINDS)[number];
+
+/**
+ * Pattern registry for the tuning API: an opaque pattern id (HMAC, src/lib/tuning/pseudonym.ts) for one
+ * tenant's (source, rule id). Written when the API lists a pattern, so callers can only act on ids they were given.
+ */
+export const tuningPatterns = pgTable(
+  "tuning_patterns",
+  {
+    id: text("id").primaryKey(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    ruleId: text("rule_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("tuning_patterns_key").on(t.tenantId, t.source, t.ruleId)],
+);
+
+/** Every action a tuning agent (Hermes) took, its outcome, and whether an analyst undid it. */
+export const tuningActions = pgTable(
+  "tuning_actions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<TuningActionKind>().notNull(),
+    patternId: text("pattern_id").notNull(),
+    source: text("source").notNull(),
+    ruleId: text("rule_id").notNull(),
+    params: jsonb("params").$type<Record<string, unknown>>().notNull().default({}),
+    affectedCount: integer("affected_count").notNull().default(0),
+    /** Service identity id. */
+    actorId: text("actor_id").notNull(),
+    noiseRuleId: uuid("noise_rule_id").references(() => noiseRules.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Closures: alerts may be purged only after this. */
+    reversibleUntil: timestamp("reversible_until", { withTimezone: true }),
+    undoneAt: timestamp("undone_at", { withTimezone: true }),
+    undoneBy: text("undone_by"),
+    undoneByKind: text("undone_by_kind"),
+  },
+  (t) => [index("tuning_actions_pattern").on(t.tenantId, t.source, t.ruleId, t.createdAt), index("tuning_actions_created").on(t.createdAt)],
+);
+
+/** Free-text notes a tuning agent left on a pattern; shown to analysts as an AI note. */
+export const patternAnnotations = pgTable(
+  "pattern_annotations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    patternId: text("pattern_id").notNull(),
+    source: text("source").notNull(),
+    ruleId: text("rule_id").notNull(),
+    text: text("text").notNull(),
+    confidence: text("confidence").$type<"low" | "medium" | "high">().notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("pattern_annotations_pattern").on(t.tenantId, t.source, t.ruleId, t.createdAt)],
+);
+
+/** A tuning agent's run report (platform-level: one report covers every tenant it reviewed). */
+export const hermesReports = pgTable(
+  "hermes_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    periodStart: timestamp("period_start", { withTimezone: true }).notNull(),
+    periodEnd: timestamp("period_end", { withTimezone: true }).notNull(),
+    markdown: text("markdown").notNull(),
+    stats: jsonb("stats").$type<{ executed: number; refused: number; dryRun: number; patternsReviewed: number }>().notNull(),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("hermes_reports_created").on(t.createdAt)],
+);
+
+export const HERMES_NOTE_SOURCES = ["model", "outcome", "human"] as const;
+export type HermesNoteSource = (typeof HERMES_NOTE_SOURCES)[number];
+
+/** The tuning agent's long-term memory, kept here so it is backed up, audited and visible to analysts. */
+export const hermesMemoryNotes = pgTable(
+  "hermes_memory_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** `model` and `outcome` notes belong to the agent; `human` notes are added by analysts and kept whatever it sends. */
+    kind: text("kind").$type<HermesNoteSource>().notNull(),
+    text: text("text").notNull(),
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("hermes_memory_notes_kind").on(t.kind, t.createdAt)],
+);
+
+/** Platform-wide switches (not tenant data). Read by the system role; written only under platform scope. */
+export const platformSettings = pgTable("platform_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedBy: text("updated_by"),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const alerts = pgTable(
   "alerts",
   {
@@ -195,6 +343,16 @@ export const alerts = pgTable(
     intel: jsonb("intel").$type<IntelContext>(),
     intelVerdict: text("intel_verdict").notNull().default("unchecked"),
     incidentId: uuid("incident_id").references(() => incidents.id, { onDelete: "set null" }),
+    /**
+     * `active` alerts are the triage queue. `passive` ones (known noise) are stored, searchable and shown on their
+     * asset, but kept out of the default queue, dashboard counts and automatic incidents. Never a status change.
+     */
+    lane: text("lane").$type<AlertLane>().notNull().default("active"),
+    /** Why the alert is passive, in plain language. */
+    passiveReason: text("passive_reason"),
+    noiseRuleId: uuid("noise_rule_id").references(() => noiseRules.id, { onDelete: "set null" }),
+    /** Set when a tuning agent closed the alert (tuning_actions.kind = 'close'); kept after an undo. */
+    tuningActionId: uuid("tuning_action_id").references(() => tuningActions.id, { onDelete: "set null" }),
     raw: jsonb("raw"),
     /** The alert as an OCSF Detection Finding (2004). See src/lib/ocsf. */
     ocsf: jsonb("ocsf").$type<DetectionFinding>(),
@@ -213,6 +371,10 @@ export const alerts = pgTable(
     index("alerts_queue").on(t.tenantId, t.status, t.riskScore),
     index("alerts_occurred").on(t.occurredAt),
     index("alerts_tenant_occurred").on(t.tenantId, t.occurredAt),
+    // Disposition memory at ingest (src/lib/services/tuning.ts): past outcomes of one tenant's rule.
+    index("alerts_disposition").on(t.tenantId, t.source, t.ruleId, t.occurredAt),
+    index("alerts_passive").on(t.tenantId, t.occurredAt).where(sql`${t.lane} = 'passive'`),
+    index("alerts_tuning_action").on(t.tuningActionId).where(sql`${t.tuningActionId} is not null`),
   ],
 );
 
