@@ -55,6 +55,17 @@ def stats(ledger: policy.Ledger, *, patterns: int, stripped: int, dry_run: bool,
     }
 
 
+def api_stats(run_stats: dict) -> dict:
+    """The counts blakSOC stores with a report; the full breakdown is in the report's own table."""
+    actions = run_stats["actions"]
+    return {
+        "executed": actions["executed"],
+        "refused": actions["refused"] + actions["failed"],
+        "dryRun": actions["dryRun"],
+        "patternsReviewed": run_stats["patternsReviewed"],
+    }
+
+
 def _cell(text: str, limit: int = 160) -> str:
     return sanitize.scrub(sanitize.clean_text(text, limit)).replace("|", "/").replace("\n", " ")
 
