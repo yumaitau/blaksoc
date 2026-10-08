@@ -1,8 +1,10 @@
 import {
   BellOff, Bot, Bug, Building2, ChartColumn, FileText, Fingerprint, FolderKanban, GraduationCap, Grid3x3, LayoutDashboard, Plug, Radar, ScanSearch, ScrollText, SearchCode, Server, Settings, ShieldCheck, Siren, Sparkles, Workflow,
 } from "lucide-react";
+import { Suspense } from "react";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { Wordmark } from "./brand";
+import { HermesNavCount } from "./hermes-nav-count";
 import { LiveUpdates } from "./live-updates";
 import { NAV } from "./nav";
 import { NavLink } from "./nav-link";
@@ -32,6 +34,7 @@ export function AppShell({ ctx, workspace, brand, children }: { ctx: AccessConte
                   <NavLink key={i.href} href={i.href}>
                     <Icon className="size-4" />
                     {i.label}
+                    {i.href === "/soc/hermes" ? <Suspense fallback={null}><HermesNavCount ctx={ctx} /></Suspense> : null}
                   </NavLink>
                 );
               })}

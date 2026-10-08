@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { HERMES_NOTE_TITLE, HermesBadge, HermesBanner } from "@/components/soc/hermes-badge";
 import { AttackChips, EmptyState, IntelVerdict, PageHeader, RiskScore, SeverityBadge, StatusBadge } from "@/components/soc/indicators";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -8,6 +9,8 @@ import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { ALERT_STATUSES, listAlerts, listSavedViews, SEVERITIES, type AlertFilters } from "@/lib/services/alerts";
 import { listIncidents } from "@/lib/services/incidents";
+import { tuningActionSummary } from "@/lib/services/tuning";
+import { HERMES_CLOSURE_LABEL, HERMES_KIND_LABEL, hermesClosure, parseHermesAction, parseHermesFilter } from "@/lib/tuning/hermes-ui";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 import { MoveToActiveButton } from "./[id]/alert-actions";
@@ -16,7 +19,7 @@ import { SaveView } from "./save-view";
 
 export const metadata = { title: "Alert queue" };
 
-const FILTER_KEYS = ["lane", "tenant", "status", "severity", "assignee", "intel", "intelLabel", "q", "technique", "category", "minRisk", "sort"] as const;
+const FILTER_KEYS = ["lane", "tenant", "status", "severity", "assignee", "intel", "intelLabel", "q", "technique", "category", "minRisk", "hermes", "hermesAction", "sort"] as const;
 const PAGE_SIZE = 50;
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -53,8 +56,10 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
 
   // The queue is the active lane; known noise has its own tab and stays searchable there.
   const passiveView = filters.lane === "passive";
+  // One Hermes action's alerts are shown from both lanes: its noise rule's are passive, its closures usually active.
+  const hermesAction = parseHermesAction(filters.hermesAction);
   const query: AlertFilters = {
-    lane: passiveView ? "passive" : "active",
+    lane: hermesAction ? undefined : passiveView ? "passive" : "active",
     tenantIds: filters.tenant ? [filters.tenant] : ws.tenantIds,
     status: csv(filters.status, ALERT_STATUSES),
     severity: csv(filters.severity, SEVERITIES),
@@ -65,17 +70,21 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
     technique: filters.technique,
     category: filters.category,
     minRisk: Number.isFinite(minRisk) ? minRisk : undefined,
+    hermes: parseHermesFilter(filters.hermes),
+    hermesAction,
     sort: filters.sort === "newest" || filters.sort === "oldest" ? filters.sort : "risk",
     limit: PAGE_SIZE,
     offset,
   };
 
   const canTriage = can(ctx, "alert:triage");
-  const [{ rows, total }, views, openIncidents] = await Promise.all([
+  const [{ rows, total }, views, openIncidents, hermesActed] = await Promise.all([
     listAlerts(ctx, query),
     listSavedViews(ctx, "/soc/alerts"),
     canTriage && can(ctx, "incident:read") ? listIncidents(ctx, { tenantIds: ws.tenantIds, open: true }) : Promise.resolve([]),
+    hermesAction ? tuningActionSummary(ctx, hermesAction) : Promise.resolve(null),
   ]);
+  const { hermesAction: _hermesAction, ...withoutHermesAction } = filters;
 
   const customers = ctx.tenants.filter((t) => t.kind === "customer");
   const scope = filters.tenant ? (customers.find((c) => c.id === filters.tenant)?.name ?? "selected customer") : ws.tenant ? ws.tenant.name : "all customers";
@@ -116,6 +125,36 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
 
       <FilterBar filters={filters} customers={customers} />
 
+      {filters.hermesAction && !hermesAction ? (
+        <HermesBanner
+          title="That Hermes action link is not valid"
+          muted
+          actions={<Button asChild size="sm" variant="ghost"><Link href={queueHref(withoutHermesAction)}>Show all alerts</Link></Button>}
+        >
+          <p>The action id in the address is malformed, so this list is not filtered by it.</p>
+        </HermesBanner>
+      ) : null}
+      {hermesAction ? (
+        <HermesBanner
+          title={hermesActed ? `${HERMES_KIND_LABEL[hermesActed.kind] ?? hermesActed.kind} · ${hermesActed.tenantName}` : "Hermes action not found"}
+          muted={!hermesActed || !!hermesActed.undoneAt}
+          actions={<Button asChild size="sm" variant="ghost"><Link href={queueHref(withoutHermesAction)}>Show all alerts</Link></Button>}
+        >
+          {hermesActed ? (
+            <>
+              <p>
+                <span title={fmtDateTime(hermesActed.createdAt)}>{timeAgo(hermesActed.createdAt)}</span> · {hermesActed.source} rule <span className="font-mono">{hermesActed.ruleId}</span>
+                {hermesActed.kind === "annotate" ? "" : ` · ${hermesActed.affectedCount} affected`}
+                {hermesActed.undoneAt ? ` · undone ${fmtDateTime(hermesActed.undoneAt)}` : ""}
+              </p>
+              <p>
+                {hermesActed.kind === "close" ? "Alerts this closure covered, in both lanes." : hermesActed.kind === "noise_rule" ? "Alerts its noise rule keeps in the passive lane now; undoing it returns them to the queue." : "Alerts on the pattern Hermes annotated, in both lanes."}
+              </p>
+            </>
+          ) : <p>It is outside your scope, or its alerts were purged.</p>}
+        </HermesBanner>
+      ) : null}
+
       <Card>
         <QueueSelection rows={rows.map((r) => ({ id: r.id, tenantId: r.tenantId }))}>
           <BulkBar statuses={ALERT_STATUSES} openIncidents={openIncidents.map((i) => ({ id: i.id, ref: i.ref, title: i.title, tenantId: i.tenantId, tenantName: i.tenantName }))} canTriage={canTriage} />
@@ -143,41 +182,52 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
                 </TR>
               </THead>
               <TBody>
-                {rows.map((a) => (
-                  <TR key={a.id}>
-                    {canTriage ? <TD><RowCheckbox id={a.id} tenantId={a.tenantId} title={a.title} /></TD> : null}
-                    <TD><SeverityBadge severity={a.severity} /></TD>
-                    <TD><RiskScore score={a.riskScore} factors={a.riskFactors} /></TD>
-                    <TD className="max-w-36 truncate text-xs text-muted">{a.tenantName}</TD>
-                    <TD className="max-w-md">
-                      <Link href={`/soc/alerts/${a.id}`} className="block truncate font-medium hover:text-accent">{a.title}</Link>
-                      <div className="truncate text-[11px] text-faint">
-                        {a.category ?? "uncategorised"}
-                        {a.incidentId ? <> · <Link href={`/soc/incidents/${a.incidentId}`} className="text-accent hover:underline">on incident</Link></> : null}
-                      </div>
-                    </TD>
-                    <TD className="max-w-40 truncate text-xs">
-                      {a.assetId ? <Link href={`/assets/${a.assetId}`} className="hover:text-accent">{a.assetName}</Link> : <span className="text-faint">—</span>}
-                    </TD>
-                    <TD className="max-w-36 truncate text-xs">{a.userName ?? <span className="text-faint">—</span>}</TD>
-                    <TD className="max-w-40 text-xs text-muted">
-                      <div className="truncate">{a.source}</div>
-                      {viaLine(a) ? <div className="truncate text-[11px] text-faint" title={viaLine(a)}>{viaLine(a)}</div> : null}
-                    </TD>
-                    <TD><IntelVerdict verdict={a.intelVerdict} /></TD>
-                    <TD><AttackChips techniques={a.attackTechniques} max={2} /></TD>
-                    <TD className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(a.occurredAt)}>{timeAgo(a.occurredAt)}</TD>
-                    <TD><StatusBadge status={a.status} /></TD>
-                    {passiveView ? (
-                      <TD className="max-w-72 text-xs">
-                        <div className="truncate text-muted" title={a.passiveReason ?? undefined}>{a.passiveReason ?? "Known noise"}</div>
-                        {canTriage ? <div className="mt-1"><MoveToActiveButton ids={[a.id]} compact /></div> : null}
+                {rows.map((a) => {
+                  const closure = hermesClosure(a);
+                  return (
+                    <TR key={a.id}>
+                      {canTriage ? <TD><RowCheckbox id={a.id} tenantId={a.tenantId} title={a.title} /></TD> : null}
+                      <TD><SeverityBadge severity={a.severity} /></TD>
+                      <TD><RiskScore score={a.riskScore} factors={a.riskFactors} /></TD>
+                      <TD className="max-w-36 truncate text-xs text-muted">{a.tenantName}</TD>
+                      <TD className="max-w-md">
+                        <Link href={`/soc/alerts/${a.id}`} className="block truncate font-medium hover:text-accent">{a.title}</Link>
+                        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-faint">
+                          <span className="truncate">
+                            {a.category ?? "uncategorised"}
+                            {a.incidentId ? <> · <Link href={`/soc/incidents/${a.incidentId}`} className="text-accent hover:underline">on incident</Link></> : null}
+                          </span>
+                          {a.hermesNote ? <HermesBadge size="sm" label="Hermes note" title={`${HERMES_NOTE_TITLE} Its notes on this rule are on the alert.`} /> : null}
+                        </div>
                       </TD>
-                    ) : (
-                      <TD className="max-w-32 truncate text-xs">{a.assigneeName ?? <span className="text-faint">Unassigned</span>}</TD>
-                    )}
-                  </TR>
-                ))}
+                      <TD className="max-w-40 truncate text-xs">
+                        {a.assetId ? <Link href={`/assets/${a.assetId}`} className="hover:text-accent">{a.assetName}</Link> : <span className="text-faint">—</span>}
+                      </TD>
+                      <TD className="max-w-36 truncate text-xs">{a.userName ?? <span className="text-faint">—</span>}</TD>
+                      <TD className="max-w-40 text-xs text-muted">
+                        <div className="truncate">{a.source}</div>
+                        {viaLine(a) ? <div className="truncate text-[11px] text-faint" title={viaLine(a)}>{viaLine(a)}</div> : null}
+                      </TD>
+                      <TD><IntelVerdict verdict={a.intelVerdict} /></TD>
+                      <TD><AttackChips techniques={a.attackTechniques} max={2} /></TD>
+                      <TD className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(a.occurredAt)}>{timeAgo(a.occurredAt)}</TD>
+                      <TD>
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusBadge status={a.status} />
+                          {closure ? <HermesBadge size={closure === "closed" ? "md" : "sm"} label={HERMES_CLOSURE_LABEL[closure]} /> : null}
+                        </div>
+                      </TD>
+                      {passiveView ? (
+                        <TD className="max-w-72 text-xs">
+                          <div className="truncate text-muted" title={a.passiveReason ?? undefined}>{a.passiveReason ?? "Known noise"}</div>
+                          {canTriage ? <div className="mt-1"><MoveToActiveButton ids={[a.id]} compact /></div> : null}
+                        </TD>
+                      ) : (
+                        <TD className="max-w-32 truncate text-xs">{a.assigneeName ?? <span className="text-faint">Unassigned</span>}</TD>
+                      )}
+                    </TR>
+                  );
+                })}
               </TBody>
             </Table>
           )}
@@ -207,6 +257,7 @@ function FilterBar({ filters, customers }: { filters: Record<string, string>; cu
   return (
     <form action="/soc/alerts" className="grid grid-cols-2 gap-2 rounded-lg border border-border bg-surface p-3 md:grid-cols-4 xl:grid-cols-9">
       {filters.lane ? <input type="hidden" name="lane" value={filters.lane} /> : null}
+      {filters.hermesAction ? <input type="hidden" name="hermesAction" value={filters.hermesAction} /> : null}
       <div className="col-span-2">
         <Label htmlFor="f-q">Search</Label>
         <Input id="f-q" name="q" defaultValue={filters.q} placeholder="Title, user or asset" />
@@ -267,7 +318,16 @@ function FilterBar({ filters, customers }: { filters: Record<string, string>; cu
         <Label htmlFor="f-label">Intel label</Label>
         <Input id="f-label" name="intelLabel" defaultValue={filters.intelLabel} placeholder="e.g. australia" />
       </div>
-      <div className="col-span-2 flex items-end gap-2 md:col-span-4 xl:col-span-6 xl:justify-end">
+      <div>
+        <Label htmlFor="f-hermes">Hermes (AI)</Label>
+        <Select id="f-hermes" name="hermes" defaultValue={filters.hermes ?? ""}>
+          <option value="">Any</option>
+          <option value="closed">Closed by Hermes</option>
+          <option value="annotated">Hermes note on its rule</option>
+          <option value="any">Closed or annotated by Hermes</option>
+        </Select>
+      </div>
+      <div className="col-span-2 flex items-end gap-2 md:col-span-3 xl:col-span-5 xl:justify-end">
         <Button type="submit" size="sm">Apply filters</Button>
         <Button asChild size="sm" variant="ghost"><Link href="/soc/alerts">Reset</Link></Button>
       </div>

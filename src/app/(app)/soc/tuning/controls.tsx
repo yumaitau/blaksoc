@@ -37,7 +37,7 @@ export function RuleControls({ id, status }: { id: string; status: string }) {
   );
 }
 
-export function UndoButton({ id, kind }: { id: string; kind: string }) {
+export function UndoButton({ id, kind, label = "Undo" }: { id: string; kind: string; label?: string }) {
   const { pending, error, run } = useAction();
   if (kind !== "close" && kind !== "noise_rule") return null;
   return (
@@ -48,7 +48,7 @@ export function UndoButton({ id, kind }: { id: string; kind: string }) {
         disabled={pending}
         onClick={() => run(() => undoAction(id), undefined, { success: (d) => (kind === "close" ? `${plural(d?.restored, "alert")} reopened as new` : `Rule expired; ${plural(d?.restored, "alert")} back in the active queue`) })}
       >
-        Undo
+        {label}
       </Button>
       <ActionError error={error} />
     </div>

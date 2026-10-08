@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { auditCsv, csvCell } from "@/lib/audit/csv";
-import { auditNameIds, auditTargetHref, describeAuditEntry, isSecretKey, redactAuditDetail } from "@/lib/audit/describe";
+import { auditNameIds, auditTargetHref, describeAuditEntry, isHermesActor, isSecretKey, redactAuditDetail } from "@/lib/audit/describe";
 import { auditQuery, parseAuditFilters } from "@/lib/audit/filters";
 
 const ALERT = "6f0c3a52-8e1d-4b8a-9a43-1f2d3c4b5a69";
@@ -161,5 +161,21 @@ describe("audit filters", () => {
     expect(qs).not.toContain("before");
     expect(parseAuditFilters(Object.fromEntries(new URLSearchParams(qs)), [T])).toEqual({ ...f, before: undefined });
     expect(auditQuery(f, { before: 99 })).toContain("before=99");
+  });
+});
+
+describe("isHermesActor", () => {
+  it("is Hermes' own service identity only", () => {
+    expect(isHermesActor({ actorKind: "service" }, "hermes")).toBe(true);
+    expect(isHermesActor({ actorKind: "service" }, " Hermes ")).toBe(true);
+  });
+
+  it("is never a person, another service with tuning scopes, or an unnamed service", () => {
+    expect(isHermesActor({ actorKind: "user" }, "hermes")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, "Some agent")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, "hermes-prod")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, "hermesian")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, null)).toBe(false);
+    expect(isHermesActor({ actorKind: "service" })).toBe(false);
   });
 });

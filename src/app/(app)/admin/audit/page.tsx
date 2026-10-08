@@ -1,12 +1,13 @@
 import { ChevronRight, Download } from "lucide-react";
 import Link from "next/link";
+import { HERMES_TITLE, HermesBadge } from "@/components/soc/hermes-badge";
 import { EmptyState, PageHeader } from "@/components/soc/indicators";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { describeAuditEntry, auditTargetLabel, redactAuditDetail } from "@/lib/audit/describe";
+import { describeAuditEntry, auditTargetLabel, isHermesActor, redactAuditDetail } from "@/lib/audit/describe";
 import { AUDIT_ACTOR_KINDS, AUDIT_PERIODS, auditQuery, parseAuditFilters, type AuditFilters } from "@/lib/audit/filters";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
@@ -148,7 +149,11 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
                         ) : (
                           <span className="text-xs text-muted">{e.actorKind === "system" ? "blakSOC" : "—"}</span>
                         )}
-                        <Badge variant={ACTOR[e.actorKind] ?? "default"}>{ACTOR_LABEL[e.actorKind] ?? e.actorKind}</Badge>
+                        {isHermesActor(e, actorName) ? (
+                          <HermesBadge title={`${HERMES_TITLE}${actorName ? ` (service identity “${actorName}”)` : ""}`} />
+                        ) : (
+                          <Badge variant={ACTOR[e.actorKind] ?? "default"}>{ACTOR_LABEL[e.actorKind] ?? e.actorKind}</Badge>
+                        )}
                       </div>
                     </TD>
                     <TD className="text-xs text-muted">

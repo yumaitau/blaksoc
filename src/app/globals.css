@@ -31,6 +31,10 @@
   --color-warn: #f2c14e;
   --color-danger: #ff4d5e;
   --color-intel: #b58cff;
+
+  /* Hermes, the AI noise analyst: its own hue so automated actions never read as a person's or a severity. */
+  --color-hermes: #f07acb;
+  --color-hermes-fg: #2a0a1f;
 }
 
 [data-theme="light"] {
@@ -45,6 +49,8 @@
   --color-accent: #b85a1f;
   --color-accent-fg: #ffffff;
   --color-accent-soft: #b85a1f1a;
+  --color-hermes: #a8217a;
+  --color-hermes-fg: #ffffff;
 }
 
 html, body {

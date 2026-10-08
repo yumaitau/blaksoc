@@ -11,6 +11,8 @@ function refresh() {
   revalidatePath("/soc/tuning");
   revalidatePath("/soc/hermes");
   revalidatePath("/soc/alerts");
+  revalidatePath("/soc/alerts/[id]", "page");
+  revalidatePath("/soc");
 }
 
 export async function approveRule(ruleId: string) {
