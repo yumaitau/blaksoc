@@ -47,6 +47,12 @@ export async function startS3Stub(opts: { buckets: Record<string, string>; objec
       if (!auth.startsWith("AWS4-HMAC-SHA256")) return error(res, 403, "AccessDenied", method);
       if (!(bucket in opts.buckets)) return error(res, 404, "NoSuchBucket", method);
 
+      if (!key && method === "GET" && url.searchParams.has("location")) {
+        // As AWS: us-east-1 is an empty constraint.
+        const constraint = opts.buckets[bucket] === "us-east-1" ? "" : opts.buckets[bucket]!;
+        res.writeHead(200, { "content-type": "application/xml" });
+        return res.end(`<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">${constraint}</LocationConstraint>`);
+      }
       if (!key && method === "HEAD") {
         res.writeHead(200, { "x-amz-bucket-region": opts.buckets[bucket]! });
         return res.end();

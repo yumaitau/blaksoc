@@ -95,6 +95,8 @@ describe("S3 archive store", () => {
   it("reads bucket regions back and refuses a bucket outside its configured region", async () => {
     const s = await stub();
     expect(await new S3ArchiveStore(config(s)).verifyRegions()).toEqual({ "ap-southeast-2": "ap-southeast-2", "ap-southeast-4": "ap-southeast-4" });
+    // Asked with GetBucketLocation, which a role limited to a prefix of a shared bucket may call; HeadBucket may not.
+    expect(s.requests.some((r) => r.method === "HEAD")).toBe(false);
     const moved = await stub({ buckets: { "blaksoc-syd": "us-east-1", "blaksoc-mel": "ap-southeast-4" } });
     await expect(new S3ArchiveStore(config(moved)).verifyRegions()).rejects.toBeInstanceOf(ArchiveResidencyError);
     const swapped = await stub({ buckets: { "blaksoc-syd": "ap-southeast-4", "blaksoc-mel": "ap-southeast-4" } });
