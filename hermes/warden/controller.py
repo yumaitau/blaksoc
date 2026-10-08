@@ -228,8 +228,11 @@ def run(cfg: Config, client: api.TuningClient, runner: Callable = hermes_runner,
     known = {memory._norm(n["text"]) for n in new_outcomes}
     outcomes = new_outcomes + [n for n in stored_notes if n.get("kind") == "outcome" and memory._norm(n["text"]) not in known]
     blocked |= memory.blocked_from_notes(outcomes)
-    lessons = [n["text"] for n in stored_notes if n.get("kind") != "outcome"]
-    start_notes = memory.merge(lessons, outcomes)
+    lessons = [n["text"] for n in stored_notes if n.get("kind") == "model"]
+    # Analysts' notes guide the model but stay theirs: blakSOC keeps them, and they are never saved as Hermes notes.
+    human = [n["text"] for n in stored_notes if n.get("kind") == "human"]
+    human_keys = {memory._norm(t) for t in human}
+    start_notes = memory.merge(human + lessons, outcomes)
     write_hermes_config(cfg)
     memory.write_file(cfg.home, start_notes)
     log("memory_loaded", notes=len(start_notes), outcomeLessons=len(outcomes), blockedPatterns=len(blocked))
@@ -249,15 +252,16 @@ def run(cfg: Config, client: api.TuningClient, runner: Callable = hermes_runner,
 
     # 4. Memory write-back: validated entries plus every outcome lesson.
     exit_code = EXIT_OK if not failure else EXIT_AGENT
-    notes = memory.merge(memory.read_file(cfg.home), outcomes)
+    notes = memory.merge(memory.read_file(cfg.home), outcomes, exclude=human_keys)
     try:
         try:
             client.put_memory(stored["version"], notes)
         except api.Conflict:
             # Someone edited memory in blakSOC during the run: keep theirs, add ours, retry once.
             latest = sanitize.memory_response(client.memory())
-            theirs = [n["text"] for n in latest["notes"] if n.get("kind") != "outcome"]
-            notes = memory.merge(theirs + memory.read_file(cfg.home), outcomes)
+            theirs = [n["text"] for n in latest["notes"] if n.get("kind") == "model"]
+            human_keys |= {memory._norm(n["text"]) for n in latest["notes"] if n.get("kind") == "human"}
+            notes = memory.merge(theirs + memory.read_file(cfg.home), outcomes, exclude=human_keys)
             client.put_memory(latest["version"], notes)
         log("memory_saved", notes=len(notes))
     except (api.ApiError, sanitize.ShapeError, sanitize.PiiAbort) as error:
@@ -272,7 +276,7 @@ def run(cfg: Config, client: api.TuningClient, runner: Callable = hermes_runner,
     markdown = report.build(model_markdown=toolset.report_markdown, ledger=ledger, run_stats=run_stats,
                             period_start=period_start, period_end=period_end, failure=failure)
     try:
-        client.submit_report(period_start, period_end, markdown, run_stats, idempotency_key="report-" + run_id)
+        client.submit_report(period_start, period_end, markdown, report.api_stats(run_stats), idempotency_key="report-" + run_id)
         log("report_submitted", actions=run_stats["actions"], dryRun=cfg.dry_run, switchOff=ledger.switch_off)
     except api.ApiError as error:
         log("report_submit_failed", "error", status=error.status, code=error.code)

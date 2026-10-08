@@ -106,9 +106,10 @@ def read_file(home: Path) -> list:
     return [e.strip() for e in raw.split(ENTRY_DELIMITER) if e.strip()]
 
 
-def merge(entries: list, outcomes: list) -> list:
-    """Validated note list for PUT: outcome notes first (never dropped for the model), then lessons."""
-    seen, notes = set(), []
+def merge(entries: list, outcomes: list, exclude: set = frozenset()) -> list:
+    """Validated note list for PUT: outcome notes first (never dropped for the model), then lessons.
+    `exclude` holds normalised texts of analysts' notes: they are shown to the model but never written back."""
+    seen, notes = set(exclude), []
     outcome_texts = {_norm(o["text"]) for o in outcomes}
     for outcome in outcomes:
         key = _norm(outcome["text"])
@@ -127,7 +128,7 @@ def merge(entries: list, outcomes: list) -> list:
         if len(text) < 10 or key in seen:
             continue
         seen.add(key)
-        notes.append({"kind": "lesson", "text": text})
+        notes.append({"kind": "model", "text": text})
     kept, used = [], 0
     for note in notes:
         size = len(note["text"]) + len(ENTRY_DELIMITER)

@@ -298,5 +298,5 @@ def memory_response(raw: Any, log=lambda *a, **k: None) -> dict:
     for note in notes:
         text = scrub(clean_text(note.get("text", ""), 500))
         if text:
-            clean.append({"text": text, "kind": note.get("kind", "lesson"), "createdAt": note.get("createdAt")})
+            clean.append({"text": text, "kind": note.get("kind", "model"), "createdAt": note.get("createdAt")})
     return {"version": version, "notes": clean}

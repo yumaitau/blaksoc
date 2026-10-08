@@ -79,7 +79,7 @@ class FakeBlakSoc:
     def __init__(self):
         self.patterns = patterns_payload()
         self.actions = actions_payload()
-        self.memory = {"version": 3, "notes": [{"id": "n1", "kind": "lesson", "text": "Rule 5503 on t1 is noisy at night; annotate first."}]}
+        self.memory = {"version": 3, "notes": [{"id": "n1", "kind": "model", "text": "Rule 5503 on t1 is noisy at night; annotate first."}]}
         self.overrides = {}   # (method, path prefix) -> list of (status, body)
         self.requests = []
         self.tokens_issued = 0
@@ -312,6 +312,13 @@ class GuardrailTests(Base):
         self.assertIn("confidence", call(toolset, "annotate_pattern", patternId="p-noisy", text="Noisy and benign.",
                                          confidence="certain")["error"])
 
+    def test_analysts_notes_guide_the_model_but_are_never_saved_as_hermes_notes(self):
+        self.api.memory["notes"].append({"id": "h1", "kind": "human", "text": "Rule 5710 on t1 is a pentest window every Tuesday."})
+        self.run_with(lambda toolset, cfg: None)
+        saved = self.api.memory["notes"]
+        self.assertTrue(all(n["kind"] in ("model", "outcome") for n in saved))
+        self.assertFalse(any("pentest window" in n["text"] for n in saved))
+
     def test_a_bad_tool_call_returns_an_error_instead_of_ending_the_run(self):
         toolset, _ = self.make()
         for args in ({"patternId": "p-noisy", "text": ["not", "a", "string"], "confidence": "low"},
@@ -395,8 +402,9 @@ class RunTests(Base):
         self.assertEqual(statuses.count(policy.HELD), 1)
         body = self.api.report()
         self.assertIn("DRY RUN", body["markdown"])
-        self.assertEqual(body["stats"]["actions"]["dryRun"], 4)
-        self.assertEqual(body["stats"]["actions"]["executed"], 0)
+        self.assertEqual(body["stats"]["dryRun"], 4)
+        self.assertEqual(body["stats"]["executed"], 0)
+        self.assertEqual(set(body["stats"]), {"executed", "refused", "dryRun", "patternsReviewed"})
         self.assertEqual(body["periodStart"][:10], "2026-10-05")
         self.assertIn("DRY RUN", seen["task"])
 
@@ -404,9 +412,9 @@ class RunTests(Base):
         code, _ = self.run_with(full_script, HERMES_DRY_RUN="false")
         self.assertEqual(code, controller.EXIT_OK)
         self.assertEqual(len(self.api.action_writes()), 4)
-        stats = self.api.report()["stats"]
-        self.assertEqual(stats["actions"], {"executed": 4, "dryRun": 0, "refused": 0, "heldBack": 1, "failed": 0})
-        self.assertFalse(stats["actSwitchOff"])
+        submitted = self.api.report()
+        self.assertEqual({k: submitted["stats"][k] for k in ("executed", "dryRun", "refused")}, {"executed": 4, "dryRun": 0, "refused": 0})
+        self.assertNotIn("switch was OFF", submitted["markdown"])
 
     def test_409_means_switch_off_and_the_rest_of_the_run_is_dry(self):
         self.api.overrides[("POST", "/api/v1/tuning/patterns/p-second/annotations")] = [
@@ -418,7 +426,7 @@ class RunTests(Base):
         self.assertTrue(ledger.switch_off)
         self.assertEqual([e.status for e in ledger.entries if e.status != policy.HELD], [policy.DRY_RUN] * 4)
         body = self.api.report()
-        self.assertTrue(body["stats"]["actSwitchOff"])
+        self.assertIn("switch was OFF", body["markdown"])
         self.assertIn("switch was OFF", body["markdown"])
 
     def test_refusal_is_recorded_with_redacted_message(self):
@@ -432,7 +440,7 @@ class RunTests(Base):
         markdown = self.api.report()["markdown"]
         self.assertNotIn("jo@yumait.com.au", markdown)
         self.assertNotIn("10.9.8.7", markdown)
-        self.assertEqual(self.api.report()["stats"]["actions"]["refused"], 1)
+        self.assertEqual(self.api.report()["stats"]["refused"], 1)
 
     def test_post_is_not_retried_after_ambiguous_failure_but_get_is(self):
         self.api.overrides[("GET", "/api/v1/tuning/patterns")] = [(503, {"error": "unavailable"})]
@@ -468,8 +476,8 @@ class RunTests(Base):
         texts = " ".join(t for _, t in kinds)
         self.assertNotIn("ops@example.com", texts)
         self.assertIn("[redacted]", texts)
-        self.assertEqual([k for k, t in kinds if "forged" in t], ["lesson"])
-        self.assertEqual(self.api.report()["stats"]["outcomes"], {"reviewed": 2, "undone": 1, "reopened": 0})
+        self.assertEqual([k for k, t in kinds if "forged" in t], ["model"])
+        self.assertIn("Earlier actions reviewed: 2; undone by analysts: 1; with reopened alerts: 0.", self.api.report()["markdown"])
 
     def test_stored_outcome_lessons_keep_blocking_after_actions_age_out(self):
         self.api.actions = {"actions": []}
@@ -542,8 +550,8 @@ class RunTests(Base):
         body = self.api.report()
         self.assertIn("did not complete", body["markdown"])
         self.assertIn("Bedrock throttled", body["markdown"])
-        self.assertFalse(body["stats"]["modelCompleted"])
-        self.assertEqual(body["stats"]["actions"]["dryRun"], 1)
+        self.assertIn("Hermes did not complete an analysis this week", body["markdown"])
+        self.assertEqual(body["stats"]["dryRun"], 1)
         self.assertEqual(len(self.api.writes("/api/v1/tuning/memory")), 1)
         self.assertEqual(self.lines[-1]["event"], "run_failed")
 
