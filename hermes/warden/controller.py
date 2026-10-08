@@ -1,4 +1,4 @@
-"""Deterministic controller for one weekly Hermes run (CronJob entry point: python -m warden).
+"""Deterministic controller for one hourly Hermes run (CronJob entry point: python -m warden).
 
 1. Read config; refuse to start on anything unsafe (non-AU model or region, bad URL or credential).
 2. Fetch patterns, past actions and memory from blakSOC; abort before any model call if a response
@@ -187,7 +187,7 @@ def hermes_runner(cfg: Config, toolset: Toolset, task: str) -> AgentOutcome:
 def task_message(cfg: Config, snapshot: dict, actions: list, outcome_summary: dict) -> str:
     mode = "DRY RUN (writes are recorded only)" if cfg.dry_run else "LIVE (blakSOC may still refuse)"
     return (
-        f"Weekly noise review for the last {cfg.days} days. Mode: {mode}.\n"
+        f"Hourly noise review for the last {cfg.days} days. Mode: {mode}.\n"
         f"Patterns available: {len(snapshot['patterns'])}; fleet rules: {len(snapshot['fleet'])}; "
         f"earlier actions: {len(actions)} (undone {outcome_summary['undone']}, reopened {outcome_summary['reopened']}).\n"
         f"Per-run caps: close {cfg.caps['close']}, noise rules {cfg.caps['noise_rule']}, purge {cfg.caps['purge']}, "
@@ -209,9 +209,10 @@ def run(cfg: Config, client: api.TuningClient, runner: Callable = hermes_runner,
     # 1. Read. Nothing below reaches the model until all three responses pass.
     try:
         snapshot = sanitize.patterns_response(client.patterns(cfg.days), log=lambda e, **f: log(e, "warn", **f))
-        since = (now - timedelta(days=cfg.lookback_days)).isoformat()
-        actions = sanitize.actions_response(client.actions(since), log=lambda e, **f: log(e, "warn", **f))
         stored = sanitize.memory_response(client.memory(), log=lambda e, **f: log(e, "warn", **f))
+        since = (now - timedelta(days=min(cfg.lookback_days, stored["retentionDays"]))).isoformat()
+        actions = sanitize.actions_response(client.actions(since), log=lambda e, **f: log(e, "warn", **f))
+        actions = memory.fresh(actions, now, stored["retentionDays"])
     except sanitize.PiiAbort as abort:
         log("run_aborted", "error", reason="blakSOC response contained prohibited fields", keys=abort.keys)
         return EXIT_PII
@@ -224,7 +225,7 @@ def run(cfg: Config, client: api.TuningClient, runner: Callable = hermes_runner,
 
     # 2. Outcome lessons: deterministic, never the model's to write or remove.
     new_outcomes, blocked, outcome_summary = memory.outcome_lessons(actions, snapshot["patterns"])
-    stored_notes = memory.fresh(stored["notes"], now)
+    stored_notes = memory.fresh(stored["notes"], now, stored["retentionDays"])
     known = {memory._norm(n["text"]) for n in new_outcomes}
     outcomes = new_outcomes + [n for n in stored_notes if n.get("kind") == "outcome" and memory._norm(n["text"]) not in known]
     blocked |= memory.blocked_from_notes(outcomes)
@@ -248,20 +249,28 @@ def run(cfg: Config, client: api.TuningClient, runner: Callable = hermes_runner,
         outcome = AgentOutcome(False, f"{type(error).__name__}: {str(error)[:200]}")
     failure = outcome.error
     if outcome.ok and toolset.report_markdown is None:
-        failure = "Hermes did not submit a weekly report"
+        failure = "Hermes did not submit a run report"
 
     # 4. Memory write-back: validated entries plus every outcome lesson.
     exit_code = EXIT_OK if not failure else EXIT_AGENT
-    notes = memory.merge(memory.read_file(cfg.home), outcomes, exclude=human_keys)
+    notes = memory.preserve_ids(memory.merge(memory.read_file(cfg.home), outcomes, exclude=human_keys), stored_notes)
     try:
         try:
             client.put_memory(stored["version"], notes)
         except api.Conflict:
             # Someone edited memory in blakSOC during the run: keep theirs, add ours, retry once.
             latest = sanitize.memory_response(client.memory())
-            theirs = [n["text"] for n in latest["notes"] if n.get("kind") == "model"]
-            human_keys |= {memory._norm(n["text"]) for n in latest["notes"] if n.get("kind") == "human"}
-            notes = memory.merge(theirs + memory.read_file(cfg.home), outcomes, exclude=human_keys)
+            latest_notes = memory.fresh(latest["notes"], now, latest["retentionDays"])
+            theirs = [n["text"] for n in latest_notes if n.get("kind") == "model"]
+            human_keys |= {memory._norm(n["text"]) for n in latest_notes if n.get("kind") == "human"}
+            entries = memory.rebase_entries(memory.read_file(cfg.home), stored["notes"], latest_notes)
+            # Outcome copies in MEMORY.md must not become fresh model lessons after their expiry.
+            outcome_texts = {memory._norm(n["text"]) for n in outcomes}
+            entries = [e for e in entries if memory._norm(e) not in outcome_texts]
+            kept_outcome_texts = set(memory.rebase_entries([n["text"] for n in outcomes], stored["notes"], latest_notes))
+            retry_outcomes = [n for n in memory.fresh(outcomes, now, latest["retentionDays"]) if n["text"] in kept_outcome_texts]
+            retry_outcomes += [n for n in latest_notes if n.get("kind") == "outcome"]
+            notes = memory.preserve_ids(memory.merge(theirs + entries, retry_outcomes, exclude=human_keys), latest_notes)
             client.put_memory(latest["version"], notes)
         log("memory_saved", notes=len(notes))
     except (api.ApiError, sanitize.ShapeError, sanitize.PiiAbort) as error:

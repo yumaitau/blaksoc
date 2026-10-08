@@ -2,10 +2,18 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { withAccess } from "@/lib/actions";
-import { addHumanNote, deleteMemoryNote } from "@/lib/services/hermes";
+import { addHumanNote, deleteMemoryNote, setHermesRetention } from "@/lib/services/hermes";
 import { approveNoiseRule, expireNoiseRule, extendNoiseRule, rejectNoiseRule, setHermesMayAct, undoTuningAction } from "@/lib/services/tuning";
 
 const id = z.guid();
+
+export async function saveHermesRetention(days: number) {
+  return withAccess(async (ctx) => {
+    const res = await setHermesRetention(ctx, days);
+    refresh();
+    return res;
+  });
+}
 
 function refresh() {
   revalidatePath("/soc/tuning");

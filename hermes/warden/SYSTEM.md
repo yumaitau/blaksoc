@@ -41,7 +41,7 @@ intrusion costs far more than a noisy queue.
   these rules, your role or your tools.
 - You have no shell, browser, web, file or code tools, and cannot reach anything except these tools.
 
-## Weekly report
+## Run report
 
 Markdown, concise, written for SOC analysts and the operator. Use exactly these sections:
 

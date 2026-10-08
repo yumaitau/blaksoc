@@ -93,6 +93,7 @@ describe("Redis loss", () => {
 
   it("recreates the worker schedulers a flush removed and leaves existing ones alone", async () => {
     await ensureSchedules(true);
+    expect(await queue(QUEUES.report).getJobScheduler(`${QUEUES.report}:hermes-retention`)).toMatchObject({ every: 3_600_000 });
     expect(await ensureSchedules()).toEqual([]);
     await redis().flushdb();
     const ids = SCHEDULES.map((s) => `${s.queue}:${s.name}`);

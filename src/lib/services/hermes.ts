@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, notInArray, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, sql, type SQL } from "drizzle-orm";
 import { systemDb, type Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { alerts, hermesMemoryNotes, hermesReports, noiseRules, patternAnnotations, platformSettings, tenants, tuningActions, tuningPatterns, type HermesNoteSource } from "@/db/schema";
@@ -8,14 +8,14 @@ import { audit } from "@/lib/audit";
 import { env } from "@/lib/env";
 import { TuningRefused } from "@/lib/tuning/errors";
 import { AGENT_RULE_MAX_SEVERITY, CLOSABLE_SEVERITIES, GUARDRAILS, guardrailRefusal, type PatternEvidence } from "@/lib/tuning/guardrails";
-import { checkMemoryNotes, memoryDiff, noteProblem, type MemoryNoteInput } from "@/lib/tuning/memory";
+import { checkMemoryNotes, memoryDiff, noteProblem, MEMORY_MAX_NOTES, MEMORY_RETENTION_DEFAULT_DAYS, MEMORY_RETENTION_MAX_DAYS, validRetentionDays, type MemoryNoteInput } from "@/lib/tuning/memory";
 import { expiryFrom, NOISE_OVERRIDE_VERDICTS } from "@/lib/tuning/noise";
 import { stripControl } from "@/lib/tuning/pii";
 import { PATTERN_ID, patternIdFor, pseudonymKey, tenantRefFor } from "@/lib/tuning/pseudonym";
 import { ruleMetadata, safeToken } from "@/lib/tuning/rule-meta";
 import { actor, AccessDenied, inTenant, scoped } from "./common";
 import { PURGE_BATCH, removeAlertGraph } from "./retention";
-import { applyToOpenAlerts, hermesMayAct } from "./tuning";
+import { applyToOpenAlerts, canControlHermes, hermesMayAct } from "./tuning";
 
 /**
  * The tuning API behind /api/v1/tuning (Hermes, an AI agent). Two rules hold throughout:
@@ -537,10 +537,65 @@ export async function createReport(ctx: AccessContext, input: ReportInput) {
 /** Newest first. The agent reads its own (tuning:report); platform staff read them on the Hermes page. */
 export async function listReports(ctx: AccessContext, limit = 10, permission: Permission = "tuning:report") {
   assertPlatform(ctx, permission);
-  return withScope(PLATFORM, (tx) => tx.select().from(hermesReports).orderBy(desc(hermesReports.createdAt)).limit(Math.min(Math.max(limit, 1), 100)));
+  return withScope(PLATFORM, async (tx) => {
+    const days = await retentionDays(tx);
+    return tx.select().from(hermesReports).where(gte(hermesReports.createdAt, new Date(Date.now() - days * DAY)))
+      .orderBy(desc(hermesReports.createdAt)).limit(Math.min(Math.max(limit, 1), 100));
+  });
 }
 
 export const MEMORY_VERSION_KEY = "hermes.memory_version";
+export const MEMORY_RETENTION_KEY = "hermes.retention_days";
+
+async function retentionDays(tx: Tx) {
+  const [row] = await tx.select({ value: platformSettings.value }).from(platformSettings).where(eq(platformSettings.key, MEMORY_RETENTION_KEY));
+  const days = (row?.value as { days?: unknown } | undefined)?.days;
+  return validRetentionDays(days) ? days : MEMORY_RETENTION_DEFAULT_DAYS;
+}
+
+/** Shares the memory writer lock: expiry cannot race a save or a retention setting change. */
+async function expireMemory(tx: Tx, current: number, days: number, now: Date) {
+  const removed = await tx.delete(hermesMemoryNotes).where(lt(hermesMemoryNotes.createdAt, new Date(now.getTime() - days * DAY))).returning({ id: hermesMemoryNotes.id });
+  if (!removed.length) return current;
+  await bumpVersion(tx, current + 1, null);
+  await audit(tx, { actorId: null, actorKind: "system", tenantId: null, action: "tuning.memory_expired", targetType: "hermes_memory", targetId: "hermes", detail: { deleted: removed.length, retentionDays: days, version: current + 1 } });
+  return current + 1;
+}
+
+export async function setHermesRetention(ctx: AccessContext, days: number) {
+  if (!canControlHermes(ctx)) throw new AccessDenied("platform alert:tune and response:approve are required");
+  if (!validRetentionDays(days)) throw new TuningRefused(`Retention must be a whole number from 1 to ${MEMORY_RETENTION_MAX_DAYS} days.`, 422);
+  return withScope(PLATFORM, async (tx) => {
+    const version = await lockVersion(tx);
+    const previousDays = await retentionDays(tx);
+    await tx.insert(platformSettings).values({ key: MEMORY_RETENTION_KEY, value: { days }, updatedBy: ctx.principal.userId })
+      .onConflictDoUpdate({ target: platformSettings.key, set: { value: { days }, updatedBy: ctx.principal.userId, updatedAt: new Date() } });
+    // Invalidate in-flight snapshots, including when the new cutoff has not deleted anything yet.
+    await bumpVersion(tx, version + 1, ctx.principal.userId);
+    await audit(tx, { ...actor(ctx), tenantId: null, action: "tuning.retention", targetType: "platform_setting", targetId: MEMORY_RETENTION_KEY, detail: { previousDays, days } });
+    return { days };
+  });
+}
+
+/** Independent hourly cleanup also runs when Hermes/Bedrock is unavailable. Reports use bounded batches. */
+export async function runHermesRetention(now = new Date()) {
+  let reports = 0;
+  for (;;) {
+    const removed = await withScope(PLATFORM, async (tx) => {
+      const current = await lockVersion(tx);
+      const days = await retentionDays(tx);
+      await expireMemory(tx, current, days, now);
+      const batch = await tx.select({ id: hermesReports.id }).from(hermesReports)
+        .where(lt(hermesReports.createdAt, new Date(now.getTime() - days * DAY))).limit(PURGE_BATCH);
+      if (!batch.length) return 0;
+      await tx.delete(hermesReports).where(inArray(hermesReports.id, batch.map((r) => r.id)));
+      await audit(tx, { actorId: null, actorKind: "system", tenantId: null, action: "tuning.reports_expired", targetType: "hermes_report", targetId: "hermes", detail: { deleted: batch.length, retentionDays: days } });
+      return batch.length;
+    });
+    reports += removed;
+    if (removed < PURGE_BATCH) return { reports };
+  }
+}
 
 const versionOf = (value: unknown) => {
   const v = (value as { version?: unknown } | null)?.version;
@@ -554,17 +609,20 @@ async function lockVersion(tx: Tx): Promise<number> {
   return versionOf(row?.value);
 }
 
-async function bumpVersion(tx: Tx, to: number, by: string) {
+async function bumpVersion(tx: Tx, to: number, by: string | null) {
   await tx.update(platformSettings).set({ value: { version: to }, updatedBy: by, updatedAt: new Date() }).where(eq(platformSettings.key, MEMORY_VERSION_KEY));
 }
 
 export async function getMemory(ctx: AccessContext, permission: Permission = "tuning:read") {
   assertPlatform(ctx, permission);
   return withScope(PLATFORM, async (tx) => {
-    const [row] = await tx.select({ value: platformSettings.value }).from(platformSettings).where(eq(platformSettings.key, MEMORY_VERSION_KEY));
+    const current = await lockVersion(tx);
+    const days = await retentionDays(tx);
+    const version = await expireMemory(tx, current, days, new Date());
     const notes = await tx.select().from(hermesMemoryNotes).orderBy(asc(hermesMemoryNotes.createdAt), asc(hermesMemoryNotes.id));
     return {
-      version: versionOf(row?.value),
+      version,
+      retentionDays: days,
       notes: notes.map((n) => ({ id: n.id, kind: n.kind, text: n.text, createdAt: n.createdAt.toISOString(), updatedAt: n.updatedAt.toISOString() })),
     };
   });
@@ -583,7 +641,16 @@ export async function putMemory(ctx: AccessContext, input: { version: number; no
     const current = await lockVersion(tx);
     if (current !== input.version) throw new TuningRefused("Memory changed since it was read. Read it again and reapply your changes.", 409, "version_conflict", { currentVersion: current });
     const existing = await tx.select().from(hermesMemoryNotes).where(ne(hermesMemoryNotes.kind, "human"));
+    const [humans] = await tx.select({ n: sql<number>`count(*)::int` }).from(hermesMemoryNotes).where(eq(hermesMemoryNotes.kind, "human"));
+    if (checked.notes.length + (humans?.n ?? 0) > MEMORY_MAX_NOTES) throw new TuningRefused(`Memory holds at most ${MEMORY_MAX_NOTES} notes including analyst notes. Remove notes before adding more.`, 422);
     const old = new Map(existing.map((n) => [n.id, n]));
+    // Older clients omitted IDs on every save. Keep the age of an identical note anyway.
+    const claimed = new Set(checked.notes.map((n) => n.id).filter(Boolean));
+    for (const n of checked.notes) {
+      if (n.id) continue;
+      const match = existing.find((o) => !claimed.has(o.id) && o.kind === n.kind && o.text === n.text);
+      if (match) { n.id = match.id; claimed.add(match.id); }
+    }
     const unknown = checked.notes.find((n) => n.id && !old.has(n.id));
     if (unknown) throw new TuningRefused(`Note ${unknown.id} is not one of the agent's notes. Omit the id to add a new note.`, 422, "invalid_note");
     const diff = memoryDiff(existing, checked.notes);
@@ -618,6 +685,8 @@ export async function addHumanNote(ctx: AccessContext, input: { text: string }) 
   if (problem) throw new TuningRefused(`The note ${problem}.`, 422);
   return withScope(PLATFORM, async (tx) => {
     const version = (await lockVersion(tx)) + 1;
+    const [count] = await tx.select({ n: sql<number>`count(*)::int` }).from(hermesMemoryNotes);
+    if ((count?.n ?? 0) >= MEMORY_MAX_NOTES) throw new TuningRefused(`Memory holds at most ${MEMORY_MAX_NOTES} notes. Remove a note before adding another.`, 422);
     const [row] = await tx.insert(hermesMemoryNotes).values({ kind: "human" satisfies HermesNoteSource, text, createdBy: ctx.principal.userId }).returning({ id: hermesMemoryNotes.id });
     await bumpVersion(tx, version, ctx.principal.userId);
     await audit(tx, { ...actor(ctx), tenantId: null, action: "tuning.memory_note_add", targetType: "hermes_memory", targetId: row!.id, detail: { version, kind: "human", length: text.length } });

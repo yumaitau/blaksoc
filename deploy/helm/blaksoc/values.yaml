@@ -91,7 +91,7 @@ backup:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 1Gi }
 
-# Hermes (in-cluster agent): a weekly CronJob that reads anonymised alert patterns from blakSOC's tuning
+# Hermes (in-cluster agent): an hourly CronJob that reads anonymised alert patterns from blakSOC's tuning
 # API, reduces noise through guarded actions and submits a PII-free report. Code and image: hermes/.
 # Model: Amazon Bedrock with an Australian inference profile, credentials from the hermes service account
 # (EKS Pod Identity), never keys. blakSOC token: key `tokenSecretKey` of existingSecret, only that key is
@@ -101,12 +101,12 @@ hermes:
   image:
     repository: ""         # empty = <image.repository>-hermes (ECR blaksoc-hermes in production)
     tag: ""                # empty = image.tag, then the chart appVersion
-  schedule: "30 9 * * 1"   # Mondays 09:30
+  schedule: "0 * * * *"    # Hourly: review feedback and save lessons
   timeZone: Australia/Sydney
   # Never retried: a rerun could repeat actions. A failed run is visible in its Job and log line.
   backoffLimit: 0
   activeDeadlineSeconds: 1800
-  startingDeadlineSeconds: 3600
+  startingDeadlineSeconds: 900
   # Record intended actions without calling blakSOC's write endpoints. blakSOC's own "Allow Hermes to
   # act" switch must also be on for any write to apply; when it is off every write answers 409.
   dryRun: true

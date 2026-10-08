@@ -312,7 +312,7 @@ export const HermesReportList = z.object({ reports: z.array(HermesReport) }).met
 
 const NoteKind = z.enum(["model", "outcome", "human"]);
 export const HermesMemory = z
-  .object({ version: count, notes: z.array(z.object({ id, kind: NoteKind, text: z.string(), createdAt: timestamp, updatedAt: timestamp })) })
+  .object({ version: count, retentionDays: z.number().int().min(1).max(365), notes: z.array(z.object({ id, kind: NoteKind, text: z.string(), createdAt: timestamp, updatedAt: timestamp })) })
   .meta({ id: "HermesMemory" });
 export const MemoryPut = z.object({
   version: z.number().int().min(0).meta({ description: "The version last read; a stale one is refused with 409" }),

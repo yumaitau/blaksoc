@@ -1,4 +1,4 @@
-"""Weekly report: validate Hermes' Markdown, add the controller's own record, prove it is PII-free."""
+"""Run report: validate Hermes' Markdown, add the controller's own record, prove it is PII-free."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def build(*, model_markdown, ledger: policy.Ledger, run_stats: dict, period_star
         else "LIVE: actions marked executed were applied in blakSOC."
     )
     lines = [
-        f"# Hermes weekly noise report — {period_start[:10]} to {period_end[:10]}",
+        f"# Hermes noise review report — {period_start[:10]} to {period_end[:10]}",
         "",
         f"> {mode}",
         "",

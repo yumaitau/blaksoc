@@ -24,7 +24,7 @@ OUTCOME_PREFIX = "[outcome] "
 MAX_NOTES = 40
 MAX_NOTE_CHARS = 400
 CHAR_BUDGET = 6000          # also Hermes' memory_char_limit (controller.write_config)
-OUTCOME_RETENTION_DAYS = 180
+DEFAULT_RETENTION_DAYS = 90
 
 
 def _norm(text: str) -> str:
@@ -73,13 +73,13 @@ def blocked_from_notes(notes: list) -> set:
     return keys
 
 
-def fresh(notes: list, now: datetime) -> list:
-    """Drop outcome notes older than the retention window (model lessons are curated by the model)."""
-    cutoff = now - timedelta(days=OUTCOME_RETENTION_DAYS)
+def fresh(notes: list, now: datetime, days: int = DEFAULT_RETENTION_DAYS) -> list:
+    """Apply the server's creation-date retention window to every kind of memory."""
+    cutoff = now - timedelta(days=days)
     out = []
     for note in notes:
         created = note.get("createdAt")
-        if note.get("kind") == "outcome" and created:
+        if created:
             try:
                 if datetime.fromisoformat(created.replace("Z", "+00:00")).astimezone(timezone.utc) < cutoff:
                     continue
@@ -87,6 +87,26 @@ def fresh(notes: list, now: datetime) -> list:
                 pass
         out.append(note)
     return out
+
+
+def preserve_ids(notes: list, stored: list) -> list:
+    """Unchanged lessons retain their database identity and age across hourly saves."""
+    by_text = {(n["kind"], _norm(n["text"])): n for n in stored if n.get("id") and n["kind"] != "human"}
+    result = []
+    for note in notes:
+        saved = {"kind": note["kind"], "text": note["text"]}
+        original = by_text.get((note["kind"], _norm(note["text"])))
+        if original:
+            saved["id"] = original["id"]
+        result.append(saved)
+    return result
+
+
+def rebase_entries(entries: list, original: list, latest: list) -> list:
+    """Do not resurrect notes deleted/expired while the agent was running."""
+    previous = {_norm(n["text"]) for n in original}
+    current = {_norm(n["text"]) for n in latest}
+    return [e for e in entries if _norm(e) not in previous or _norm(e) in current]
 
 
 def write_file(home: Path, notes: list) -> Path:

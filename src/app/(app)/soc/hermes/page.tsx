@@ -12,7 +12,7 @@ import { getMemory, isHermesStaff, listReports } from "@/lib/services/hermes";
 import { canControlHermes, hermesSwitchState, listTuningActions } from "@/lib/services/tuning";
 import { HERMES_KIND_LABEL, hermesActionHref } from "@/lib/tuning/hermes-ui";
 import { fmtDateTime, timeAgo } from "@/lib/utils";
-import { AddMemoryNoteForm, DeleteNoteButton, HermesSwitch, UndoButton } from "../tuning/controls";
+import { AddMemoryNoteForm, DeleteNoteButton, HermesRetentionForm, HermesSwitch, UndoButton } from "../tuning/controls";
 
 export const metadata = { title: "Hermes" };
 
@@ -52,6 +52,11 @@ export default async function HermesPage() {
           </dl>
           {state.updatedAt ? <p className="text-xs text-faint">Switch last changed {fmtDateTime(state.updatedAt)}.</p> : null}
         </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>Memory & data retention</CardTitle></CardHeader>
+        <CardContent><HermesRetentionForm key={memory.retentionDays} days={memory.retentionDays} canControl={canControlHermes(ctx)} /></CardContent>
       </Card>
 
       <section className="grid gap-5 xl:grid-cols-3">

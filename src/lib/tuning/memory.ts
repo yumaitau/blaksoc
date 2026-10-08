@@ -4,6 +4,11 @@ import { piiKind, stripControl } from "./pii";
 
 export const MEMORY_MAX_NOTES = 500;
 export const MEMORY_MAX_CHARS = 2000;
+export const MEMORY_RETENTION_DEFAULT_DAYS = 90;
+export const MEMORY_RETENTION_MAX_DAYS = 365;
+
+export const validRetentionDays = (days: unknown): days is number =>
+  typeof days === "number" && Number.isInteger(days) && days >= 1 && days <= MEMORY_RETENTION_MAX_DAYS;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A note as the agent sends it: an `id` updates that note, none creates one. `human` entries are ignored. */

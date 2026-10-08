@@ -109,7 +109,7 @@ keys are in `blaksoc-eks-bootstrap` and `blaksoc-eks-runtime`.
 
 ## Hermes (in-cluster agent)
 
-Hermes is blakSOC's alert-noise analyst. A CronJob (`blaksoc-blaksoc-hermes`, Mondays 09:30 Sydney time) runs
+Hermes is blakSOC's alert-noise analyst. A CronJob (`blaksoc-blaksoc-hermes`, hourly, on the hour Sydney time) runs
 one container from ECR `blaksoc-hermes`: the official Hermes Agent image (v0.20.5, pinned by digest in
 `hermes/Dockerfile`) plus a deterministic controller and the blakSOC tuning toolset (`hermes/warden`). It ships
 **off** in `values.yaml` and **on, in dry-run**, in `values-yumait-prod.yaml`.
@@ -157,7 +157,7 @@ never retried (`backoffLimit: 0`) so actions cannot repeat.
 Two independent locks must both be open before Hermes changes anything:
 
 1. `hermes.dryRun` (default `true`): Hermes records what it would do and calls no write endpoint
-   (annotations included). Memory and the weekly report are still saved.
+   (annotations included). Memory and the run report are still saved.
 2. blakSOC's **Allow Hermes to act** switch: while it is off every write answers 409. Hermes then treats the
    rest of the run as dry-run and says so at the top of the report.
 
@@ -165,14 +165,27 @@ To start acting, review a few dry-run reports on the Hermes page, set `hermes.dr
 `values-yumait-prod.yaml`, upgrade, and turn the switch on in blakSOC. Turning the switch off stops writes
 immediately, without a deploy.
 
-### Memory and the weekly report
+### Memory and the run report
 
 Memory lives in blakSOC's database (`GET`/`PUT /api/v1/tuning/memory`, versioned), not on a volume. At the
 start of a run the controller writes the notes into Hermes' memory file (an `emptyDir`); at the end it reads
 them back, redacts identifiers, de-duplicates, caps them (40 notes, 6,000 characters) and saves them with the
 version it read (a concurrent edit in blakSOC is merged and retried once). Actions analysts undid or reopened
 become `[outcome]` lessons written by the controller, not the model; Hermes cannot remove them, they block
-further closes on that pattern, and they expire after 180 days.
+further closes on that pattern, and expire with the configured retention window.
+
+Memory (including analyst notes) and run reports default to **90 days**, measured from their original creation
+time. SOC managers and platform administrators can change this to 1–365 days under **Hermes → Memory & data
+retention** without redeploying. Increasing retention does not recover deleted data. Unchanged notes retain
+their IDs and creation dates on every save; concurrent cleanup or settings changes invalidate the memory
+version, and the controller avoids restoring deleted notes on retry. The database accepts at most 500 notes
+in total, each at most 2,000 characters.
+
+The worker's `hermes-retention` job runs hourly, independently of model availability, deleting expired notes
+and reports with audited counts (reports in batches of 1,000). Reads also exclude expired data. Action/undo
+history and the audit trail are separate records and are not deleted by this policy. Kubernetes prevents
+overlapping scheduled runs, retains at most three successful and three failed Jobs, and expires completed
+Jobs after 24 hours. Each run uses temporary, size-limited storage; durable memory stays in PostgreSQL.
 
 The report (`POST /api/v1/tuning/reports`) contains Hermes' sections (what was noisy, what it did, what it
 held back, analyst feedback, Wazuh rule tuning recommendations by rule id) and the controller's own table

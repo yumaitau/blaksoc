@@ -23,7 +23,7 @@ metadata:
 automountServiceAccountToken: false
 ---
 {{- end }}
-# Weekly noise review. The controller (hermes/warden) fetches anonymised patterns, runs one Hermes agent
+# Hourly noise review. The controller (hermes/warden) fetches anonymised patterns, runs one Hermes agent
 # with only its memory tool and the blakSOC tuning toolset, and submits the report. Exits non-zero on
 # failure; never retried, because a retry could repeat actions.
 apiVersion: batch/v1
@@ -41,6 +41,7 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: 86400
       backoffLimit: {{ $h.backoffLimit }}
       activeDeadlineSeconds: {{ $h.activeDeadlineSeconds }}
       template:

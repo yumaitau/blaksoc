@@ -21,7 +21,7 @@ import { alerts, auditLog, hermesMemoryNotes, hermesReports, incidents, noiseRul
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { redis } from "@/lib/redis";
-import { addHumanNote, getMemory, listReports, MEMORY_VERSION_KEY } from "@/lib/services/hermes";
+import { addHumanNote, getMemory, listReports, MEMORY_VERSION_KEY, MEMORY_RETENTION_KEY, runHermesRetention, setHermesRetention } from "@/lib/services/hermes";
 import { createServiceIdentity } from "@/lib/services/service-identities";
 import { listAlerts } from "@/lib/services/alerts";
 import {
@@ -116,7 +116,7 @@ afterAll(async () => {
   if (identities.length) await adminDb().delete(serviceIdentities).where(inArray(serviceIdentities.id, identities));
   if (identities.length) await adminDb().delete(hermesReports).where(inArray(hermesReports.createdBy, identities));
   await adminDb().delete(hermesMemoryNotes).where(inArray(hermesMemoryNotes.createdBy, [...identities, admin.principal.userId]));
-  await adminDb().delete(platformSettings).where(inArray(platformSettings.key, [HERMES_ACT_KEY, MEMORY_VERSION_KEY]));
+  await adminDb().delete(platformSettings).where(inArray(platformSettings.key, [HERMES_ACT_KEY, MEMORY_VERSION_KEY, MEMORY_RETENTION_KEY]));
   if (tenant) await adminDb().delete(tenants).where(eq(tenants.id, tenant));
   await redis().quit();
 });
@@ -326,8 +326,74 @@ describe("reports and memory", () => {
     const after = await read();
     expect(after.notes.map((x) => x.kind).sort()).toEqual(["human", "model"]);
     expect(after.notes.find((x) => x.kind === "human")!.text).toBe("Never close rule 100210 automatically");
+    // Even a legacy client that omits IDs must not reset an unchanged note's age every hour.
+    const [beforeSave] = await adminDb().select().from(hermesMemoryNotes).where(eq(hermesMemoryNotes.id, model.id));
+    expect((await put(after.version, [{ kind: "model", text: model.text }])).status).toBe(200);
+    const [afterSave] = await adminDb().select().from(hermesMemoryNotes).where(eq(hermesMemoryNotes.id, model.id));
+    expect(afterSave?.createdAt).toEqual(beforeSave!.createdAt);
     const [audited] = await adminDb().select().from(auditLog).where(and(eq(auditLog.action, "tuning.memory"), eq(auditLog.actorId, identities[0]!))).limit(1);
     expect(JSON.stringify(audited!.detail)).not.toContain("scanner");
+  });
+
+  it("defaults to 90 days, expires all note kinds and reports, and invalidates stale memory writers", async () => {
+    const before = await getMemory(admin, "alert:tune");
+    expect(before.retentionDays).toBe(90);
+    const cutoff = new Date(now.getTime() - 90 * DAY);
+    const expired = new Date(cutoff.getTime() - 1);
+    const notes = await adminDb().insert(hermesMemoryNotes).values([
+      ...(["human", "model", "outcome"] as const).map((kind) => ({ kind, text: "Expired lesson", createdBy: admin.principal.userId, createdAt: expired, updatedAt: now })),
+      { kind: "model" as const, text: "Boundary lesson", createdBy: admin.principal.userId, createdAt: cutoff },
+    ]).returning();
+    const reports = await adminDb().insert(hermesReports).values([expired, cutoff].map((createdAt) => ({ periodStart: createdAt, periodEnd: createdAt, markdown: "Old run", stats, createdBy: identities[0]!, createdAt }))).returning();
+    expect(await runHermesRetention(now)).toEqual({ reports: 1 });
+    const remaining = await adminDb().select().from(hermesMemoryNotes).where(inArray(hermesMemoryNotes.id, notes.map((n) => n.id)));
+    expect(remaining.map((n) => n.text)).toEqual(["Boundary lesson"]);
+    expect((await adminDb().select().from(hermesReports).where(inArray(hermesReports.id, reports.map((r) => r.id)))).map((r) => r.id)).toEqual([reports[1]!.id]);
+    const stale = await putMemoryRoute(new Request(`${BASE}/memory`, call(tokens.hermes!, { method: "PUT", body: JSON.stringify({ version: before.version, notes: [] }) })));
+    expect(stale.status).toBe(409);
+    expect(await runHermesRetention(now)).toEqual({ reports: 0 });
+    await adminDb().delete(hermesMemoryNotes).where(inArray(hermesMemoryNotes.id, notes.map((n) => n.id)));
+    await adminDb().delete(hermesReports).where(inArray(hermesReports.id, reports.map((r) => r.id)));
+  });
+
+  it("validates and authorizes retention changes and applies shorter/longer windows", async () => {
+    for (const days of [0, -1, 366, 1.5, NaN, Infinity]) await expect(setHermesRetention(admin, days)).rejects.toThrow("whole number");
+    await expect(setHermesRetention({ ...admin, grants: [] }, 30)).rejects.toThrow("platform");
+    const old = new Date(now.getTime() - 100 * DAY);
+    const [note] = await adminDb().insert(hermesMemoryNotes).values({ kind: "human", text: "Keep for the configured window", createdBy: admin.principal.userId, createdAt: old }).returning();
+    try {
+      await setHermesRetention(admin, 180);
+      expect((await getMemory(admin, "alert:tune")).notes.some((n) => n.id === note!.id)).toBe(true);
+      await setHermesRetention(admin, 30);
+      const memory = await getMemory(admin, "alert:tune");
+      expect(memory.retentionDays).toBe(30);
+      expect(memory.notes.some((n) => n.id === note!.id)).toBe(false);
+      expect((await adminDb().select().from(hermesMemoryNotes).where(eq(hermesMemoryNotes.id, note!.id))).length).toBe(0);
+    } finally {
+      await setHermesRetention(admin, 90);
+      await adminDb().delete(hermesMemoryNotes).where(eq(hermesMemoryNotes.id, note!.id));
+    }
+  });
+
+  it("bounds total memory including analyst notes", async () => {
+    const memory = await getMemory(admin, "alert:tune");
+    const filler = await adminDb().insert(hermesMemoryNotes).values(Array.from({ length: 500 - memory.notes.length }, () => ({ kind: "human" as const, text: "Capacity test lesson", createdBy: admin.principal.userId }))).returning({ id: hermesMemoryNotes.id });
+    try {
+      await expect(addHumanNote(admin, { text: "One more analyst lesson" })).rejects.toThrow("at most 500");
+      const notes = [...memory.notes.filter((n) => n.kind !== "human"), { kind: "model", text: "One more model lesson" }];
+      const response = await putMemoryRoute(new Request(`${BASE}/memory`, call(tokens.hermes!, { method: "PUT", body: JSON.stringify({ version: memory.version, notes }) })));
+      expect(response.status).toBe(422);
+      expect((await adminDb().select().from(hermesMemoryNotes)).length).toBe(500);
+    } finally {
+      await adminDb().delete(hermesMemoryNotes).where(inArray(hermesMemoryNotes.id, filler.map((r) => r.id)));
+    }
+  });
+
+  it("purges report backlogs across multiple bounded batches", async () => {
+    const createdAt = new Date(now.getTime() - 91 * DAY);
+    await adminDb().insert(hermesReports).values(Array.from({ length: 1001 }, () => ({ periodStart: createdAt, periodEnd: createdAt, markdown: "Expired report", stats, createdBy: identities[0]!, createdAt })));
+    expect(await runHermesRetention(now)).toEqual({ reports: 1001 });
+    expect((await listReports(admin, 5, "alert:tune")).length).toBeGreaterThan(0);
   });
 });
 

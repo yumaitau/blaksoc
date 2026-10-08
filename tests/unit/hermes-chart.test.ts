@@ -21,11 +21,12 @@ const render = (args: string[]) => execFileSync("helm", args, { encoding: "utf8"
 const fails = (args: string[]) => () => execFileSync("helm", args, { stdio: "pipe" });
 
 describe("Hermes (in-cluster agent) chart", () => {
-  it.skipIf(!has("helm"))("is off by default and renders a weekly, never-retried CronJob in production", () => {
+  it.skipIf(!has("helm"))("is off by default and renders an hourly, never-retried CronJob in production", () => {
     expect(render(base)).not.toContain("blaksoc-hermes");
     const out = render(prod);
     expect(out).toContain("kind: CronJob");
-    expect(out).toContain('schedule: "30 9 * * 1"');
+    expect(out).toContain('schedule: "0 * * * *"');
+    expect(out).toContain("ttlSecondsAfterFinished: 86400");
     expect(out).toContain('timeZone: "Australia/Sydney"');
     expect(out).toContain("concurrencyPolicy: Forbid");
     expect(out).toContain("backoffLimit: 0");

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from warden import api, controller, memory, policy, report, sanitize
@@ -180,6 +180,20 @@ def call(toolset, name, **args):
 
 
 class SanitizeTests(Base):
+    def test_memory_retention_defaults_and_rejects_invalid_values(self):
+        self.assertEqual(sanitize.memory_response({"version": 0, "notes": []})["retentionDays"], 90)
+        for days in (True, 0, -1, 366, 1.5, "90"):
+            with self.assertRaises(sanitize.ShapeError):
+                sanitize.memory_response({"version": 0, "retentionDays": days, "notes": []})
+
+    def test_memory_retention_uses_creation_for_all_kinds_and_keeps_boundary(self):
+        cutoff = NOW - timedelta(days=90)
+        notes = [{"kind": kind, "text": "lesson", "createdAt": (cutoff - timedelta(seconds=1)).isoformat(), "updatedAt": NOW.isoformat()}
+                 for kind in ("model", "outcome", "human")]
+        boundary = {"kind": "model", "text": "boundary", "createdAt": cutoff.isoformat()}
+        self.assertEqual(memory.fresh(notes + [boundary], NOW), [boundary])
+        self.assertEqual(len(memory.fresh(notes + [boundary], NOW, 180)), 4)
+
     def test_allowlisted_keys_are_never_suspicious(self):
         keys = set()
         for fields in (api.PATTERN_FIELDS, api.COUNTS_FIELDS, api.NOISE_RULE_FIELDS, api.ANNOTATION_FIELDS,
@@ -502,6 +516,34 @@ class RunTests(Base):
         self.assertEqual(len(puts), 2)
         self.assertEqual(puts[1]["body"]["version"], 3)
 
+    def test_hourly_saves_preserve_note_ids_and_age(self):
+        self.api.memory["notes"][0]["createdAt"] = "2026-10-01T00:00:00Z"
+        self.assertEqual(self.run_with(lambda toolset, cfg: call(toolset, "submit_weekly_report", markdown=VALID_REPORT) and None)[0], controller.EXIT_OK)
+        saved = self.api.writes("/api/v1/tuning/memory")[0]["body"]["notes"]
+        self.assertTrue(any(n.get("id") == "n1" for n in saved))
+
+    def test_configured_retention_excludes_old_notes_and_feedback(self):
+        self.api.memory["retentionDays"] = 1
+        self.api.memory["notes"][0]["createdAt"] = "2026-10-01T00:00:00Z"
+        self.api.actions["actions"][0]["createdAt"] = "2026-10-01T00:00:00Z"
+        self.api.actions["actions"][1]["createdAt"] = "2026-10-01T00:00:00Z"
+        code, seen = self.run_with(lambda toolset, cfg: call(toolset, "submit_weekly_report", markdown=VALID_REPORT) and None)
+        self.assertEqual(code, controller.EXIT_OK)
+        self.assertEqual(seen["memory_at_start"], [])
+        self.assertEqual(self.api.writes("/api/v1/tuning/memory")[0]["body"]["notes"], [])
+
+    def test_conflict_does_not_resurrect_expired_or_deleted_notes(self):
+        self.api.overrides[("PUT", "/api/v1/tuning/memory")] = [(409, {"error": "conflict", "message": "stale version"})]
+
+        def script(toolset, cfg):
+            self.api.memory = {"version": 4, "retentionDays": 1, "notes": []}
+            call(toolset, "submit_weekly_report", markdown=VALID_REPORT)
+
+        self.assertEqual(self.run_with(script)[0], controller.EXIT_OK)
+        saved = self.api.writes("/api/v1/tuning/memory")[-1]["body"]
+        self.assertEqual(saved["version"], 4)
+        self.assertEqual(saved["notes"], [])
+
     def test_report_from_poisoned_inputs_contains_no_pii(self):
         poison = ["ws-01.corp.example.com", "bob@acme.com.au", "203.0.113.9", "DESKTOP-7Q2LMNP", "ACME\\jsmith",
                   "Acme Pty Ltd", "https://intranet.acme/alert/1"]
@@ -558,7 +600,7 @@ class RunTests(Base):
     def test_missing_report_is_a_failure(self):
         code, _ = self.run_with(lambda ts, cfg: None)
         self.assertEqual(code, controller.EXIT_AGENT)
-        self.assertIn("did not submit a weekly report", self.api.report()["markdown"])
+        self.assertIn("did not submit a run report", self.api.report()["markdown"])
 
     def test_api_unavailable_aborts_without_model(self):
         self.api.overrides[("GET", "/api/v1/tuning/patterns")] = [(500, {"error": "server_error"})] * 3

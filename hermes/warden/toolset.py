@@ -99,7 +99,7 @@ SCHEMAS = {
     },
     "submit_weekly_report": {
         "description": (
-            "Submit the weekly Markdown report once, at the end. It must contain these headings: "
+            "Submit the run Markdown report once, at the end. It must contain these headings: "
             + "; ".join(report.REQUIRED_HEADINGS)
             + ". Counts and pattern references (source, rule id, tenantRef, patternId) only: no titles, "
             "hostnames, usernames, IP or email addresses, URLs or customer names."
@@ -165,7 +165,7 @@ class Toolset:
             return json.dumps(getattr(self, name)(**args), ensure_ascii=False)
         except TypeError as error:
             return _err("invalid arguments: " + str(error)[:200])
-        except Exception as error:  # one bad call must not end the weekly run
+        except Exception as error:  # one bad call must not end the hourly run
             return _err(f"{type(error).__name__}: could not run {name}")
 
     # -- reads --

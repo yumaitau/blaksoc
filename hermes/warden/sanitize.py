@@ -293,10 +293,13 @@ def memory_response(raw: Any, log=lambda *a, **k: None) -> dict:
     version = raw.get("version", 0)
     if isinstance(version, bool) or not isinstance(version, int) or version < 0:
         raise ShapeError("memory version")
+    days = raw.get("retentionDays", 90)
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 365:
+        raise ShapeError("memory retentionDays")
     meta, notes = _records({"notes": raw.get("notes", [])}, ("notes",), "notes", api.MEMORY_NOTE_FIELDS, log, 500)
     clean = []
     for note in notes:
         text = scrub(clean_text(note.get("text", ""), 500))
         if text:
-            clean.append({"text": text, "kind": note.get("kind", "model"), "createdAt": note.get("createdAt")})
-    return {"version": version, "notes": clean}
+            clean.append({"id": note.get("id"), "text": text, "kind": note.get("kind", "model"), "createdAt": note.get("createdAt")})
+    return {"version": version, "retentionDays": days, "notes": clean}

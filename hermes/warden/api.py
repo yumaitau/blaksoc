@@ -94,7 +94,7 @@ MEMORY_NOTE_FIELDS = {"id": "str:id", "kind": "str:token", "text": "text", "crea
 
 PATTERNS_TOP = ("patterns", "fleet")
 ACTIONS_TOP = ("actions",)
-MEMORY_TOP = ("version", "notes")
+MEMORY_TOP = ("version", "retentionDays", "notes")
 
 ACTION_KINDS = ("annotate", "close", "noise_rule", "purge")
 PATTERN_ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
