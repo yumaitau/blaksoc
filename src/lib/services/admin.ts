@@ -1,12 +1,14 @@
-import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
-import { db, systemDb } from "@/db/client";
+import { and, desc, eq, gte, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { db, systemDb, type Tx } from "@/db/client";
 import { auditLog, DEFAULT_TENANT_SETTINGS, integrations, integrationTenantLinks, roleAssignments, roles, serviceIdentities, sites, ssoProvider, tenants, user, type TenantSettings } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, dbScope, systemScope, tenantRoleGrantDenial, type AccessContext } from "@/lib/auth/access";
 import { googleEndpoints } from "@/lib/auth/sso-policy";
 import { audit, verifyAuditChain } from "@/lib/audit";
+import { auditNameIds } from "@/lib/audit/describe";
+import type { AuditFilters } from "@/lib/audit/filters";
 import { TrainingIsolationError } from "@/lib/training/isolation";
-import { actor, AccessDenied } from "./common";
+import { actor, AccessDenied, scoped } from "./common";
 import { notifyStewards, STEWARD_ROLE, userHoldsPlatformRole } from "./governance";
 
 const platformOnly = (ctx: AccessContext, perm: "tenant:manage" | "user:manage" | "settings:manage" | "audit:read") => {
@@ -150,24 +152,73 @@ export async function listSsoProviders(ctx: AccessContext) {
   return db().select({ id: ssoProvider.id, providerId: ssoProvider.providerId, issuer: ssoProvider.issuer, domain: ssoProvider.domain, tenantId: ssoProvider.tenantId, saml: sql<boolean>`${ssoProvider.samlConfig} is not null`, createdAt: ssoProvider.createdAt }).from(ssoProvider);
 }
 
-export async function auditTrail(ctx: AccessContext, f: { tenantId?: string; action?: string; sinceDays?: number; limit?: number } = {}) {
-  const tenantIds = ctx.tenantIds.filter((t) => can(ctx, "audit:read", t));
-  if (!tenantIds.length && !(ctx.isPlatform && can(ctx, "audit:read"))) throw new AccessDenied();
-  return withScope({ tenantIds, platform: ctx.isPlatform && can(ctx, "audit:read") }, (tx) =>
-    tx
-      .select({ entry: auditLog, actorName: sql<string | null>`coalesce(${user.name}, ${serviceIdentities.name})`, tenantName: tenants.name })
-      .from(auditLog)
-      .leftJoin(user, eq(user.id, auditLog.actorId))
-      .leftJoin(serviceIdentities, and(eq(auditLog.actorKind, "service"), sql`${serviceIdentities.id}::text = ${auditLog.actorId}`))
-      .leftJoin(tenants, eq(tenants.id, auditLog.tenantId))
-      .where(and(
-        f.tenantId ? eq(auditLog.tenantId, f.tenantId) : or(inArray(auditLog.tenantId, tenantIds.length ? tenantIds : ["00000000-0000-0000-0000-000000000000"]), ctx.isPlatform ? isNull(auditLog.tenantId) : undefined),
-        f.action ? sql`${auditLog.action} like ${`${f.action}%`}` : undefined,
-        gte(auditLog.at, new Date(Date.now() - (f.sinceDays ?? 30) * 86400_000)),
-      ))
-      .orderBy(desc(auditLog.id))
-      .limit(f.limit ?? 200),
-  );
+const NO_TENANT = "00000000-0000-0000-0000-000000000000";
+const likeEscape = (v: string) => v.replace(/[\\%_]/g, (c) => `\\${c}`);
+/** Calendar day in Sydney → the instant it starts. */
+const sydneyDayStart = (day: string, plusDays = 0) => sql`((${day}::date + ${plusDays}::int)::timestamp at time zone 'Australia/Sydney')`;
+
+/** Most rows one CSV export carries. */
+export const AUDIT_EXPORT_CAP = 5000;
+
+async function queryAudit(tx: Tx, tenantIds: string[], platform: boolean, f: AuditFilters, limit: number) {
+  if (f.tenantId && !tenantIds.includes(f.tenantId)) throw new AccessDenied("tenant not in audit scope");
+  const actorLike = f.actor ? `%${likeEscape(f.actor)}%` : undefined;
+  const qLike = f.q ? `%${likeEscape(f.q)}%` : undefined;
+  const ranged = !!(f.from || f.to);
+  const rows = await tx
+    .select({ entry: auditLog, actorName: sql<string | null>`coalesce(${user.name}, ${serviceIdentities.name})`, actorEmail: user.email, tenantName: tenants.name })
+    .from(auditLog)
+    .leftJoin(user, eq(user.id, auditLog.actorId))
+    .leftJoin(serviceIdentities, and(eq(auditLog.actorKind, "service"), sql`${serviceIdentities.id}::text = ${auditLog.actorId}`))
+    .leftJoin(tenants, eq(tenants.id, auditLog.tenantId))
+    .where(and(
+      f.tenantId ? eq(auditLog.tenantId, f.tenantId) : or(inArray(auditLog.tenantId, tenantIds.length ? tenantIds : [NO_TENANT]), platform ? isNull(auditLog.tenantId) : undefined),
+      f.action ? sql`${auditLog.action} like ${`${likeEscape(f.action)}%`}` : undefined,
+      ranged ? undefined : gte(auditLog.at, new Date(Date.now() - f.sinceDays * 86400_000)),
+      f.from ? sql`${auditLog.at} >= ${sydneyDayStart(f.from)}` : undefined,
+      f.to ? sql`${auditLog.at} < ${sydneyDayStart(f.to, 1)}` : undefined,
+      f.actorKind ? eq(auditLog.actorKind, f.actorKind) : undefined,
+      f.actor && actorLike ? or(eq(auditLog.actorId, f.actor), ilike(user.name, actorLike), ilike(user.email, actorLike), ilike(serviceIdentities.name, actorLike)) : undefined,
+      f.targetType ? eq(auditLog.targetType, f.targetType) : undefined,
+      f.targetId ? eq(auditLog.targetId, f.targetId) : undefined,
+      qLike ? or(ilike(auditLog.action, qLike), ilike(auditLog.targetType, qLike), ilike(auditLog.targetId, qLike)) : undefined,
+      f.before ? lt(auditLog.id, f.before) : undefined,
+    ))
+    .orderBy(desc(auditLog.id))
+    .limit(limit + 1);
+  const page = rows.slice(0, limit);
+  const ids = [...new Set(page.flatMap((r) => auditNameIds(r.entry)))];
+  const people = ids.length ? await tx.select({ id: user.id, name: user.name }).from(user).where(inArray(user.id, ids)) : [];
+  return {
+    rows: page,
+    /** Cursor for the next (older) page, or null at the end. */
+    nextBefore: rows.length > limit ? page.at(-1)!.entry.id : null,
+    names: Object.fromEntries(people.map((p) => [p.id, p.name])) as Record<string, string>,
+  };
+}
+
+/** Audit entries the caller may read, newest first, filtered in SQL. Pages by id: pass `nextBefore` back as `before`. */
+export async function auditTrail(ctx: AccessContext, f: AuditFilters, limit = 300) {
+  const platform = ctx.isPlatform && can(ctx, "audit:read");
+  return scoped(ctx, "audit:read", (tx, tenantIds) => queryAudit(tx, tenantIds, platform, f, Math.min(Math.max(1, limit), 500)));
+}
+
+/**
+ * Up to AUDIT_EXPORT_CAP entries for a CSV download, from the newest matching entry. The export is
+ * itself audited, in the same transaction, against each customer whose entries it could contain.
+ */
+export async function exportAuditTrail(ctx: AccessContext, filters: AuditFilters, ip: string | null) {
+  const platform = ctx.isPlatform && can(ctx, "audit:read");
+  const f: AuditFilters = { ...filters, before: undefined };
+  return scoped(ctx, "audit:read", async (tx, tenantIds) => {
+    const res = await queryAudit(tx, tenantIds, platform, f, AUDIT_EXPORT_CAP);
+    const capped = res.nextBefore !== null;
+    const audited: (string | null)[] = f.tenantId ? [f.tenantId] : platform ? [null] : tenantIds;
+    for (const tenantId of audited) {
+      await audit(tx, { ...actor(ctx), tenantId, action: "audit.export", targetType: "audit_log", ip, detail: { filters: Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined)), rows: res.rows.length, capped } });
+    }
+    return { rows: res.rows, names: res.names, capped };
+  });
 }
 
 export async function verifyAudit(ctx: AccessContext) {

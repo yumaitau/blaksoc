@@ -57,6 +57,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "server-only": "^0.0.1",
+    "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0",
     "undici": "^8.11.2",
     "yaml": "^2.9.1",

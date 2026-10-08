@@ -1,3 +1,4 @@
+import { ActionForm } from "@/components/soc/action-form";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { AWARENESS_LESSONS, AWARENESS_REVIEW } from "@/lib/awareness/lessons";
@@ -34,7 +35,7 @@ export default async function AwarenessPage() {
         <p className="mt-2 text-sm text-muted">{AWARENESS_REVIEW}</p>
       </header>
       <p className="text-sm">{when ? `Scheduled: ${when}.` : "No practice send scheduled."}</p>
-      <form action={schedulePractice} className="space-y-3">
+      <ActionForm action={schedulePractice} success="Practice send scheduled" className="space-y-3">
         <input type="hidden" name="tenantId" value={tenant.id} />
         <label className="flex min-h-11 items-center gap-2 text-sm">
           <input className="size-4" type="checkbox" name="consented" value="yes" />
@@ -44,7 +45,7 @@ export default async function AwarenessPage() {
           <input className={inputCls} type="datetime-local" name="scheduledAt" required />
         </label>
         <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg" type="submit">Save schedule</button>
-      </form>
+      </ActionForm>
       <section className="space-y-3">
         <h2 className="text-base font-medium">Lessons</h2>
         {AWARENESS_LESSONS.map((lesson) => (

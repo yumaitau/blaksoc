@@ -1,10 +1,11 @@
 "use client";
 import { Building2, ChevronsUpDown } from "lucide-react";
-import { useTransition } from "react";
 import { setWorkspace } from "@/app/(app)/workspace-actions";
+import { useAction } from "./use-action";
 
 export function WorkspaceSwitcher({ tenants, current }: { tenants: { id: string; name: string }[]; current: string }) {
-  const [pending, start] = useTransition();
+  const { pending, run } = useAction();
+  const nameOf = (id: string | undefined) => tenants.find((t) => t.id === id)?.name;
   return (
     <label className="relative inline-flex w-full min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-sm hover:border-border-strong md:w-auto md:max-w-xs">
       <Building2 className="size-4 shrink-0 text-accent" />
@@ -13,7 +14,7 @@ export function WorkspaceSwitcher({ tenants, current }: { tenants: { id: string;
         className="w-full min-w-0 appearance-none bg-transparent pr-5 font-medium outline-none md:w-auto"
         value={current}
         disabled={pending}
-        onChange={(e) => start(() => setWorkspace(e.target.value))}
+        onChange={(e) => run(() => setWorkspace(e.target.value), undefined, { success: (id) => (nameOf(id) ? `Now viewing ${nameOf(id)}` : "Now viewing all customers") })}
       >
         <option value="all">All customers</option>
         {tenants.map((t) => (

@@ -66,7 +66,7 @@ export function GenerateReportForm({
           span: board ? span : undefined,
           preamble: board ? preamble : undefined,
           image: board ? image : undefined,
-        }), (d) => d && router.push(`/reports/${d.id}`));
+        }), (d) => d && router.push(`/reports/${d.id}`), { success: `${kinds.find((k) => k.value === kind)?.label ?? "Report"} generated` });
       }}
     >
       <div>

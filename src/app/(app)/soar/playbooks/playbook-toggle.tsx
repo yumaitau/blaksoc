@@ -19,7 +19,7 @@ export function PlaybookToggle({ id, name, enabled, disabled }: { id: string; na
             const res = await setPlaybookEnabledAction(id, v);
             if (!res.ok) setOn(!v);
             return res;
-          });
+          }, undefined, { success: `Playbook ${name} ${v ? "enabled" : "disabled"}` });
         }}
       />
       {error ? <span role="alert" className="text-[11px] text-danger" title={error}>Failed</span> : null}

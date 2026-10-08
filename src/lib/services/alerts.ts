@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
-import { alertObservables, alerts, assets, incidents, intelMatches, observables, responseActions, savedViews, tenants, user } from "@/db/schema";
+import { alertObservables, alerts, assets, incidents, integrations, intelMatches, observables, responseActions, savedViews, tenants, user } from "@/db/schema";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { publish } from "@/lib/events";
@@ -77,6 +77,9 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
           riskFactors: alerts.riskFactors,
           status: alerts.status,
           source: alerts.source,
+          ruleId: alerts.ruleId,
+          // Null for alerts blakSOC raised itself, and for shared integrations RLS hides from the viewer.
+          integrationName: integrations.name,
           category: alerts.category,
           assetId: alerts.assetId,
           assetName: assets.name,
@@ -93,6 +96,7 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
         .innerJoin(tenants, eq(tenants.id, alerts.tenantId))
         .leftJoin(assets, eq(assets.id, alerts.assetId))
         .leftJoin(user, eq(user.id, alerts.assigneeId))
+        .leftJoin(integrations, eq(integrations.id, alerts.integrationId))
         .where(and(...where))
         .orderBy(...order)
         .limit(Math.min(f.limit ?? 100, 500))

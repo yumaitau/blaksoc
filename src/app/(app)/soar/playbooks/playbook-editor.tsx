@@ -43,7 +43,6 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
   const router = useRouter();
   const uid = useId();
   const { pending, error, setError, run } = useAction();
-  const [saved, setSaved] = useState(false);
   const [owner, setOwner] = useState(initial.tenantId ?? "");
   const [name, setName] = useState(initial.name);
   const [description, setDescription] = useState(initial.description ?? "");
@@ -63,8 +62,8 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
     steps: steps.map((s) => ({ id: s.id, action: s.action, name: s.name || labelOf(s.action), when: s.when?.field ? fromRow(s.when) : undefined, requireApproval: s.requireApproval })),
   };
 
-  const patchStep = (key: string, p: Partial<StepRow>) => { setSaved(false); setSteps((xs) => xs.map((s) => (s.key === key ? { ...s, ...p } : s))); };
-  const patchCond = (key: string, p: Partial<CondRow>) => { setSaved(false); setConds((xs) => xs.map((c) => (c.key === key ? { ...c, ...p } : c))); };
+  const patchStep = (key: string, p: Partial<StepRow>) => setSteps((xs) => xs.map((s) => (s.key === key ? { ...s, ...p } : s)));
+  const patchCond = (key: string, p: Partial<CondRow>) => setConds((xs) => xs.map((c) => (c.key === key ? { ...c, ...p } : c)));
   const move = (i: number, d: -1 | 1) => setSteps((xs) => { const n = [...xs]; [n[i], n[i + d]] = [n[i + d]!, n[i]!]; return n; });
   const addStep = () => {
     const action = catalogue[0]!.key;
@@ -74,7 +73,6 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
   };
 
   function save() {
-    setSaved(false);
     const built: PlaybookStep[] = [];
     for (const s of steps) {
       let params: Record<string, unknown> | undefined;
@@ -94,10 +92,10 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
     run(
       () => savePlaybookAction({ id: initial.id, tenantId: owner || null, name, description, trigger: { event, conditions: conds.filter((c) => c.field.trim()).map(fromRow) }, steps: built }),
       (id) => {
-        setSaved(true);
         if (!initial.id && id) router.push(`/soar/playbooks/${id}`);
         else router.refresh();
       },
+      { success: initial.id ? `Playbook ${name.trim()} saved` : `Playbook ${name.trim()} created` },
     );
   }
 
@@ -115,7 +113,7 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div>
             <Label htmlFor={`${uid}-name`}>Name</Label>
-            <Input id={`${uid}-name`} value={name} onChange={(e) => { setSaved(false); setName(e.target.value); }} required maxLength={160} disabled={ro} />
+            <Input id={`${uid}-name`} value={name} onChange={(e) => setName(e.target.value)} required maxLength={160} disabled={ro} />
           </div>
           <div>
             <Label htmlFor={`${uid}-owner`}>Scope</Label>
@@ -126,7 +124,7 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
           </div>
           <div className="md:col-span-2">
             <Label htmlFor={`${uid}-desc`}>Description</Label>
-            <Textarea id={`${uid}-desc`} value={description} onChange={(e) => { setSaved(false); setDescription(e.target.value); }} rows={2} maxLength={2000} disabled={ro} />
+            <Textarea id={`${uid}-desc`} value={description} onChange={(e) => setDescription(e.target.value)} rows={2} maxLength={2000} disabled={ro} />
           </div>
         </CardContent>
       </Card>
@@ -136,7 +134,7 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
         <CardContent className="space-y-4">
           <div className="max-w-xs">
             <Label htmlFor={`${uid}-event`}>Event</Label>
-            <Select id={`${uid}-event`} value={event} onChange={(e) => { setSaved(false); setEvent(e.target.value as PlaybookTrigger["event"]); }} disabled={ro}>
+            <Select id={`${uid}-event`} value={event} onChange={(e) => setEvent(e.target.value as PlaybookTrigger["event"])} disabled={ro}>
               {EVENTS.map((ev) => <option key={ev} value={ev}>{EVENT_LABELS[ev]} ({ev})</option>)}
             </Select>
           </div>
@@ -222,7 +220,6 @@ export function PlaybookEditor({ initial, catalogue, owners, canEdit }: { initia
       {!ro ? (
         <div className="flex items-center gap-3">
           <Button type="submit" disabled={pending}>{pending ? "Saving…" : initial.id ? "Save new version" : "Create playbook"}</Button>
-          {saved ? <span className="text-sm text-ok" role="status">Saved.</span> : null}
           <ActionError error={error} />
         </div>
       ) : (

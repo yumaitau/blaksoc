@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ToggleSwitch } from "@/components/soc/toggle-switch";
 import { ActionError, useAction } from "@/components/soc/use-action";
 import { Badge } from "@/components/ui/badge";
@@ -14,7 +15,7 @@ export function RuleEnabledToggle({ id, title, enabled, canWrite }: { id: string
   const { pending, error, run } = useAction();
   return (
     <span className="inline-flex items-center gap-2" title={error ?? undefined}>
-      <ToggleSwitch checked={enabled} disabled={!canWrite || pending} label={`${title} enabled`} onChange={(v) => run(() => setRuleEnabledAction(id, v))} />
+      <ToggleSwitch checked={enabled} disabled={!canWrite || pending} label={`${title} enabled`} onChange={(v) => run(() => setRuleEnabledAction(id, v), undefined, { success: `${title} ${v ? "enabled" : "disabled"}` })} />
       {error ? <span role="alert" className="text-xs text-danger">{error}</span> : null}
     </span>
   );
@@ -40,23 +41,21 @@ export function RuleEditor({
   const [note, setNote] = useState(ruleId ? "" : "Initial version");
   const [confidence, setConfidence] = useState(String(initialConfidence));
   const [scope, setScope] = useState(scopes?.[0]?.value ?? "global");
-  const [saved, setSaved] = useState<string | null>(null);
   const { pending, error, run } = useAction();
   const dirty = yaml !== initialYaml || Number(confidence) !== initialConfidence;
 
   const save = () => {
-    setSaved(null);
     run(
       () => saveRuleAction({ id: ruleId, tenantId: scope === "global" ? null : scope, yaml, changeNote: note, confidence: confidence === "" ? undefined : Number(confidence) }),
       (data) => {
         if (!data) return;
         if (!ruleId) router.push(`/detections/rules/${data.id}`);
         else {
-          setSaved(`Saved as version ${data.version}.`);
           setNote("");
           router.refresh();
         }
       },
+      { success: (data) => (ruleId ? `Rule saved as version ${data?.version}` : "Rule created") },
     );
   };
 
@@ -93,7 +92,6 @@ export function RuleEditor({
         </div>
       </div>
       <div id="rule-yaml-error"><ActionError error={error} /></div>
-      {saved ? <p role="status" className="text-sm text-ok">{saved}</p> : null}
       <div className="flex items-center gap-3">
         <Button onClick={save} disabled={!canWrite || pending || (!!ruleId && !dirty) || !note.trim()}>
           {pending ? "Saving…" : ruleId ? "Save new version" : "Create rule"}
@@ -118,7 +116,20 @@ export function TestRunner({ ruleId, example, canRun }: { ruleId: string; exampl
       </div>
       <ActionError error={error} />
       <div className="flex items-center gap-3">
-        <Button variant="secondary" disabled={!canRun || pending} onClick={() => run(() => testRuleAction(ruleId, cases), (d) => setResult(d ?? null))}>
+        <Button
+          variant="secondary"
+          disabled={!canRun || pending}
+          onClick={() =>
+            run(
+              () => testRuleAction(ruleId, cases),
+              (d) => {
+                setResult(d ?? null);
+                if (d && !d.passed) toast.warning(`${d.results.filter((r) => !r.pass).length} of ${d.results.length} test cases failed`);
+              },
+              { success: (d) => (d?.passed ? `All ${d.results.length} test cases passed` : null) },
+            )
+          }
+        >
           {pending ? "Running…" : "Run tests against current version"}
         </Button>
         {result ? <Badge variant={result.passed ? "ok" : "danger"}>{result.passed ? "All passed" : "Failures"}</Badge> : null}
@@ -169,7 +180,16 @@ export function DeployPanel({ ruleId, customers, canDeploy, enabled }: { ruleId:
       </fieldset>
       <ActionError error={error} />
       <div className="flex flex-wrap items-center gap-3">
-        <Button disabled={!canDeploy || !enabled || pending || !selected.length} onClick={() => run(() => deployRuleAction(ruleId, selected), (d) => { setOut(d ?? null); setSelected([]); })}>
+        <Button
+          disabled={!canDeploy || !enabled || pending || !selected.length}
+          onClick={() =>
+            run(
+              () => deployRuleAction(ruleId, selected),
+              (d) => { setOut(d ?? null); setSelected([]); },
+              { success: (d) => `Rule deployed to ${d?.deployed ?? 0} customer${d?.deployed === 1 ? "" : "s"}` },
+            )
+          }
+        >
           {pending ? "Deploying…" : `Deploy to ${selected.length || "selected"} customer${selected.length === 1 ? "" : "s"}`}
         </Button>
         {!canDeploy ? <span className="text-xs text-muted">detection:deploy is required.</span> : !enabled ? <span className="text-xs text-muted">Enable the rule before deploying.</span> : null}

@@ -13,21 +13,17 @@ export function CreateRoleForm({ permissions }: { permissions: readonly string[]
   const [description, setDescription] = useState("");
   const [scope, setScope] = useState<"platform" | "tenant">("tenant");
   const [picked, setPicked] = useState<string[]>([]);
-  const [ok, setOk] = useState(false);
-
   return (
     <form
       className="space-y-3"
       onSubmit={(e) => {
         e.preventDefault();
-        setOk(false);
         run(() => createRoleAction({ key, name, scope, permissions: picked, description }), () => {
-          setOk(true);
           setKey("");
           setName("");
           setDescription("");
           setPicked([]);
-        });
+        }, { success: `Role ${name.trim()} created` });
       }}
     >
       <div className="grid gap-3 sm:grid-cols-4">
@@ -64,7 +60,6 @@ export function CreateRoleForm({ permissions }: { permissions: readonly string[]
       </fieldset>
       <div className="flex items-center gap-3">
         <Button type="submit" size="sm" disabled={pending}>{pending ? "Creating…" : "Create role"}</Button>
-        {ok ? <span role="status" className="text-sm text-ok">Role created.</span> : null}
         <ActionError error={error} />
       </div>
     </form>

@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { ActionForm } from "@/components/soc/action-form";
 import { EmptyState, PageHeader } from "@/components/soc/indicators";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
@@ -46,13 +47,13 @@ export default async function TrainingPage() {
                           {trainee.cosigned ? (
                             <span className="text-fg">Co-signed</span>
                           ) : (
-                            <form action={cosign} className="mt-2">
+                            <ActionForm action={cosign} success={`${trainee.traineeName} co-signed`} className="mt-2">
                               <input type="hidden" name="tenantId" value={room.id} />
                               <input type="hidden" name="traineeId" value={trainee.traineeId} />
-                              <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg" type="submit">
+                              <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg disabled:opacity-50" type="submit">
                                 Co-sign
                               </button>
-                            </form>
+                            </ActionForm>
                           )}
                         </div>
                       </div>

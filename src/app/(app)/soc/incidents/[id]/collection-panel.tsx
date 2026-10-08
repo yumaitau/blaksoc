@@ -7,6 +7,8 @@ import { Input, Label } from "@/components/ui/input";
 import { ARTIFACT_LABELS, ARTIFACT_SETS, type ArtifactSet } from "@/lib/dfir/sets";
 import { exportIncidentCustody, requestIncidentCollection, startIncidentHunt } from "../actions";
 
+const matched = (n: number) => (n === 1 ? "1 machine matched." : `${n} machines matched.`);
+
 export function CollectionPanel({
   incidentId,
   editable,
@@ -22,7 +24,6 @@ export function CollectionPanel({
   const [sets, setSets] = useState<ArtifactSet[]>(["triage"]);
   const [lowBandwidth, setLowBandwidth] = useState(false);
   const [ioc, setIoc] = useState("");
-  const [huntNote, setHuntNote] = useState("");
   const collect = useAction();
   const hunt = useAction();
   const custody = useAction();
@@ -51,7 +52,9 @@ export function CollectionPanel({
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            collect.run(() => requestIncidentCollection(incidentId, { assetIds, artifactSets: sets, lowBandwidth }));
+            collect.run(() => requestIncidentCollection(incidentId, { assetIds, artifactSets: sets, lowBandwidth }), undefined, {
+              success: `Collection requested from ${assetIds.length} machine${assetIds.length === 1 ? "" : "s"}. It waits for approval.`,
+            });
           }}
         >
           <p className="text-sm text-muted">Pick the machines and the artifact sets. Every set waits for approval before anything is collected.</p>
@@ -88,11 +91,7 @@ export function CollectionPanel({
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            hunt.run(() => startIncidentHunt(incidentId, ioc), (data) => {
-              setIoc("");
-              const n = data?.matches ?? 0;
-              setHuntNote(n === 1 ? "1 machine matched." : `${n} machines matched.`);
-            });
+            hunt.run(() => startIncidentHunt(incidentId, ioc), () => setIoc(""), { success: (data) => `Hunt finished: ${matched(data?.matches ?? 0)}` });
           }}
         >
           <div className="min-w-0 flex-1">
@@ -101,7 +100,6 @@ export function CollectionPanel({
           </div>
           <Button type="submit" variant="secondary" disabled={hunt.pending || !ioc.trim()}>Hunt this customer&apos;s machines</Button>
           <ActionError error={hunt.error} />
-          {huntNote ? <p className="w-full text-sm text-muted">{huntNote}</p> : null}
         </form>
       ) : null}
       <div>
@@ -121,7 +119,7 @@ export function CollectionPanel({
               URL.revokeObjectURL(url);
             }
             return res;
-          })}
+          }, undefined, { success: "Chain of custody downloaded" })}
         >
           Download chain of custody
         </Button>

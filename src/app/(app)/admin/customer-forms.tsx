@@ -25,7 +25,7 @@ export function CreateTenantForm({ sectors }: { sectors: readonly string[] }) {
           setName("");
           setSlug("");
           if (d) router.push(`/admin?tab=customers&tenant=${d.id}`);
-        });
+        }, { success: `Customer ${name.trim()} created` });
       }}
     >
       <div className="grid gap-3 sm:grid-cols-3">
@@ -80,18 +80,14 @@ export function TenantSettingsForm({ tenantId, initial, canAutoContainment }: { 
   const { pending, error, run } = useAction();
   const [s, setS] = useState(initial);
   const [providers, setProviders] = useState(initial.ai.allowedProviders.join(", "));
-  const [saved, setSaved] = useState(false);
-  const set = (fn: (x: TenantSettings) => TenantSettings) => {
-    setSaved(false);
-    setS(fn);
-  };
+  const set = (fn: (x: TenantSettings) => TenantSettings) => setS(fn);
 
   return (
     <form
       className="space-y-5"
       onSubmit={(e) => {
         e.preventDefault();
-        run(() => updateTenantSettingsAction(tenantId, { ...s, ai: { ...s.ai, allowedProviders: providers.split(",") } }, canAutoContainment), () => setSaved(true));
+        run(() => updateTenantSettingsAction(tenantId, { ...s, ai: { ...s.ai, allowedProviders: providers.split(",") } }, canAutoContainment), undefined, { success: "Customer settings saved. The change is in the audit trail." });
       }}
     >
       <fieldset className="space-y-3">
@@ -120,7 +116,7 @@ export function TenantSettingsForm({ tenantId, initial, canAutoContainment }: { 
         <Toggle id="ai-on" label="AI assistance enabled" checked={s.ai.enabled} onChange={(v) => set((x) => ({ ...x, ai: { ...x.ai, enabled: v } }))} />
         <div>
           <Label htmlFor="ai-prov">Allowed providers (comma-separated ids; empty = platform default)</Label>
-          <Input id="ai-prov" value={providers} placeholder="e.g. ollama-local, bedrock-syd" onChange={(e) => { setSaved(false); setProviders(e.target.value); }} />
+          <Input id="ai-prov" value={providers} placeholder="e.g. ollama-local, bedrock-syd" onChange={(e) => setProviders(e.target.value)} />
         </div>
         <Toggle id="ai-raw" label="Allow raw event payloads to reach the model" hint="Off: only normalised fields are sent." checked={s.ai.allowRawEvents} onChange={(v) => set((x) => ({ ...x, ai: { ...x.ai, allowRawEvents: v } }))} />
         <Toggle id="ai-pii" label="Redact personal information before model calls" checked={s.ai.redactPii} onChange={(v) => set((x) => ({ ...x, ai: { ...x.ai, redactPii: v } }))} />
@@ -159,7 +155,6 @@ export function TenantSettingsForm({ tenantId, initial, canAutoContainment }: { 
 
       <div className="flex items-center gap-3">
         <Button type="submit" size="sm" disabled={pending}>{pending ? "Saving…" : "Save settings"}</Button>
-        {saved ? <span role="status" className="text-sm text-ok">Saved. The change is in the audit trail.</span> : null}
         <ActionError error={error} />
       </div>
     </form>

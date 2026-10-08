@@ -11,11 +11,7 @@ export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; na
   const [kind, setKind] = useState<"oidc" | "google" | "saml">("oidc");
   const protocol = kind === "saml" ? "saml" : "oidc";
   const [f, setF] = useState({ providerId: "", domain: "", tenantId: "", issuer: "", clientId: "", clientSecret: "", entryPoint: "", cert: "", entraTenant: "" });
-  const [ok, setOk] = useState(false);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    setOk(false);
-    setF((x) => ({ ...x, [k]: e.target.value }));
-  };
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setF((x) => ({ ...x, [k]: e.target.value }));
   const base = `${appUrl}/api/auth/sso`;
   const pid = f.providerId || "<provider-id>";
 
@@ -24,14 +20,11 @@ export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; na
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
-        setOk(false);
         const common = { providerId: f.providerId.trim(), domain: f.domain.trim(), tenantId: f.tenantId || null, issuer: kind === "google" ? GOOGLE_ISSUER : f.issuer.trim() };
         run(
           () => registerSsoAction(protocol === "oidc" ? { protocol, ...common, clientId: f.clientId.trim(), clientSecret: f.clientSecret } : { protocol, ...common, entryPoint: f.entryPoint.trim(), cert: f.cert.trim() }),
-          () => {
-            setOk(true);
-            setF((x) => ({ ...x, clientSecret: "", cert: "" }));
-          },
+          () => setF((x) => ({ ...x, clientSecret: "", cert: "" })),
+          { success: `SSO provider ${common.providerId} registered` },
         );
       }}
     >
@@ -127,7 +120,6 @@ export function SsoRegisterForm({ tenants, appUrl }: { tenants: { id: string; na
 
       <div className="flex items-center gap-3">
         <Button type="submit" size="sm" disabled={pending}>{pending ? "Registering…" : "Register provider"}</Button>
-        {ok ? <span role="status" className="text-sm text-ok">Provider registered.</span> : null}
         <ActionError error={error} />
       </div>
     </form>

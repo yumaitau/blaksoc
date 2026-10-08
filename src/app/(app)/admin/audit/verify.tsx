@@ -1,6 +1,7 @@
 "use client";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
 import { verifyAuditAction } from "../actions";
@@ -10,7 +11,23 @@ export function VerifyIntegrity() {
   const [r, setR] = useState<{ ok: boolean; checked: number; firstBadId: number | null } | null>(null);
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => run(() => verifyAuditAction(), (d) => setR(d ?? null))}>
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={pending}
+        onClick={() =>
+          run(
+            () => verifyAuditAction(),
+            (d) => {
+              setR(d ?? null);
+              // A broken chain stays on screen until dismissed: it needs escalating.
+              if (d && !d.ok) toast.error(`Audit chain broken at entry #${d.firstBadId}`, { duration: Infinity });
+            },
+            { success: (d) => (d?.ok ? `Audit chain intact (${d.checked.toLocaleString("en-AU")} entries checked)` : null) },
+          )
+        }
+      >
         {pending ? "Verifying…" : "Verify integrity"}
       </Button>
       {r ? (

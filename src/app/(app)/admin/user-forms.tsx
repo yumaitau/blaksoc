@@ -15,7 +15,7 @@ export function RevokeButton({ assignmentId, label }: { assignmentId: string; la
         aria-label={`Revoke ${label}`}
         title={error ?? `Revoke ${label}`}
         disabled={pending}
-        onClick={() => confirm(`Revoke ${label}?`) && run(() => revokeRoleAction(assignmentId))}
+        onClick={() => confirm(`Revoke ${label}?`) && run(() => revokeRoleAction(assignmentId), undefined, { success: `Revoked ${label}` })}
         className="ml-1 rounded text-faint hover:text-danger disabled:opacity-50"
       >
         <X className="size-3" />
@@ -34,7 +34,7 @@ export function DisableButton({ userId, disabled, name }: { userId: string; disa
         size="sm"
         variant={disabled ? "secondary" : "ghost"}
         disabled={pending}
-        onClick={() => (disabled || confirm(`Disable ${name}? Their sessions stop working immediately.`)) && run(() => setUserDisabledAction(userId, !disabled))}
+        onClick={() => (disabled || confirm(`Disable ${name}? Their sessions stop working immediately.`)) && run(() => setUserDisabledAction(userId, !disabled), undefined, { success: disabled ? `${name} enabled` : `${name} disabled. Their sessions have ended.` })}
       >
         {disabled ? "Enable" : "Disable"}
       </Button>
@@ -48,7 +48,6 @@ export function AssignRoleForm({ users, roles, tenants }: { users: { id: string;
   const [userId, setUserId] = useState(users[0]?.id ?? "");
   const [roleKey, setRoleKey] = useState(roles[0]?.key ?? "");
   const [tenantId, setTenantId] = useState(tenants[0]?.id ?? "");
-  const [ok, setOk] = useState(false);
   const role = roles.find((r) => r.key === roleKey);
   const needsTenant = role?.scope === "tenant";
 
@@ -57,8 +56,9 @@ export function AssignRoleForm({ users, roles, tenants }: { users: { id: string;
       className="grid gap-3 sm:grid-cols-[1.4fr_1.2fr_1.2fr_auto] sm:items-end"
       onSubmit={(e) => {
         e.preventDefault();
-        setOk(false);
-        run(() => assignRoleAction({ userId, roleKey, tenantId: needsTenant ? tenantId : null }), () => setOk(true));
+        run(() => assignRoleAction({ userId, roleKey, tenantId: needsTenant ? tenantId : null }), undefined, {
+          success: `${role?.name ?? "Role"} assigned to ${users.find((u) => u.id === userId)?.label ?? "the user"}. It applies from their next request.`,
+        });
       }}
     >
       <div>
@@ -81,7 +81,6 @@ export function AssignRoleForm({ users, roles, tenants }: { users: { id: string;
       </div>
       <Button type="submit" size="sm" disabled={pending || !userId || !roleKey}>{pending ? "Assigning…" : "Assign role"}</Button>
       <div className="sm:col-span-4">
-        {ok ? <span role="status" className="text-sm text-ok">Role assigned. It applies from the user&apos;s next request.</span> : null}
         <ActionError error={error} />
       </div>
     </form>

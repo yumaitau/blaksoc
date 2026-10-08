@@ -9,12 +9,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
+import { alertHistory, alertProvenance } from "@/lib/services/alert-provenance";
 import { ALERT_STATUSES, getAlert } from "@/lib/services/alerts";
 import { entityLinks } from "@/lib/services/entities";
 import { RESPONSE_ACTIONS, isResponseAction } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { fmtDateTime, timeAgo } from "@/lib/utils";
 import { AlertActions, RequestResponseDialog } from "./alert-actions";
+import { HistoryCard, ProvenanceCard } from "./provenance";
 
 export const metadata = { title: "Alert" };
 
@@ -27,7 +29,11 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
   const tenantId = a.tenantId;
   const canTriage = can(ctx, "alert:triage", tenantId);
   const matches = a.intel?.matches ?? [];
-  const graph = await entityLinks(ctx, tenantId, { alertId: a.id, userName: a.userName });
+  const [graph, provenance, history] = await Promise.all([
+    entityLinks(ctx, tenantId, { alertId: a.id, userName: a.userName }),
+    alertProvenance(ctx, a.id),
+    alertHistory(ctx, a.id),
+  ]);
 
   return (
     <div className="space-y-5">
@@ -102,6 +108,8 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
       </div>
 
       {a.description ? <p className="max-w-4xl whitespace-pre-wrap text-sm text-muted">{a.description}</p> : null}
+
+      {provenance ? <ProvenanceCard p={provenance} /> : null}
 
       <div className="grid gap-5 xl:grid-cols-3">
         <div className="space-y-5 xl:col-span-2">
@@ -201,6 +209,8 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
               </div>
             )}
           </Card>
+
+          {history ? <HistoryCard entries={history.entries} truncated={history.truncated} /> : null}
         </div>
       </div>
     </div>

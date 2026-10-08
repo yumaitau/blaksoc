@@ -308,7 +308,7 @@ export const WAZUH_DATA_CAPABILITIES: DataCapabilities = {
 };
 
 /** Wazuh rule level bands behind each blakSOC severity (inverse of wazuhLevelToSeverity). */
-const LEVEL_BANDS: Record<Severity, { gte: number; lte?: number }> = {
+export const LEVEL_BANDS: Record<Severity, { gte: number; lte?: number }> = {
   informational: { gte: 0, lte: 3 },
   low: { gte: 4, lte: 6 },
   medium: { gte: 7, lte: 9 },

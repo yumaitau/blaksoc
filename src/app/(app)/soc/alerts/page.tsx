@@ -30,6 +30,10 @@ function queueHref(filters: Record<string, string>, extra: Record<string, string
 
 const flatten = (f: Record<string, string | string[]>) => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, Array.isArray(v) ? v.join(",") : v]));
 
+/** "via Wazuh (prod) · rule 5710": which integration collected the alert and the source rule that fired. */
+const viaLine = (a: { integrationName: string | null; ruleId: string | null }) =>
+  [a.integrationName && `via ${a.integrationName}`, a.ruleId && `rule ${a.ruleId}`].filter(Boolean).join(" · ");
+
 const sameFilters = (a: Record<string, string>, b: Record<string, string>) =>
   Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([k, v]) => b[k] === v);
 
@@ -139,7 +143,10 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
                       {a.assetId ? <Link href={`/assets/${a.assetId}`} className="hover:text-accent">{a.assetName}</Link> : <span className="text-faint">—</span>}
                     </TD>
                     <TD className="max-w-36 truncate text-xs">{a.userName ?? <span className="text-faint">—</span>}</TD>
-                    <TD className="text-xs text-muted">{a.source}</TD>
+                    <TD className="max-w-40 text-xs text-muted">
+                      <div className="truncate">{a.source}</div>
+                      {viaLine(a) ? <div className="truncate text-[11px] text-faint" title={viaLine(a)}>{viaLine(a)}</div> : null}
+                    </TD>
                     <TD><IntelVerdict verdict={a.intelVerdict} /></TD>
                     <TD><AttackChips techniques={a.attackTechniques} max={2} /></TD>
                     <TD className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(a.occurredAt)}>{timeAgo(a.occurredAt)}</TD>

@@ -1,3 +1,4 @@
+import { ActionForm } from "@/components/soc/action-form";
 import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { IR_SCENARIOS } from "@/lib/ir/scenarios";
@@ -40,7 +41,7 @@ export default async function ResponsePlanPage() {
           <a className="underline" href={`/portal/ir/export?tenant=${tenant.id}&version=${latest.version}&format=docx`}>Download Word</a>
         </p>
       ) : null}
-      <form action={savePlan} className="space-y-3">
+      <ActionForm action={savePlan} success="Response plan saved as a new version" className="space-y-3">
         <input type="hidden" name="tenantId" value={tenant.id} />
         <label className="block text-sm">Who speaks to community
           <input className={inputCls} name="culturalProtocol" defaultValue={latest?.culturalProtocol ?? ""} />
@@ -55,7 +56,7 @@ export default async function ResponsePlanPage() {
           <input className={inputCls} name="itProvider" defaultValue={latest?.itProvider ?? ""} />
         </label>
         <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg" type="submit">Save version</button>
-      </form>
+      </ActionForm>
       <section className="space-y-3">
         <h2 className="text-base font-medium">Tabletop exercises</h2>
         <p className="text-sm">{recorded.length ? `Recorded: ${recorded.join(", ")}` : "No exercise recorded yet."}</p>
@@ -69,14 +70,14 @@ export default async function ResponsePlanPage() {
             <ul className="mt-2 list-disc space-y-1 pl-5 text-sm">
               {scenario.prompts.map((prompt) => <li key={prompt}>{prompt}</li>)}
             </ul>
-            <form action={finishExercise} className="mt-3 space-y-2">
+            <ActionForm action={finishExercise} success={`${scenario.title} recorded`} reset className="mt-3 space-y-2">
               <input type="hidden" name="tenantId" value={tenant.id} />
               <input type="hidden" name="scenarioId" value={scenario.id} />
               <label className="block text-sm">What you learned
                 <input className={inputCls} name="lessons" />
               </label>
               <button className="inline-flex min-h-11 items-center rounded-md bg-accent px-4 font-medium text-accent-fg" type="submit">Record exercise</button>
-            </form>
+            </ActionForm>
           </article>
         ))}
       </section>

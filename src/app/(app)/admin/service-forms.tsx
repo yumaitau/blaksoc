@@ -44,7 +44,7 @@ export function CreateServiceIdentityForm({ targets }: { targets: { id: string |
           if (data) setIssued(data);
           setName("");
           setPicked([]);
-        });
+        }, { success: "Service identity created. Copy the secret below now." });
       }}
     >
       <div className="grid gap-3 sm:grid-cols-2">
@@ -98,7 +98,7 @@ export function ServiceIdentityControls({ id, name, enabled, revoked }: { id: st
           size="sm"
           variant="ghost"
           disabled={pending}
-          onClick={() => confirm(`Rotate the secret for ${name}? The current secret and its tokens stop working immediately.`) && run(() => rotateServiceSecretAction(id), (data) => data && setSecret(data.clientSecret))}
+          onClick={() => confirm(`Rotate the secret for ${name}? The current secret and its tokens stop working immediately.`) && run(() => rotateServiceSecretAction(id), (data) => data && setSecret(data.clientSecret), { success: `Secret rotated for ${name}. Copy the new one now.` })}
         >
           Rotate
         </Button>
@@ -107,7 +107,7 @@ export function ServiceIdentityControls({ id, name, enabled, revoked }: { id: st
           size="sm"
           variant={enabled ? "ghost" : "secondary"}
           disabled={pending}
-          onClick={() => (!enabled || confirm(`Disable ${name}? Its tokens stop working immediately.`)) && run(() => setServiceIdentityEnabledAction(id, !enabled))}
+          onClick={() => (!enabled || confirm(`Disable ${name}? Its tokens stop working immediately.`)) && run(() => setServiceIdentityEnabledAction(id, !enabled), undefined, { success: `${name} ${enabled ? "disabled" : "enabled"}` })}
         >
           {enabled ? "Disable" : "Enable"}
         </Button>
@@ -117,7 +117,7 @@ export function ServiceIdentityControls({ id, name, enabled, revoked }: { id: st
           variant="ghost"
           className="text-danger"
           disabled={pending}
-          onClick={() => confirm(`Revoke ${name} permanently? This cannot be undone.`) && run(() => revokeServiceIdentityAction(id))}
+          onClick={() => confirm(`Revoke ${name} permanently? This cannot be undone.`) && run(() => revokeServiceIdentityAction(id), undefined, { success: `${name} revoked` })}
         >
           Revoke
         </Button>

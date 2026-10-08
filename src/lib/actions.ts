@@ -1,8 +1,9 @@
 import "server-only";
 import { headers } from "next/headers";
+import { errorRef, explainActionError, genericActionError } from "@/lib/action-errors";
 import { AccessDenied, type AccessContext } from "@/lib/auth/access";
 import { currentAccess } from "@/lib/auth/session";
-import { withObsContext } from "@/lib/obs/context";
+import { obsContext, withObsContext } from "@/lib/obs/context";
 import { logger } from "@/lib/obs/log";
 import { REQUEST_ID_HEADER } from "@/lib/obs/request-id";
 
@@ -18,9 +19,10 @@ async function requestId(): Promise<string | undefined> {
 }
 
 /**
- * Wrap a server action body: resolve the caller, map authz/validation failures to a
- * safe message, never leak stack traces to the browser. The body runs in a log context carrying
- * the request id, which also rides along on any job it enqueues.
+ * Wrap a server action body: resolve the caller, map failures to a clear, safe message, never
+ * leak stack traces, SQL or values to the browser (see explainActionError). The body runs in a log
+ * context carrying the request id, which also rides along on any job it enqueues. Anything
+ * unrecognised gets a generic message with a short reference that is also on the log line.
  */
 export async function withAccess<T>(fn: (ctx: AccessContext) => Promise<T>): Promise<ActionResult<T>> {
   const ctx = await currentAccess();
@@ -31,11 +33,14 @@ export async function withAccess<T>(fn: (ctx: AccessContext) => Promise<T>): Pro
     } catch (err) {
       // AccessDenied messages describe the rule that failed, never other tenants' data.
       if (err instanceof AccessDenied) return { ok: false as const, error: err.message && err.message !== "forbidden" ? `Not permitted: ${err.message}.` : "You don't have permission to do that." };
-      if (err && typeof err === "object" && "issues" in err) return { ok: false as const, error: "Some fields are invalid." };
-      logger.error("server action failed", { userId: ctx.principal.userId, err });
-      // Database/driver errors carry a code and may describe internals; show a generic message.
-      const internal = !(err instanceof Error) || "code" in err || "cause" in err;
-      return { ok: false as const, error: internal ? "Something went wrong. The error has been logged." : err.message };
+      const known = explainActionError(err);
+      if (known) {
+        if (known.log) logger.error("server action failed", { userId: ctx.principal.userId, err });
+        return { ok: false as const, error: known.message };
+      }
+      const ref = errorRef(obsContext().requestId);
+      logger.error("server action failed", { userId: ctx.principal.userId, ref, err });
+      return { ok: false as const, error: genericActionError(ref) };
     }
   });
 }

@@ -38,12 +38,8 @@ export function CaseForm({ incidentId, initial, statuses, severities, owners, ca
   editable: boolean;
 }) {
   const [v, setV] = useState(initial);
-  const [saved, setSaved] = useState(false);
   const { pending, error, run } = useAction();
-  const set = (k: keyof CaseFields, val: string | null) => {
-    setSaved(false);
-    setV((p) => ({ ...p, [k]: val }));
-  };
+  const set = (k: keyof CaseFields, val: string | null) => setV((p) => ({ ...p, [k]: val }));
   const changed = Object.fromEntries(Object.entries(v).filter(([k, val]) => (val ?? "") !== (initial[k as keyof CaseFields] ?? ""))) as Partial<CaseFields>;
   const dirty = Object.keys(changed).length > 0;
 
@@ -52,7 +48,7 @@ export function CaseForm({ incidentId, initial, statuses, severities, owners, ca
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
-        run(() => saveIncidentCase(incidentId, changed as Parameters<typeof saveIncidentCase>[1]), () => setSaved(true));
+        run(() => saveIncidentCase(incidentId, changed as Parameters<typeof saveIncidentCase>[1]), undefined, { success: "Case details saved" });
       }}
     >
       <fieldset disabled={!editable || pending} className="space-y-4">
@@ -89,7 +85,6 @@ export function CaseForm({ incidentId, initial, statuses, severities, owners, ca
       {editable ? (
         <div className="flex items-center justify-end gap-3">
           <ActionError error={error} />
-          {saved && !dirty ? <span role="status" className="text-xs text-ok">Saved</span> : null}
           <Button type="submit" disabled={pending || !dirty}>Save case</Button>
         </div>
       ) : null}
@@ -121,7 +116,7 @@ export function TimelineEventForm({ incidentId }: { incidentId: string }) {
               setWhen("");
               setTitle("");
               setDetail("");
-            });
+            }, { success: "Event added to the timeline" });
           }}
         >
           <div>
@@ -154,7 +149,9 @@ export function NoteForm({ incidentId }: { incidentId: string }) {
       className="space-y-2"
       onSubmit={(e) => {
         e.preventDefault();
-        run(() => addIncidentNote(incidentId, body, visibility), () => setBody(""));
+        run(() => addIncidentNote(incidentId, body, visibility), () => setBody(""), {
+          success: visibility === "customer" ? "Note added. The customer can see it in their portal." : "Internal note added",
+        });
       }}
     >
       <Label htmlFor="note-body" className="sr-only">Note</Label>
@@ -197,7 +194,7 @@ export function TaskList({ incidentId, tasks, editable }: { incidentId: string; 
                 className="mt-0.5"
                 checked={t.done}
                 disabled={!editable || pending}
-                onCheckedChange={(c) => run(() => setIncidentTaskDone(incidentId, t.id, c === true))}
+                onCheckedChange={(c) => run(() => setIncidentTaskDone(incidentId, t.id, c === true), undefined, { success: c === true ? "Task marked done" : "Task reopened" })}
               />
               <label htmlFor={`task-${t.id}`} className={cn(t.done && "text-faint line-through")}>{t.title}</label>
             </li>
@@ -209,7 +206,7 @@ export function TaskList({ incidentId, tasks, editable }: { incidentId: string; 
           className="flex gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            run(() => addIncidentTask(incidentId, title), () => setTitle(""));
+            run(() => addIncidentTask(incidentId, title), () => setTitle(""), { success: "Task added" });
           }}
         >
           <Label htmlFor="task-new" className="sr-only">New task</Label>
@@ -227,7 +224,19 @@ export function UngroupButton({ incidentId, alertIds, label }: { incidentId: str
   const { pending, error, run } = useAction();
   return (
     <span className="inline-flex flex-col items-end gap-1">
-      <Button type="button" size="sm" variant="ghost" disabled={pending} onClick={() => run(() => ungroupIncidentAlerts(incidentId, alertIds))}>{label}</Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        onClick={() =>
+          run(() => ungroupIncidentAlerts(incidentId, alertIds), undefined, {
+            success: alertIds?.length === 1 ? "Alert removed from the incident" : "Grouped alerts removed from the incident",
+          })
+        }
+      >
+        {label}
+      </Button>
       <ActionError error={error} />
     </span>
   );
@@ -255,7 +264,7 @@ export function EvidenceForm({ incidentId }: { incidentId: string }) {
             run(() => addIncidentEvidence(incidentId, v), () => {
               setOpen(false);
               setV(empty);
-            });
+            }, { success: `Evidence ${v.name.trim()} recorded` });
           }}
         >
           <div className="grid gap-3 sm:grid-cols-2">
