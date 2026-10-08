@@ -1,8 +1,10 @@
-import { and, asc, desc, eq, gte, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
-import { alertObservables, alerts, assets, incidents, integrations, intelMatches, observables, responseActions, savedViews, tenants, user } from "@/db/schema";
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import type { Tx } from "@/db/client";
+import { alertObservables, alerts, assets, incidents, integrations, intelMatches, observables, patternAnnotations, responseActions, savedViews, tenants, tuningActions, user } from "@/db/schema";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { publish } from "@/lib/events";
+import type { HermesFilter } from "@/lib/tuning/hermes-ui";
 import { actor, AccessDenied, scoped } from "./common";
 
 export const ALERT_STATUSES = ["NEW", "TRIAGING", "INVESTIGATING", "ESCALATED", "CONTAINED", "RESOLVED", "FALSE_POSITIVE"] as const;
@@ -24,6 +26,10 @@ export type AlertFilters = {
   sinceHours?: number;
   /** `active` is the triage queue, `passive` known noise; omitted means both. */
   lane?: "active" | "passive";
+  /** Hermes closed it (even if since reopened), annotated its pattern, or either. */
+  hermes?: HermesFilter;
+  /** The alerts one Hermes (tuning) action touched: its closures, its noise rule's passive alerts, or its annotated pattern. */
+  hermesAction?: string;
   sort?: "risk" | "newest" | "oldest";
   limit?: number;
   offset?: number;
@@ -46,6 +52,21 @@ export function alertTextMatch(q: string): SQL {
   )!;
 }
 
+/** The alert's pattern (tenant, source, rule) has a Hermes note. Index pattern_annotations_pattern. */
+const hasHermesNote = sql<boolean>`exists (select 1 from ${patternAnnotations} pa where pa.tenant_id = ${alerts.tenantId} and pa.source = ${alerts.source} and pa.rule_id = ${alerts.ruleId})`;
+
+/** Alerts one tuning action touched; false when the action is outside the caller's scope or gone. */
+async function hermesActionMatch(tx: Tx, actionId: string, tenantIds: string[]): Promise<SQL> {
+  const [a] = await tx
+    .select({ kind: tuningActions.kind, tenantId: tuningActions.tenantId, source: tuningActions.source, ruleId: tuningActions.ruleId, noiseRuleId: tuningActions.noiseRuleId })
+    .from(tuningActions)
+    .where(and(eq(tuningActions.id, actionId), inArray(tuningActions.tenantId, tenantIds)));
+  if (a?.kind === "close") return eq(alerts.tuningActionId, actionId);
+  if (a?.kind === "noise_rule" && a.noiseRuleId) return eq(alerts.noiseRuleId, a.noiseRuleId);
+  if (a?.kind === "annotate") return and(eq(alerts.tenantId, a.tenantId), eq(alerts.source, a.source), eq(alerts.ruleId, a.ruleId))!;
+  return sql`false`;
+}
+
 export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
   return scoped(
     ctx,
@@ -66,6 +87,10 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
       if (f.category) where.push(eq(alerts.category, f.category));
       if (f.minRisk != null) where.push(gte(alerts.riskScore, f.minRisk));
       if (f.lane) where.push(eq(alerts.lane, f.lane));
+      if (f.hermes === "closed") where.push(isNotNull(alerts.tuningActionId));
+      else if (f.hermes === "annotated") where.push(hasHermesNote);
+      else if (f.hermes === "any") where.push(or(isNotNull(alerts.tuningActionId), hasHermesNote)!);
+      if (f.hermesAction) where.push(await hermesActionMatch(tx, f.hermesAction, tenantIds));
       if (f.sinceHours) where.push(gte(alerts.occurredAt, new Date(Date.now() - f.sinceHours * 3600_000)));
       const order = f.sort === "newest" ? [desc(alerts.occurredAt)] : f.sort === "oldest" ? [asc(alerts.occurredAt)] : [desc(alerts.riskScore), desc(alerts.occurredAt)];
 
@@ -97,12 +122,17 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
           lane: alerts.lane,
           passiveReason: alerts.passiveReason,
           noiseRuleId: alerts.noiseRuleId,
+          tuningActionId: alerts.tuningActionId,
+          hermesUndoneAt: tuningActions.undoneAt,
+          hermesNote: hasHermesNote,
         })
         .from(alerts)
         .innerJoin(tenants, eq(tenants.id, alerts.tenantId))
         .leftJoin(assets, eq(assets.id, alerts.assetId))
         .leftJoin(user, eq(user.id, alerts.assigneeId))
         .leftJoin(integrations, eq(integrations.id, alerts.integrationId))
+        // Only through the alert's own closure: a primary-key lookup for the few rows Hermes closed.
+        .leftJoin(tuningActions, eq(tuningActions.id, alerts.tuningActionId))
         .where(and(...where))
         .orderBy(...order)
         .limit(Math.min(f.limit ?? 100, 500))

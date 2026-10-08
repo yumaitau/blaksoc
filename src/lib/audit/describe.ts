@@ -318,6 +318,17 @@ export function describeAuditEntry(entry: DescribableAuditEntry, names: AuditNam
   return targetHref ? { summary, targetHref } : { summary };
 }
 
+/**
+ * Whether Hermes wrote the entry: a service identity acting through the tuning API (any tuning.* action, or a
+ * noise rule it created there) or the service identity named Hermes. People's tuning actions (undo, the act
+ * switch, memory notes) are theirs, not Hermes'.
+ */
+export function isHermesActor(entry: Pick<DescribableAuditEntry, "action" | "actorKind" | "detail">, actorName?: string | null): boolean {
+  if (entry.actorKind !== "service") return false;
+  if (entry.action.startsWith("tuning.") || obj(entry.detail).via === "tuning_api") return true;
+  return typeof actorName === "string" && /\bhermes\b/i.test(actorName);
+}
+
 /** User ids an entry's wording refers to, so callers can resolve names in one query. */
 export function auditNameIds(entry: DescribableAuditEntry): string[] {
   const d = obj(entry.detail);

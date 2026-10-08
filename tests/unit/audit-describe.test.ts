@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { auditCsv, csvCell } from "@/lib/audit/csv";
-import { auditNameIds, auditTargetHref, describeAuditEntry, isSecretKey, redactAuditDetail } from "@/lib/audit/describe";
+import { auditNameIds, auditTargetHref, describeAuditEntry, isHermesActor, isSecretKey, redactAuditDetail } from "@/lib/audit/describe";
 import { auditQuery, parseAuditFilters } from "@/lib/audit/filters";
 
 const ALERT = "6f0c3a52-8e1d-4b8a-9a43-1f2d3c4b5a69";
@@ -161,5 +161,24 @@ describe("audit filters", () => {
     expect(qs).not.toContain("before");
     expect(parseAuditFilters(Object.fromEntries(new URLSearchParams(qs)), [T])).toEqual({ ...f, before: undefined });
     expect(auditQuery(f, { before: 99 })).toContain("before=99");
+  });
+});
+
+describe("isHermesActor", () => {
+  it("is a service acting through the tuning API, or the identity named Hermes", () => {
+    expect(isHermesActor({ action: "tuning.close", actorKind: "service" })).toBe(true);
+    expect(isHermesActor({ action: "tuning.annotate", actorKind: "service" }, "Some agent")).toBe(true);
+    expect(isHermesActor({ action: "noise_rule.create", actorKind: "service", detail: { via: "tuning_api" } })).toBe(true);
+    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "Hermes (prod)")).toBe(true);
+    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "hermes-prod")).toBe(true);
+  });
+
+  it("is never a person, and not other services", () => {
+    expect(isHermesActor({ action: "tuning.undo", actorKind: "user" }, "Hermes Smith")).toBe(false);
+    expect(isHermesActor({ action: "tuning.switch", actorKind: "user" })).toBe(false);
+    expect(isHermesActor({ action: "noise_rule.create", actorKind: "user", detail: { via: "tuning_api" } })).toBe(false);
+    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "SIEM exporter")).toBe(false);
+    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "hermesian")).toBe(false);
+    expect(isHermesActor({ action: "alert.update", actorKind: "service" }, null)).toBe(false);
   });
 });

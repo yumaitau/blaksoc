@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { HERMES_NOTE_TITLE, HERMES_TITLE, HermesBadge } from "@/components/soc/hermes-badge";
 import { EmptyState, PageHeader } from "@/components/soc/indicators";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -74,7 +75,12 @@ export default async function TuningPage() {
                     {r.evidence ? <div className="truncate text-[11px] text-faint" title={r.evidence}>{r.evidence}</div> : null}
                   </TD>
                   <TD className="max-w-40 text-xs">
-                    <div className="truncate">{r.createdByKind === "service" ? `${createdByName ?? "API client"} (automation)` : (createdByName ?? "unknown")}</div>
+                    {/* Only the tuning API (Hermes) creates rules as a service; people's rules come from "Mark as noise…". */}
+                    {r.createdByKind === "service" ? (
+                      <HermesBadge label="Created by Hermes" title={`${HERMES_TITLE}${createdByName ? ` (service identity “${createdByName}”)` : ""}`} />
+                    ) : (
+                      <div className="truncate">{createdByName ?? "unknown"}</div>
+                    )}
                     {approvedByName && r.createdByKind === "service" ? <div className="truncate text-[11px] text-faint">approved by {approvedByName}</div> : null}
                   </TD>
                   <TD className="num text-right text-xs">
@@ -91,15 +97,18 @@ export default async function TuningPage() {
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Hermes (AI) notes</CardTitle><span className="text-xs text-muted">Interpretation, not evidence. Shown on matching alerts too.</span></CardHeader>
+        <CardHeader>
+          <CardTitle><HermesBadge label="Hermes notes" title={HERMES_NOTE_TITLE} /></CardTitle>
+          <span className="text-xs text-muted">Interpretation, not evidence. Shown on matching alerts too (<Link href="/soc/alerts?hermes=annotated" className="text-accent hover:underline">see them</Link>).</span>
+        </CardHeader>
         {notes.length === 0 ? (
           <div className="p-4 text-sm text-muted">No notes yet.</div>
         ) : (
           <div className="divide-y divide-border">
             {notes.map((n) => (
-              <div key={n.id} className="px-4 py-2.5">
+              <div key={n.id} className="border-l-2 border-l-hermes/60 px-4 py-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-                  <span>{n.tenantName} · {n.source} rule <span className="font-mono">{n.ruleId}</span></span>
+                  <span className="flex flex-wrap items-center gap-2"><HermesBadge size="sm" label="Hermes note" title={HERMES_NOTE_TITLE} />{n.tenantName} · {n.source} rule <span className="font-mono">{n.ruleId}</span></span>
                   <span>{n.confidence} confidence · {timeAgo(n.createdAt)}</span>
                 </div>
                 <p className="mt-1 whitespace-pre-wrap text-sm">{n.text}</p>

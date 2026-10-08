@@ -1,3 +1,4 @@
+import { isHermesActor } from "@/lib/audit/describe";
 import { ruleById } from "@/lib/correlation/rules";
 import { isResponseAction, RESPONSE_ACTIONS } from "@/lib/soar/actions";
 import { sourceLabel } from "./provenance";
@@ -23,7 +24,8 @@ export type HistoryRefs = {
   responseActions: ReadonlyMap<string, string>;
 };
 
-export type HistoryEntry = { key: string; at: Date; actor: string; text: string; href?: string };
+/** `hermes`: written by Hermes (shown with its badge instead of the service identity's name). */
+export type HistoryEntry = { key: string; at: Date; actor: string; text: string; href?: string; hermes?: boolean };
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
@@ -144,6 +146,9 @@ export function alertHistory(
   }
   const rest = [...rows]
     .sort((a, b) => a.at.getTime() - b.at.getTime() || a.id - b.id)
-    .map((r): HistoryEntry => ({ key: String(r.id), at: r.at, actor: actorLabel(r.actorKind, r.actorName), ...describeAuditEntry(r, refs) }));
+    .map((r): HistoryEntry => {
+      const hermes = isHermesActor(r, r.actorName);
+      return { key: String(r.id), at: r.at, actor: hermes ? "Hermes (AI)" : actorLabel(r.actorKind, r.actorName), ...describeAuditEntry(r, refs), ...(hermes ? { hermes } : {}) };
+    });
   return [created, ...rest];
 }

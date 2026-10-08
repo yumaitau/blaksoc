@@ -3,7 +3,7 @@
  * what it may do (guardrails, the act switch, caps), undo, purge after the undo window, reports and memory.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
@@ -23,7 +23,11 @@ import { resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { redis } from "@/lib/redis";
 import { addHumanNote, getMemory, listReports, MEMORY_VERSION_KEY } from "@/lib/services/hermes";
 import { createServiceIdentity } from "@/lib/services/service-identities";
-import { annotationsForAlert, closingAction, dispositionStats, HERMES_ACT_KEY, hermesSwitchState, listTuningActions, recentAnnotations, setHermesMayAct, undoTuningAction } from "@/lib/services/tuning";
+import { listAlerts } from "@/lib/services/alerts";
+import {
+  annotationsForAlert, closingAction, dispositionStats, HERMES_ACT_KEY, hermesRecentActionCount, hermesSwitchState, hermesWeek, listTuningActions, recentAnnotations, setHermesMayAct, tuningActionSummary, undoTuningAction,
+} from "@/lib/services/tuning";
+import { hermesClosure } from "@/lib/tuning/hermes-ui";
 
 const BASE = "http://localhost/api/v1/tuning";
 const run = randomUUID().slice(0, 8);
@@ -38,6 +42,8 @@ let admin: AccessContext;
 const identities: string[] = [];
 const tokens: Record<string, string> = {};
 const patterns: Record<string, string> = {};
+/** The first closure (4 alerts), which an analyst undoes. */
+let firstCloseAction = "";
 
 async function token(clientId: string, clientSecret: string) {
   const res = await tokenRoute(new Request("http://localhost/api/v1/oauth/token", {
@@ -198,6 +204,7 @@ describe("acting", () => {
     const out = await body(res);
     expect(out.affected).toBe(4); // 3 NEW low + 1 TRIAGING medium
     closeAction = out.actionId as string;
+    firstCloseAction = closeAction;
     const rows = await adminDb().select().from(alerts).where(and(eq(alerts.tenantId, tenant), eq(alerts.ruleId, "hermes-fp")));
     const closed = rows.filter((r) => r.tuningActionId === closeAction);
     expect(closed).toHaveLength(4);
@@ -335,5 +342,57 @@ describe("what analysts see in blakSOC", () => {
     const [closed] = await adminDb().select().from(alerts).where(and(eq(alerts.tenantId, tenant), eq(alerts.status, "FALSE_POSITIVE"), isNotNull(alerts.tuningActionId))).limit(1);
     expect((await closingAction(admin, closed!))?.params.reason).toBe("Benign scanner noise");
     expect((await annotationsForAlert(admin, closed!)).length).toBe(1);
+  });
+
+  it("marks and filters the queue by what Hermes did, and links each action to its alerts", async () => {
+    const scope = { tenantIds: [tenant], limit: 500 };
+    const pattern = await adminDb().select({ id: alerts.id }).from(alerts).where(and(eq(alerts.tenantId, tenant), eq(alerts.ruleId, "hermes-fp")));
+    const touched = await adminDb().select({ id: alerts.id, tuningActionId: alerts.tuningActionId }).from(alerts).where(and(eq(alerts.tenantId, tenant), isNotNull(alerts.tuningActionId)));
+
+    // Closed by Hermes: its closures, including the one an analyst undid (reopened, still marked as Hermes').
+    const closed = await listAlerts(admin, { ...scope, hermes: "closed" });
+    expect(closed.total).toBe(touched.length);
+    expect(closed.rows.every((r) => r.tuningActionId)).toBe(true);
+    // The second closure re-closed some of the first one's reopened alerts; the rest still point at the undone action.
+    const fromFirst = touched.filter((r) => r.tuningActionId === firstCloseAction).length;
+    expect(fromFirst).toBeGreaterThan(0);
+    const undoneRows = closed.rows.filter((r) => r.hermesUndoneAt);
+    expect(undoneRows.length).toBe(fromFirst);
+    expect(undoneRows.every((r) => hermesClosure(r) === "undone")).toBe(true);
+    expect(closed.rows.filter((r) => !r.hermesUndoneAt).every((r) => hermesClosure(r) === "closed")).toBe(true);
+
+    // Annotated: every alert on the pattern Hermes wrote a note about, and the note shows on each row.
+    const annotated = await listAlerts(admin, { ...scope, hermes: "annotated" });
+    expect(annotated.total).toBe(pattern.length);
+    expect(annotated.rows.every((r) => r.hermesNote)).toBe(true);
+    expect((await listAlerts(admin, { ...scope, hermes: "any" })).total).toBe(pattern.length);
+    const others = await listAlerts(admin, scope);
+    expect(others.rows.filter((r) => r.ruleId !== "hermes-fp").every((r) => !r.hermesNote && !r.tuningActionId)).toBe(true);
+
+    // One action's alerts: a closure, an annotated pattern; unknown ids match nothing.
+    const byAction = await listAlerts(admin, { ...scope, hermesAction: firstCloseAction });
+    expect(byAction.total).toBe(fromFirst);
+    expect(byAction.rows.every((r) => r.tuningActionId === firstCloseAction)).toBe(true);
+    const [note] = await adminDb().select({ id: tuningActions.id }).from(tuningActions).where(and(eq(tuningActions.tenantId, tenant), eq(tuningActions.kind, "annotate")));
+    expect((await listAlerts(admin, { ...scope, hermesAction: note!.id })).total).toBe(pattern.length);
+    expect((await listAlerts(admin, { ...scope, hermesAction: randomUUID() })).total).toBe(0);
+    expect(await tuningActionSummary(admin, firstCloseAction)).toMatchObject({ kind: "close", tenantName: TENANT_NAME, affectedCount: 4 });
+    expect(await tuningActionSummary(admin, randomUUID())).toBeNull();
+
+    // The closure's banner: who undid it and when.
+    const reopened = await adminDb().select().from(alerts).where(eq(alerts.tuningActionId, firstCloseAction)).limit(1);
+    const c = await closingAction(admin, reopened[0]!);
+    expect(c).toMatchObject({ kind: "close", affectedCount: 4, undoneByKind: "user", undoneByName: admin.principal.name });
+  });
+
+  it("sums Hermes' week for the dashboard and the navigation", async () => {
+    const week = await hermesWeek(admin, [tenant]);
+    // This week: the first closure (4, undone), the noise rule (undone), the note and the purge (1). The second closure was moved 8 days back.
+    expect(week).toMatchObject({ closed: 4, noiseRules: 1, notes: 1, purged: 1, undone: 2, inUndoWindow: 0, actions: 4 });
+    // Back inside its undo window, the second closure's remaining alert counts as still undoable.
+    const [second] = await adminDb().select({ id: tuningActions.id }).from(tuningActions).where(and(eq(tuningActions.tenantId, tenant), eq(tuningActions.kind, "close"), isNull(tuningActions.undoneAt)));
+    await adminDb().update(tuningActions).set({ reversibleUntil: new Date(Date.now() + DAY) }).where(eq(tuningActions.id, second!.id));
+    expect((await hermesWeek(admin, [tenant])).inUndoWindow).toBe(1);
+    expect(await hermesRecentActionCount(admin)).toBeGreaterThanOrEqual(4);
   });
 });

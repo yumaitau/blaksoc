@@ -1,9 +1,9 @@
-import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { systemDb, type Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import {
-  alerts, assets, noiseRules, patternAnnotations, platformSettings, serviceIdentities, tenants, tuningActions, user, type NoiseRuleStatus,
+  alerts, assets, hermesReports, noiseRules, patternAnnotations, platformSettings, serviceIdentities, tenants, tuningActions, user, type NoiseRuleStatus,
 } from "@/db/schema";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -406,14 +406,102 @@ export async function annotationsForAlert(ctx: AccessContext, alert: { tenantId:
   );
 }
 
-/** The agent action that closed this alert, if any, for its detail page. */
+/** The agent action that closed this alert, if any, for its detail page: when, why, how many with it, and who undid it. */
 export async function closingAction(ctx: AccessContext, alert: { tenantId: string; tuningActionId: string | null }) {
   if (!alert.tuningActionId) return null;
   const [row] = await inTenant(ctx, "alert:read", alert.tenantId, (tx) =>
     tx
-      .select({ id: tuningActions.id, params: tuningActions.params, createdAt: tuningActions.createdAt, undoneAt: tuningActions.undoneAt, reversibleUntil: tuningActions.reversibleUntil })
+      .select({
+        id: tuningActions.id, kind: tuningActions.kind, params: tuningActions.params, affectedCount: tuningActions.affectedCount, createdAt: tuningActions.createdAt,
+        undoneAt: tuningActions.undoneAt, undoneByKind: tuningActions.undoneByKind, undoneByName: user.name, reversibleUntil: tuningActions.reversibleUntil,
+      })
       .from(tuningActions)
+      .leftJoin(user, eq(user.id, tuningActions.undoneBy))
       .where(eq(tuningActions.id, alert.tuningActionId!)),
+  );
+  return row ?? null;
+}
+
+/** One agent action for the queue's "touched by" banner. Null when it is gone or outside the caller's scope. */
+export async function tuningActionSummary(ctx: AccessContext, id: string) {
+  const [row] = await scoped(ctx, "alert:read", (tx, ids) =>
+    tx
+      .select({ id: tuningActions.id, kind: tuningActions.kind, source: tuningActions.source, ruleId: tuningActions.ruleId, createdAt: tuningActions.createdAt, undoneAt: tuningActions.undoneAt, affectedCount: tuningActions.affectedCount, tenantName: tenants.name })
+      .from(tuningActions)
+      .innerJoin(tenants, eq(tenants.id, tuningActions.tenantId))
+      .where(and(eq(tuningActions.id, id), inArray(tuningActions.tenantId, ids))),
+  );
+  return row ?? null;
+}
+
+export const HERMES_WEEK_DAYS = 7;
+
+/**
+ * What Hermes did in the caller's tuning scope over the last 7 days, for the SOC dashboard: alerts closed, noise
+ * rules created, notes added, alerts purged, actions analysts undid, and closures still inside the undo window.
+ * One aggregate over tuning_actions and one count of its open closures (alerts_tuning_action).
+ */
+export async function hermesWeek(ctx: AccessContext, tenantIds?: string[], now = new Date()) {
+  const since = new Date(now.getTime() - HERMES_WEEK_DAYS * DAY);
+  const after = sql`${since.toISOString()}::timestamptz`;
+  const made = sql`${tuningActions.createdAt} >= ${after}`;
+  return scoped(
+    ctx,
+    "alert:tune",
+    async (tx, ids) => {
+      const [c] = await tx
+        .select({
+          actions: sql<number>`count(*) filter (where ${made})::int`,
+          closed: sql<number>`coalesce(sum(${tuningActions.affectedCount}) filter (where ${tuningActions.kind} = 'close' and ${made}), 0)::int`,
+          noiseRules: sql<number>`count(*) filter (where ${tuningActions.kind} = 'noise_rule' and ${made})::int`,
+          notes: sql<number>`count(*) filter (where ${tuningActions.kind} = 'annotate' and ${made})::int`,
+          purged: sql<number>`coalesce(sum(${tuningActions.affectedCount}) filter (where ${tuningActions.kind} = 'purge' and ${made}), 0)::int`,
+          undone: sql<number>`count(*) filter (where ${tuningActions.undoneAt} >= ${after} and ${tuningActions.undoneByKind} = 'user')::int`,
+        })
+        .from(tuningActions)
+        .where(and(inArray(tuningActions.tenantId, ids), or(gte(tuningActions.createdAt, since), gte(tuningActions.undoneAt, since))));
+      const [w] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(alerts)
+        .innerJoin(tuningActions, eq(tuningActions.id, alerts.tuningActionId))
+        .where(and(
+          inArray(tuningActions.tenantId, ids), eq(tuningActions.kind, "close"), isNull(tuningActions.undoneAt), gt(tuningActions.reversibleUntil, now),
+          eq(alerts.status, "FALSE_POSITIVE"),
+        ));
+      return {
+        since,
+        actions: c?.actions ?? 0, closed: c?.closed ?? 0, noiseRules: c?.noiseRules ?? 0, notes: c?.notes ?? 0, purged: c?.purged ?? 0, undone: c?.undone ?? 0,
+        inUndoWindow: w?.n ?? 0,
+      };
+    },
+    tenantIds,
+  );
+}
+
+const navCounts = new Map<string, { at: number; n: number }>();
+const NAV_TTL = 60_000;
+
+/**
+ * Hermes actions in the last 7 days across the caller's tuning scope, for the navigation badge. Cached per user
+ * and scope for a minute, so rendering the shell costs one indexed count (tuning_actions_created) at most.
+ */
+export async function hermesRecentActionCount(ctx: AccessContext, now = Date.now()): Promise<number> {
+  const key = `${ctx.principal.userId}:${ctx.tenantIds.join(",")}`;
+  const hit = navCounts.get(key);
+  if (hit && now - hit.at < NAV_TTL) return hit.n;
+  const since = new Date(now - HERMES_WEEK_DAYS * DAY);
+  const [r] = await scoped(ctx, "alert:tune", (tx, ids) =>
+    tx.select({ n: sql<number>`count(*)::int` }).from(tuningActions).where(and(gte(tuningActions.createdAt, since), inArray(tuningActions.tenantId, ids))),
+  );
+  if (navCounts.size > 1000) navCounts.clear();
+  navCounts.set(key, { at: now, n: r?.n ?? 0 });
+  return r?.n ?? 0;
+}
+
+/** The latest Hermes run report (reports are platform data, read with the platform scope). Callers check isHermesStaff. */
+export async function latestHermesReport() {
+  const [row] = await withScope({ tenantIds: [], platform: true }, (tx) =>
+    tx.select({ id: hermesReports.id, createdAt: hermesReports.createdAt, stats: hermesReports.stats }).from(hermesReports).orderBy(desc(hermesReports.createdAt)).limit(1),
   );
   return row ?? null;
 }

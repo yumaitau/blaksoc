@@ -1,12 +1,17 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { HermesBadge } from "@/components/soc/hermes-badge";
 import { EmptyState, IntelVerdict, PageHeader, RiskScore, SeverityBadge, StatLink, StatusBadge } from "@/components/soc/indicators";
 import { ToolCards } from "@/components/soc/tool-cards";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { AccessContext } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { fatigueMetrics, socDashboard } from "@/lib/services/dashboard";
+import { isHermesStaff } from "@/lib/services/hermes";
 import { socTools } from "@/lib/services/soc-tools";
+import { HERMES_WEEK_DAYS, hermesSwitchState, hermesWeek, latestHermesReport } from "@/lib/services/tuning";
+import { runOutcome } from "@/lib/tuning/hermes-ui";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 
@@ -21,7 +26,7 @@ export default async function SocDashboard() {
   const ctx = await requireAccess();
   if (!ctx.isPlatform) redirect("/portal");
   const ws = await currentWorkspace(ctx);
-  const [d, tools, fatigue] = await Promise.all([socDashboard(ctx, ws.tenantIds), socTools(ctx), fatigueMetrics(ctx, ws.tenantIds)]);
+  const [d, tools, fatigue, hermes] = await Promise.all([socDashboard(ctx, ws.tenantIds), socTools(ctx), fatigueMetrics(ctx, ws.tenantIds), hermesSummary(ctx, ws.tenantIds)]);
   const scope = ws.tenant ? ws.tenant.name : "all customers";
 
   return (
@@ -41,6 +46,8 @@ export default async function SocDashboard() {
       </section>
 
       <FatigueCard f={fatigue} />
+
+      {hermes ? <HermesWeekCard h={hermes} /> : null}
 
       <section className="grid gap-5 xl:grid-cols-3">
         {/* What should we investigate? */}
@@ -246,6 +253,53 @@ export default async function SocDashboard() {
         </Card>
       </section>
     </div>
+  );
+}
+
+/** Hermes' week for the staff who look after it; null when it has never run and may not act (nothing to show). */
+async function hermesSummary(ctx: AccessContext, tenantIds: string[]) {
+  if (!isHermesStaff(ctx)) return null;
+  const [week, state, report] = await Promise.all([hermesWeek(ctx, tenantIds), hermesSwitchState(), latestHermesReport()]);
+  if (!state.enabled && !report && !week.actions && !week.undone) return null;
+  return { week, enabled: state.enabled, report };
+}
+
+function HermesWeekCard({ h }: { h: NonNullable<Awaited<ReturnType<typeof hermesSummary>>> }) {
+  const { week: w } = h;
+  const stats: [string, number, string, string][] = [
+    ["Alerts closed", w.closed, "/soc/alerts?hermes=closed&sort=newest", "as false positives"],
+    ["Still undoable", w.inUndoWindow, "/soc/alerts?hermes=closed&status=FALSE_POSITIVE&sort=newest", "closures inside the undo window"],
+    ["Noise rules created", w.noiseRules, "/soc/tuning", "moving noise to the passive lane"],
+    ["Notes added", w.notes, "/soc/alerts?hermes=annotated&sort=newest", "on alert rules"],
+    ["Alerts purged", w.purged, "/soc/hermes", "past the undo window"],
+    ["Undone by analysts", w.undone, "/soc/hermes", "closures and rules reversed"],
+  ];
+  return (
+    <Card className="border-hermes/40">
+      <CardHeader>
+        <CardTitle className="flex flex-wrap items-center gap-2">
+          <HermesBadge />
+          <span>this week</span>
+          <Badge variant={h.enabled ? "ok" : "default"} title={h.enabled ? "“Allow Hermes to act” is on" : "“Allow Hermes to act” is off: Hermes reads and annotates only"}>{h.enabled ? "Acting" : "Off"}</Badge>
+        </CardTitle>
+        <Link href="/soc/hermes" className="text-xs text-accent hover:underline">Hermes actions and switch →</Link>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs text-muted">
+          {h.report ? <>Last run <span className="text-fg" title={fmtDateTime(h.report.createdAt)}>{timeAgo(h.report.createdAt)}</span>: {runOutcome(h.report.stats)}</> : "Hermes has not reported a run yet."}
+          {" "}Counts cover the last {HERMES_WEEK_DAYS} days.
+        </p>
+        <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          {stats.map(([label, value, href, hint], i) => (
+            <Link key={label} href={href} className="rounded-md border border-border px-3 py-2 hover:bg-surface-2/60">
+              <dt className="text-[11px] uppercase tracking-wider text-faint">{label}</dt>
+              <dd className={cn("num mt-1 text-2xl font-semibold", i < 2 && value ? "text-hermes" : "text-fg")}>{value.toLocaleString("en-AU")}</dd>
+              <dd className="text-[11px] text-muted">{hint}</dd>
+            </Link>
+          ))}
+        </dl>
+      </CardContent>
+    </Card>
   );
 }
 

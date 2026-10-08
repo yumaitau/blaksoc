@@ -1,7 +1,8 @@
-import { BellOff, Bot, Sparkles } from "lucide-react";
+import { BellOff, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { IntelMatch } from "@/db/schema";
+import { HERMES_NOTE_TITLE, HermesBadge, HermesBanner } from "@/components/soc/hermes-badge";
 import { AttackChips, IntelVerdict, RefLink, RiskFactors, RiskScore, SeverityBadge, StatusBadge } from "@/components/soc/indicators";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,10 +13,12 @@ import { requireAccess } from "@/lib/auth/session";
 import { alertHistory, alertProvenance } from "@/lib/services/alert-provenance";
 import { ALERT_STATUSES, getAlert } from "@/lib/services/alerts";
 import { entityLinks } from "@/lib/services/entities";
+import { isHermesStaff } from "@/lib/services/hermes";
 import { annotationsForAlert, closingAction } from "@/lib/services/tuning";
 import { RESPONSE_ACTIONS, isResponseAction } from "@/lib/soar/actions";
 import { describeTarget } from "@/lib/soar/response";
 import { fmtDateTime, timeAgo } from "@/lib/utils";
+import { UndoButton } from "../../tuning/controls";
 import { AlertActions, MarkAsNoiseDialog, MoveToActiveButton, RequestResponseDialog } from "./alert-actions";
 import { HistoryCard, ProvenanceCard } from "./provenance";
 
@@ -48,6 +51,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
           <Link href="/soc/alerts" className="hover:underline">Alert queue</Link> · {data.tenantName}
         </div>
+        {closedBy ? <HermesClosure c={closedBy} status={a.status} ruleId={a.ruleId} canUndo={can(ctx, "alert:tune", tenantId)} staff={isHermesStaff(ctx)} /> : null}
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 space-y-2">
             <h1 className="text-xl font-semibold tracking-tight">{a.title}</h1>
@@ -127,19 +131,6 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
             </div>
           </div>
           {canTriage ? <MoveToActiveButton ids={[a.id]} /> : null}
-        </div>
-      ) : null}
-
-      {closedBy ? (
-        <div role="note" className="flex items-start gap-2 rounded-lg border border-warn/40 bg-warn/10 px-4 py-3 text-sm">
-          <Bot className="mt-0.5 size-4 shrink-0 text-warn" />
-          <div>
-            <div className="font-medium">Closed as a false positive by Hermes (AI){closedBy.undoneAt ? ", since undone" : ""}</div>
-            <div className="text-xs text-muted">
-              {typeof closedBy.params.reason === "string" ? `“${closedBy.params.reason}” · ` : ""}{fmtDateTime(closedBy.createdAt)}
-              {!closedBy.undoneAt && can(ctx, "alert:tune", tenantId) ? <> · <Link href="/soc/hermes" className="text-accent hover:underline">Undo on the Hermes page</Link></> : null}
-            </div>
-          </div>
         </div>
       ) : null}
 
@@ -247,15 +238,15 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
           </Card>
 
           {hermesNotes.length ? (
-            <Card>
-              <CardHeader><CardTitle>Hermes (AI) notes</CardTitle><span className="text-xs text-muted">On this rule, not this alert</span></CardHeader>
+            <Card className="border-hermes/40">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2"><HermesBadge label="Hermes notes" title={HERMES_NOTE_TITLE} /></CardTitle>
+                <span className="text-xs text-muted">On this rule, not this alert · interpretation, not evidence</span>
+              </CardHeader>
               <div className="divide-y divide-border">
                 {hermesNotes.map((n) => (
-                  <div key={n.id} className="px-4 py-2.5">
-                    <div className="flex items-center justify-between gap-2 text-[11px] uppercase tracking-wider">
-                      <span className="font-semibold text-warn">Hermes (AI) note · interpretation</span>
-                      <span className="normal-case tracking-normal text-faint">{n.confidence} confidence · {timeAgo(n.createdAt)}</span>
-                    </div>
+                  <div key={n.id} className="border-l-2 border-l-hermes/60 px-4 py-2.5">
+                    <div className="text-[11px] text-faint">{n.confidence} confidence · <span title={fmtDateTime(n.createdAt)}>{timeAgo(n.createdAt)}</span></div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{n.text}</p>
                   </div>
                 ))}
@@ -267,6 +258,40 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
         </div>
       </div>
     </div>
+  );
+}
+
+type Closure = NonNullable<Awaited<ReturnType<typeof closingAction>>>;
+
+/** Hermes closed this alert: what it did, when, why, and either the undo (with its window) or who undid it. */
+function HermesClosure({ c, status, ruleId, canUndo, staff }: { c: Closure; status: string; ruleId: string | null; canUndo: boolean; staff: boolean }) {
+  const reason = typeof c.params.reason === "string" ? c.params.reason : null;
+  const others = Math.max(0, c.affectedCount - 1);
+  const open = c.reversibleUntil && c.reversibleUntil > new Date();
+  const title = c.undoneAt
+    ? "closed this alert as a false positive; an analyst undid it"
+    : status === "FALSE_POSITIVE" ? "closed this alert as a false positive" : `closed this alert as a false positive; it has since been set to ${status.replaceAll("_", " ").toLowerCase()}`;
+  return (
+    <HermesBanner
+      title={title}
+      muted={!!c.undoneAt}
+      actions={!c.undoneAt && canUndo ? <UndoButton id={c.id} kind="close" label={others ? `Undo (reopens ${others + 1} alerts)` : "Undo closure"} /> : null}
+    >
+      <p>
+        <span title={timeAgo(c.createdAt)}>{fmtDateTime(c.createdAt)}</span>
+        {others ? <> · with {others} other alert{others === 1 ? "" : "s"}{ruleId ? <> from rule <span className="font-mono">{ruleId}</span></> : null}</> : null}
+        {others ? <> · <Link href={`/soc/alerts?hermesAction=${c.id}`} className="text-accent hover:underline">All alerts in this closure</Link></> : null}
+        {staff ? <> · <Link href="/soc/hermes" className="text-accent hover:underline">Hermes actions</Link></> : null}
+      </p>
+      {reason ? <p className="text-fg">Reason: “{reason}”</p> : null}
+      {c.undoneAt ? (
+        <p>Undone by {c.undoneByName ?? (c.undoneByKind === "service" ? "a service identity" : "an analyst")} on {fmtDateTime(c.undoneAt)}; the alerts it closed were reopened as new.</p>
+      ) : c.reversibleUntil ? (
+        open
+          ? <p>Reversible until <span className="font-medium text-fg">{fmtDateTime(c.reversibleUntil)}</span>. After that Hermes may purge it if no one has touched it.</p>
+          : <p>The undo window ended {fmtDateTime(c.reversibleUntil)}; it can still be undone until Hermes purges it.</p>
+      ) : null}
+    </HermesBanner>
   );
 }
 

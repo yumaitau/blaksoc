@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { HermesBadge } from "@/components/soc/hermes-badge";
 import { RefLink, StatusBadge } from "@/components/soc/indicators";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { HistoryEntry } from "@/lib/alerts/history";
 import { sourceLabel } from "@/lib/alerts/provenance";
 import type { AlertProvenance } from "@/lib/services/alert-provenance";
-import { fmtDateTime, timeAgo } from "@/lib/utils";
+import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 
 /** "How this alert was created": source, timing, the path from event to alert, and what followed. */
 export function ProvenanceCard({ p }: { p: AlertProvenance }) {
@@ -165,10 +166,10 @@ export function HistoryCard({ entries, truncated }: { entries: HistoryEntry[]; t
         <ol className="relative space-y-3 border-l border-border pl-4">
           {entries.map((e) => (
             <li key={e.key} className="relative text-sm">
-              <span aria-hidden className="absolute -left-[21px] top-1.5 size-2 rounded-full bg-border" />
+              <span aria-hidden className={cn("absolute -left-[21px] top-1.5 size-2 rounded-full", e.hermes ? "bg-hermes" : "bg-border")} />
               <div>{e.href ? <Link href={e.href} className="hover:text-accent">{e.text}</Link> : e.text}</div>
-              <div className="text-xs text-muted">
-                {e.actor} · <span title={fmtDateTime(e.at)}>{timeAgo(e.at)}</span>
+              <div className="flex flex-wrap items-center gap-1 text-xs text-muted">
+                {e.hermes ? <HermesBadge size="sm" /> : e.actor} · <span title={fmtDateTime(e.at)}>{timeAgo(e.at)}</span>
               </div>
             </li>
           ))}

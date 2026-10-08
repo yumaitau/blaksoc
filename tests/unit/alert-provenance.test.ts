@@ -141,4 +141,15 @@ describe("audit entry sentences", () => {
     expect(h[0]).toMatchObject({ actor: "system", text: "Stored as a high alert from Wazuh" });
     expect(h[1]!.actor).toBe("system");
   });
+
+  it("marks Hermes' entries, not the analyst who undid them", () => {
+    const hermes = { actorKind: "service", actorId: "svc1", actorName: "hermes-prod" };
+    const closed = row("tuning.close", { reason: "Scanner noise", affected: 4 }, { id: 3, targetType: "tuning_action", targetId: "ta1", ...hermes });
+    const undone = row("tuning.undo", { kind: "close", restored: 4 }, { id: 4, targetType: "tuning_action", targetId: "ta1" });
+    const h = alertHistory({ ingestedAt: new Date("2026-10-08T00:00:00Z"), severity: "low", source: "wazuh", integrationName: null }, [closed, undone], refs);
+    expect(h[1]).toMatchObject({ hermes: true, actor: "Hermes (AI)", text: "Closed it as a false positive (“Scanner noise”)" });
+    expect(h[2]!.hermes).toBeUndefined();
+    expect(h[2]!.actor).toBe("Sam Lead");
+    expect(h[0]!.hermes).toBeUndefined();
+  });
 });
