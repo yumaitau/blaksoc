@@ -96,6 +96,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
   value: {{ join "," $pairs | quote }}
 - name: BLAKSOC_ARCHIVE_S3_SSE
   value: {{ $s3.sse | default "AES256" | quote }}
+{{- with $s3.prefix }}
+- name: BLAKSOC_ARCHIVE_S3_PREFIX
+  value: {{ . | quote }}
+{{- end }}
 {{- with $s3.kmsKeyId }}
 - name: BLAKSOC_ARCHIVE_S3_KMS_KEY_ID
   value: {{ . | quote }}

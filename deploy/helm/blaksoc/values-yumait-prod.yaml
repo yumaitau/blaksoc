@@ -35,6 +35,29 @@ web:
     limits: { memory: 1Gi }
   autoscaling: { enabled: true, minReplicas: 2, maxReplicas: 4, targetCPU: 70 }
 
+# Worker and backup pods run as `blaksoc`, bound by EKS Pod Identity to IAM role blaksoc-eks-storage, which can
+# only read and write coolify-yumabackups/blaksoc/*.
+serviceAccount:
+  create: true
+  name: blaksoc
+
+# Cold syslog archive in the shared backups bucket, under its own prefix.
+archive:
+  s3:
+    buckets:
+      ap-southeast-2: coolify-yumabackups
+    prefix: blaksoc/archive/
+    sse: AES256
+
+# Logical dump every 6 hours as the read-only blaksoc_backup role (BYPASSRLS), in addition to RDS
+# automated backups and point-in-time recovery.
+backup:
+  enabled: true
+  bucket: coolify-yumabackups
+  region: ap-southeast-2
+  prefix: blaksoc/postgres/
+  databaseUrlKey: DATABASE_BACKUP_URL
+
 worker:
   # One worker: BullMQ repeatable jobs are safe with more, but the poll loops are sized for one.
   replicas: 1

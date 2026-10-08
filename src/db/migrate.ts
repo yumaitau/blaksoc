@@ -45,6 +45,9 @@ async function main() {
   const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
   await client.unsafe(`ALTER ROLE blaksoc_app PASSWORD ${quote(env().BLAKSOC_APP_DB_PASSWORD)}`);
   await client.unsafe(`ALTER ROLE blaksoc_system PASSWORD ${quote(env().BLAKSOC_SYSTEM_DB_PASSWORD)}`);
+  // The backup role logs in only where a backup job is configured with its password.
+  const backupPassword = process.env.BLAKSOC_BACKUP_DB_PASSWORD;
+  await client.unsafe(backupPassword ? `ALTER ROLE blaksoc_backup LOGIN PASSWORD ${quote(backupPassword)}` : "ALTER ROLE blaksoc_backup NOLOGIN");
   await client.end();
   console.log("migrations complete");
 }
