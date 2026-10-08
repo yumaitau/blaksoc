@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { HERMES_NOTE_TITLE, HERMES_TITLE, HermesBadge } from "@/components/soc/hermes-badge";
+import { isHermesIdentity } from "@/lib/audit/describe";
 import { EmptyState, PageHeader } from "@/components/soc/indicators";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -75,9 +76,9 @@ export default async function TuningPage() {
                     {r.evidence ? <div className="truncate text-[11px] text-faint" title={r.evidence}>{r.evidence}</div> : null}
                   </TD>
                   <TD className="max-w-40 text-xs">
-                    {/* Only the tuning API (Hermes) creates rules as a service; people's rules come from "Mark as noise…". */}
-                    {r.createdByKind === "service" ? (
-                      <HermesBadge label="Created by Hermes" title={`${HERMES_TITLE}${createdByName ? ` (service identity “${createdByName}”)` : ""}`} />
+                    {/* Attributed by identity: another service with tuning:act is shown by its own name. */}
+                    {r.createdByKind === "service" && isHermesIdentity(createdByName) ? (
+                      <HermesBadge label="Created by Hermes" title={HERMES_TITLE} />
                     ) : (
                       <div className="truncate">{createdByName ?? "unknown"}</div>
                     )}

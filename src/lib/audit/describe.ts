@@ -323,10 +323,17 @@ export function describeAuditEntry(entry: DescribableAuditEntry, names: AuditNam
  * noise rule it created there) or the service identity named Hermes. People's tuning actions (undo, the act
  * switch, memory notes) are theirs, not Hermes'.
  */
-export function isHermesActor(entry: Pick<DescribableAuditEntry, "action" | "actorKind" | "detail">, actorName?: string | null): boolean {
-  if (entry.actorKind !== "service") return false;
-  if (entry.action.startsWith("tuning.") || obj(entry.detail).via === "tuning_api") return true;
-  return typeof actorName === "string" && /\bhermes\b/i.test(actorName);
+/** The service identity Hermes runs as (created at deploy; see deploy/aws/README.md). */
+export const HERMES_IDENTITY_NAME = "hermes";
+
+/** True only for Hermes' own service identity: other services with tuning scopes are never shown as Hermes. */
+export function isHermesIdentity(name?: string | null): boolean {
+  return typeof name === "string" && name.trim().toLowerCase() === HERMES_IDENTITY_NAME;
+}
+
+/** An audit entry written by Hermes, decided by who acted rather than what the action was. */
+export function isHermesActor(entry: Pick<DescribableAuditEntry, "actorKind">, actorName?: string | null): boolean {
+  return entry.actorKind === "service" && isHermesIdentity(actorName);
 }
 
 /** User ids an entry's wording refers to, so callers can resolve names in one query. */

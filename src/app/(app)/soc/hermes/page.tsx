@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { HERMES_NOTE_TITLE, HERMES_TITLE, HermesBadge } from "@/components/soc/hermes-badge";
+import { isHermesIdentity } from "@/lib/audit/describe";
 import { EmptyState, PageHeader } from "@/components/soc/indicators";
 import { Markdown } from "@/components/soc/markdown";
 import { Badge } from "@/components/ui/badge";
@@ -107,7 +108,7 @@ export default async function HermesPage() {
                     <TD className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(a.createdAt)}>{timeAgo(a.createdAt)}</TD>
                     <TD className="text-xs">
                       <div className="flex flex-col items-start gap-1">
-                        <HermesBadge size="sm" title={`${HERMES_TITLE}${actorName ? ` (service identity “${actorName}”)` : ""}`} />
+                        {isHermesIdentity(actorName) ? <HermesBadge size="sm" title={HERMES_TITLE} /> : <span className="text-muted">Service identity “{actorName ?? "unknown"}”</span>}
                         <span>{HERMES_KIND_LABEL[a.kind] ?? a.kind}</span>
                       </div>
                     </TD>

@@ -143,7 +143,7 @@ describe("audit entry sentences", () => {
   });
 
   it("marks Hermes' entries, not the analyst who undid them", () => {
-    const hermes = { actorKind: "service", actorId: "svc1", actorName: "hermes-prod" };
+    const hermes = { actorKind: "service", actorId: "svc1", actorName: "hermes" };
     const closed = row("tuning.close", { reason: "Scanner noise", affected: 4 }, { id: 3, targetType: "tuning_action", targetId: "ta1", ...hermes });
     const undone = row("tuning.undo", { kind: "close", restored: 4 }, { id: 4, targetType: "tuning_action", targetId: "ta1" });
     const h = alertHistory({ ingestedAt: new Date("2026-10-08T00:00:00Z"), severity: "low", source: "wazuh", integrationName: null }, [closed, undone], refs);

@@ -125,7 +125,16 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
 
       <FilterBar filters={filters} customers={customers} />
 
-      {filters.hermesAction ? (
+      {filters.hermesAction && !hermesAction ? (
+        <HermesBanner
+          title="That Hermes action link is not valid"
+          muted
+          actions={<Button asChild size="sm" variant="ghost"><Link href={queueHref(withoutHermesAction)}>Show all alerts</Link></Button>}
+        >
+          <p>The action id in the address is malformed, so this list is not filtered by it.</p>
+        </HermesBanner>
+      ) : null}
+      {hermesAction ? (
         <HermesBanner
           title={hermesActed ? `${HERMES_KIND_LABEL[hermesActed.kind] ?? hermesActed.kind} · ${hermesActed.tenantName}` : "Hermes action not found"}
           muted={!hermesActed || !!hermesActed.undoneAt}

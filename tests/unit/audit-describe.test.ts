@@ -165,20 +165,17 @@ describe("audit filters", () => {
 });
 
 describe("isHermesActor", () => {
-  it("is a service acting through the tuning API, or the identity named Hermes", () => {
-    expect(isHermesActor({ action: "tuning.close", actorKind: "service" })).toBe(true);
-    expect(isHermesActor({ action: "tuning.annotate", actorKind: "service" }, "Some agent")).toBe(true);
-    expect(isHermesActor({ action: "noise_rule.create", actorKind: "service", detail: { via: "tuning_api" } })).toBe(true);
-    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "Hermes (prod)")).toBe(true);
-    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "hermes-prod")).toBe(true);
+  it("is Hermes' own service identity only", () => {
+    expect(isHermesActor({ actorKind: "service" }, "hermes")).toBe(true);
+    expect(isHermesActor({ actorKind: "service" }, " Hermes ")).toBe(true);
   });
 
-  it("is never a person, and not other services", () => {
-    expect(isHermesActor({ action: "tuning.undo", actorKind: "user" }, "Hermes Smith")).toBe(false);
-    expect(isHermesActor({ action: "tuning.switch", actorKind: "user" })).toBe(false);
-    expect(isHermesActor({ action: "noise_rule.create", actorKind: "user", detail: { via: "tuning_api" } })).toBe(false);
-    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "SIEM exporter")).toBe(false);
-    expect(isHermesActor({ action: "api.request", actorKind: "service" }, "hermesian")).toBe(false);
-    expect(isHermesActor({ action: "alert.update", actorKind: "service" }, null)).toBe(false);
+  it("is never a person, another service with tuning scopes, or an unnamed service", () => {
+    expect(isHermesActor({ actorKind: "user" }, "hermes")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, "Some agent")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, "hermes-prod")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, "hermesian")).toBe(false);
+    expect(isHermesActor({ actorKind: "service" }, null)).toBe(false);
+    expect(isHermesActor({ actorKind: "service" })).toBe(false);
   });
 });
