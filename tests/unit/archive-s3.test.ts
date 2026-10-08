@@ -56,6 +56,18 @@ describe("S3 archive store", () => {
     expect(() => new S3ArchiveStore(config(s, { endpoint: "http://169.254.169.254" }))).toThrow(/egress refused/);
   });
 
+  it("keeps objects under a key prefix in a shared bucket and lists archive keys without it", async () => {
+    const s = await stub();
+    const store = new S3ArchiveStore(config(s, { keyPrefix: "blaksoc/archive/" }));
+    await store.put("ap-southeast-2", "syslog/t1/a.log", "sydney");
+    expect(s.objects.has("blaksoc-syd/blaksoc/archive/syslog/t1/a.log")).toBe(true);
+    expect(s.objects.has("blaksoc-syd/syslog/t1/a.log")).toBe(false);
+    expect(await store.get("ap-southeast-2", "syslog/t1/a.log")).toBe("sydney");
+    expect(await store.list("ap-southeast-2", "syslog/t1/")).toEqual(["syslog/t1/a.log"]);
+    expect(s3ArchiveConfigFromEnv({ BLAKSOC_ARCHIVE_S3_BUCKETS: "ap-southeast-2=b", BLAKSOC_ARCHIVE_S3_PREFIX: "/blaksoc/archive" })!.keyPrefix).toBe("blaksoc/archive/");
+    expect(() => s3ArchiveConfigFromEnv({ BLAKSOC_ARCHIVE_S3_BUCKETS: "ap-southeast-2=b", BLAKSOC_ARCHIVE_S3_PREFIX: "a b" })).toThrow(/unsupported/);
+  });
+
   it("writes the KMS key header and pages through long listings", async () => {
     const s = await stub({ pageSize: 2 });
     const store = new S3ArchiveStore(config(s, { sse: "aws:kms", kmsKeyId: "alias/blaksoc-archive" }));

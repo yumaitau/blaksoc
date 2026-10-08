@@ -27,6 +27,10 @@ outside AWS ──agents──► NLB agents.soc.yumait.au ┘
 | OpenCTI | EC2 `threatsieve-opencti-production` (ThreatSieve) | OpenCTI 7. Published on its private address, port 8080; its security group admits port 8080 from the EKS cluster SG only |
 | Host credentials | `blaksoc-wazuh-credentials` | Indexer, API, dashboard and enrolment passwords, plus blakSOC's own API and indexer users. Read by the Wazuh host's role |
 | OpenCTI token | `blaksoc-opencti-service-token` | blakSOC service account in OpenCTI's Connectors group (not admin). Expires after 365 days |
+| Backups | S3 `coolify-yumabackups` (shared, ap-southeast-2) | blakSOC writes only under `blaksoc/`: nightly `pg_dump` to `blaksoc/postgres/`, cold syslog to `blaksoc/archive/`. IAM role `blaksoc-eks-storage` (inline policy `blaksoc-backups-prefix`) through EKS Pod Identity on service account `blaksoc/blaksoc` |
+| Wazuh dashboard | `https://wazuh.yumait.au` | Cloudflare Tunnel `blaksoc-wazuh` (cloudflared on the Wazuh host, outbound only) behind Cloudflare Access: `yumait.com.au` Google identities, 12-hour session |
+| Dashboard users | `blaksoc-wazuh-dashboard-users` | Personal Wazuh dashboard logins. `admin` (`INDEXER_PASSWORD` in `blaksoc-wazuh-credentials`) is the fallback |
+| EKS audit | CloudWatch `/aws/eks/yumait-prod/cluster` | `audit` and `authenticator` control plane logs, 30 days. Read by the Wazuh host's role (`read-eks-control-plane-logs`) |
 | Enrolment password | SSM parameter `/blaksoc/wazuh/enrollment` | Passed to SSM commands as the reference `{{ssm:/blaksoc/wazuh/enrollment}}`, which Systems Manager resolves on the instance; CloudTrail and command history keep only the reference. Mirrors `ENROLLMENT_PASSWORD` in `blaksoc-wazuh-credentials` |
 
 ## Deploy a new version
@@ -64,12 +68,19 @@ job checks that the two match and stops if they do not.
 The migration job sets the role's password from `BLAKSOC_SYSTEM_DB_PASSWORD`. Web and worker refuse to start
 in production without `DATABASE_SYSTEM_URL`.
 
+Backups connect as `blaksoc_backup`, a read-only role that bypasses RLS so the dump holds every tenant (the RDS
+master cannot bypass FORCE RLS). It logs in only when the migration job has `BLAKSOC_BACKUP_DB_PASSWORD`; the
+CronJob reads `DATABASE_BACKUP_URL` (`backup.databaseUrlKey`), built the same way as `DATABASE_SYSTEM_URL`. Both
+keys are in `blaksoc-eks-bootstrap` and `blaksoc-eks-runtime`.
+
 ## Data plane hosts
 
 The scripts run as root through SSM Run Command and can be re-run:
 
 - `wazuh-host.sh`: wazuh-docker single-node `v4.14.8`. Replaces the published default passwords before
-  first start, turns on enrolment passwords, and sets the indexer `node.attr.region`.
+  first start, turns on enrolment passwords, and sets the indexer `node.attr.region`. Reissues the indexer and
+  API certificates from the stack's root CA with `wazuh-internal.soc.yumait.au` and the private address in the
+  SAN, runs cloudflared for the dashboard, reads the EKS control plane logs, and installs the local rules.
 - `wazuh-agent-ssm.py`: creates the `BlakSOC-WazuhAgent` SSM document and the State Manager association
   `blaksoc-wazuh-agent`, which runs `wazuh-agent.sh` on every SSM-managed Linux instance when it registers
   and daily after that. New EC2 hosts are enrolled without any action, provided they run the SSM agent with
@@ -85,7 +96,8 @@ The scripts run as root through SSM Run Command and can be re-run:
 blakSOC's Wazuh API user (`blaksoc`) holds `agents_readonly`, `cluster_readonly` and a policy for
 `active-response:command`; its indexer user (`blaksoc`) can only read `wazuh-alerts-*`, `wazuh-archives-*` and
 `wazuh-states-vulnerabilities-*` plus node info for the region check. The integrations are `Wazuh (AWS)`,
-linked to the `Yuma IT Internal` tenant by agent group `yumait-aws`, and `OpenCTI (ThreatSieve)` at platform
+linked to the `Yuma IT Internal` tenant by agent group `yumait-aws` and connecting to
+`wazuh-internal.soc.yumait.au` with TLS verified against the stack's root CA (`caPem`), and `OpenCTI (ThreatSieve)` at platform
 level.
 
 Cases go to Kelpie (`kelpie` namespace, `https://kelpie-app.yumait.au`): the `Yuma IT Internal` tenant has a
@@ -107,7 +119,27 @@ Intel: OpenCTI on `threatsieve-opencti-production` runs public feed connectors n
 CISA KEV, abuse.ch ThreatFox, URLhaus and SSL blacklist, OpenCTI datasets). They are defined in ThreatSieve's
 `infra/opencti/compose.yaml` and use the non-admin connector token; none needs an API key.
 
-Reach the Wazuh dashboard or OpenCTI with SSM port forwarding, for example:
+Kubernetes visibility: Wazuh reads the EKS audit and authenticator logs every 5 minutes (aws-s3 wodle,
+`cloudwatchlogs`). Rules in `blaksoc_eks_rules.xml` (installed by `wazuh-host.sh`) watch people and unknown
+identities; Kubernetes controllers (`system:`), EKS components (`eks:`) and AWS service-linked roles
+(`AWSServiceRoleFor*`) are ignored.
+
+| Rule | Level | Fires on |
+| --- | --- | --- |
+| 100202 | 8 | `kubectl exec` or `attach` into a pod |
+| 100203 | 7 | Reading secrets (`get`, `list`, `watch`) |
+| 100204 | 10 | Creating, changing or deleting roles and role bindings |
+| 100205 | 10 | A pod or workload with `privileged`, `hostPID` or `hostNetwork` |
+| 100206 | 12 | An anonymous request allowed, other than health and version |
+| 100207, 100208 | 5, 10 | A request refused (403); ten from one identity in two minutes |
+| 100210, 100211 | 5, 10 | An IAM identity refused by the authenticator; ten in two minutes |
+
+Wazuh dashboard: `https://wazuh.yumait.au`. Cloudflare Access asks for a `yumait.com.au` Google sign-in, then
+Wazuh asks for its own login (`blaksoc-wazuh-dashboard-users`). Wazuh logins are indexer internal users with
+backend role `admin`, plus a Wazuh API security rule mapping the user name to the `administrator` role (the
+dashboard runs API calls as the signed-in user).
+
+Reach OpenCTI with SSM port forwarding, for example:
 
 ```bash
 aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwardingSession \
@@ -121,23 +153,14 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 | `soc.yumait.au` | CNAME | ALB hostname from `kubectl -n blaksoc get ingress` | DNS only |
 | `agents.soc.yumait.au` | CNAME | NLB hostname | DNS only (raw TCP) |
 | `wazuh-internal.soc.yumait.au` | A | the manager's fixed private address | DNS only |
+| `wazuh.yumait.au` | CNAME | Cloudflare Tunnel `blaksoc-wazuh` | Proxied (one level, so Universal SSL covers it) |
 | ACM validation | CNAME | from the certificate | DNS only |
 
 ## Known gaps
 
-- Helm upgrades need cluster-admin on `yumait-prod`: the release's hooks manage External Secrets objects,
-  which namespace-scoped EKS access policies do not cover. The Agent Vault IAM user has namespace-scoped
-  admin on `blaksoc` and `kelpie` only, so image-only releases were rolled out with `kubectl set image`;
-  run the next `helm upgrade` with cluster-admin credentials to bring the release record in line.
 - The `r7g.large` Wazuh host stays below `m7g.xlarge` until the account's vCPU quota increase is granted.
-
-- The Wazuh indexer and API certificates name `wazuh.indexer` and `localhost`, so the Wazuh integration
-  connects to the manager's private address with `tlsVerify: false`. Traffic stays in the VPC and the ports admit only the VPC
-  range. Reissue the certificates with the IP (or a private name) in the SAN, then set `caPem` and turn
-  verification back on.
-- `BLAKSOC_ARCHIVE_S3_BUCKETS` is unset, so cold syslog lives on the worker's emptyDir. Create the AU buckets and
-  an IAM role for the service account, then set `archive.s3` and `backup` in `values-yumait-prod.yaml`.
-
+- Helm upgrades need cluster-admin on `yumait-prod` (the hooks manage External Secrets objects). The Agent Vault
+  IAM user has `AmazonEKSClusterAdminPolicy`.
 - Network policies are disabled here because the cluster does not enforce them. The chart now allows public
   HTTPS egress with private and metadata ranges excluded (`networkPolicy.publicHttps`). Before turning
   enforcement on, set `networkPolicy.dataStoresInCluster: false`, add the VPC range to

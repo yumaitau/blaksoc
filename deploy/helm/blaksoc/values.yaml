@@ -59,6 +59,7 @@ archive:
     forcePathStyle: ""     # empty = path style when endpoint is set
     sse: AES256            # or aws:kms
     kmsKeyId: ""
+    prefix: ""             # key prefix inside a shared bucket, e.g. blaksoc/archive/
 
 # Worker and backup pods run as this account. Annotate it for IRSA, or bind it with EKS Pod Identity.
 serviceAccount:
@@ -75,6 +76,9 @@ backup:
   bucket: ""
   region: ap-southeast-2     # ap-southeast-2 or ap-southeast-4; anything else fails the render
   prefix: postgres/
+  # Secret key holding the URL pg_dump connects with. The role must bypass RLS (DATABASE_BACKUP_URL for the
+  # read-only blaksoc_backup role, created when BLAKSOC_BACKUP_DB_PASSWORD is set).
+  databaseUrlKey: DATABASE_ADMIN_URL
   keep: 28                   # dumps kept (7 days at 6-hourly); add a bucket lifecycle rule as backstop
   sse: AES256                # or aws:kms
   kmsKeyId: ""

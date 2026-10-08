@@ -13,6 +13,8 @@ export type S3ArchiveConfig = {
   forcePathStyle?: boolean;
   sse: "AES256" | "aws:kms";
   kmsKeyId?: string;
+  /** Key prefix inside the bucket, for a bucket shared with other systems (e.g. "blaksoc/archive/"). */
+  keyPrefix?: string;
   /** Static keys. Unset: the AWS default chain (IRSA, EKS Pod Identity, instance role, AWS_* env). */
   credentials?: { accessKeyId: string; secretAccessKey: string };
 };
@@ -35,7 +37,11 @@ export function s3ArchiveConfigFromEnv(env: Record<string, string | undefined>):
   if (!!accessKeyId !== !!secretAccessKey) throw new Error("set both BLAKSOC_ARCHIVE_S3_ACCESS_KEY_ID and BLAKSOC_ARCHIVE_S3_SECRET_ACCESS_KEY, or neither");
   const endpoint = env.BLAKSOC_ARCHIVE_S3_ENDPOINT || undefined;
   const pathStyle = env.BLAKSOC_ARCHIVE_S3_FORCE_PATH_STYLE;
+  const rawPrefix = env.BLAKSOC_ARCHIVE_S3_PREFIX?.trim().replace(/^\/+/, "") ?? "";
+  if (rawPrefix && !/^[A-Za-z0-9._\-/]+$/.test(rawPrefix)) throw new Error(`BLAKSOC_ARCHIVE_S3_PREFIX has unsupported characters: ${rawPrefix}`);
+  const keyPrefix = rawPrefix && !rawPrefix.endsWith("/") ? `${rawPrefix}/` : rawPrefix;
   return {
+    keyPrefix: keyPrefix || undefined,
     buckets,
     endpoint,
     forcePathStyle: pathStyle ? pathStyle === "true" : !!endpoint,
@@ -96,13 +102,17 @@ export class S3ArchiveStore implements ArchiveStore {
     return { client, bucket };
   }
 
+  private objectKey(key: string): string {
+    return `${this.config.keyPrefix ?? ""}${key}`;
+  }
+
   async put(region: string, key: string, body: string): Promise<void> {
     assertArchiveKey(key);
     const { client, bucket } = this.target(region);
     await client.send(
       new PutObjectCommand({
         Bucket: bucket,
-        Key: key,
+        Key: this.objectKey(key),
         Body: body,
         ContentType: "text/plain; charset=utf-8",
         ServerSideEncryption: this.config.sse,
@@ -115,7 +125,7 @@ export class S3ArchiveStore implements ArchiveStore {
     assertArchiveKey(key);
     const { client, bucket } = this.target(region);
     try {
-      const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: this.objectKey(key) }));
       if (!out.Body) throw new Error("archive object missing");
       return await out.Body.transformToString("utf8");
     } catch (err) {
@@ -129,8 +139,9 @@ export class S3ArchiveStore implements ArchiveStore {
     const out: string[] = [];
     let token: string | undefined;
     do {
-      const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
-      for (const obj of page.Contents ?? []) if (obj.Key) out.push(obj.Key);
+      const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: this.objectKey(prefix), ContinuationToken: token }));
+      // Callers see archive keys, never the bucket prefix.
+      for (const obj of page.Contents ?? []) if (obj.Key) out.push(obj.Key.slice(this.config.keyPrefix?.length ?? 0));
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (token);
     return out.sort();

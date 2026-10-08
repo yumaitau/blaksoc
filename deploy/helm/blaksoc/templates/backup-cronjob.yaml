@@ -45,7 +45,7 @@ spec:
                 - name: BACKUP_DIR
                   value: /backup
                 - name: BACKUP_DATABASE_URL
-                  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: DATABASE_ADMIN_URL } }
+                  valueFrom: { secretKeyRef: { name: {{ .Values.existingSecret }}, key: {{ $b.databaseUrlKey | default "DATABASE_ADMIN_URL" }} } }
               resources: {{- toYaml $b.resources | nindent 16 }}
               securityContext: {{- toYaml .Values.securityContext | nindent 16 }}
               volumeMounts: [{ name: backup, mountPath: /backup }, { name: scripts, mountPath: /scripts }, { name: tmp, mountPath: /tmp }]
