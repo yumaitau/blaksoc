@@ -4,12 +4,13 @@ import { REQUEST_ID_HEADER, requestIdFrom } from "@/lib/obs/request-id";
 
 /**
  * Paths reachable without a session cookie. Machine endpoints (syslog ingest, the /api/v1 service
- * API) authenticate with bearer tokens; auth, health, login and access-pending must stay reachable signed out.
+ * API) authenticate with bearer tokens; the office display validates its signed URL in the summary API.
+ * Auth, health, login and access-pending must stay reachable signed out.
  */
 const PUBLIC_PATH = /^\/(?:api\/auth|api\/health|api\/ingest|api\/v1|login|access-pending)(?:\/|$)/;
 
 export function isPublicPath(pathname: string) {
-  return PUBLIC_PATH.test(pathname);
+  return PUBLIC_PATH.test(pathname) || pathname === "/wallboard" || pathname === "/api/wallboard";
 }
 
 /**
@@ -63,6 +64,11 @@ export function proxy(request: NextRequest) {
   const response = NextResponse.next({ request: { headers: requestHeaders } });
   response.headers.set("Content-Security-Policy", csp);
   response.headers.set(REQUEST_ID_HEADER, id);
+  if (pathname === "/wallboard" || pathname === "/api/wallboard") {
+    response.headers.set("Cache-Control", "private, no-store, max-age=0");
+    response.headers.set("Referrer-Policy", "no-referrer");
+    response.headers.set("X-Robots-Tag", "noindex, nofollow");
+  }
   return response;
 }
 

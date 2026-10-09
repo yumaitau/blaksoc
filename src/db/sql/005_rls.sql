@@ -202,12 +202,12 @@ BEGIN
   END LOOP;
 END $$;
 
--- Platform-level tuning data (no tenant): the Hermes switch, its reports and memory. Platform staff and
--- platform service identities only; the worker reads through blaksoc_system.
+-- Platform data without a single tenant: Hermes settings, reports and memory, and fixed-scope TV links.
+-- Platform scope only through the app role; pre-scope checks use blaksoc_system.
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['platform_settings', 'hermes_reports', 'hermes_memory_notes'] LOOP
+  FOREACH t IN ARRAY ARRAY['platform_settings', 'hermes_reports', 'hermes_memory_notes', 'wallboard_links'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS platform_only ON %I', t);

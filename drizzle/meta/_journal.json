@@ -239,6 +239,13 @@
       "when": 1790627000000,
       "tag": "0034_alert_noise",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1790628000000,
+      "tag": "0035_wallboard_links",
+      "breakpoints": true
     }
   ]
 }

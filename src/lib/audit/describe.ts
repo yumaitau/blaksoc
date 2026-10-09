@@ -225,6 +225,8 @@ const DESCRIBE: Record<string, Describer> = {
     `Purged ${howMany(d.deleted) !== undefined ? count(howMany(d.deleted)!, `${str(d.severity) ? `${status(d.severity)} ` : ""}alert`) : "alerts"}${typeof d.retentionDays === "number" ? ` older than ${d.retentionDays} days` : ""}`,
   "report.generate": ({ d }) => `Generated a report${str(d.kind) ? ` (${status(d.kind)})` : ""}`,
   "report.board_deliver": "Delivered the board report",
+  "wallboard.create": ({ d }) => `Created ${named("signed display link", d.name)}`,
+  "wallboard.revoke": ({ d }) => `Revoked ${named("signed display link", d.name)}`,
   "audit.export": ({ d }) => `Exported ${howMany(d.rows) !== undefined ? count(howMany(d.rows)!, "audit entry", "audit entries") : "the audit trail"} to CSV`,
 
   // Assets, vulnerabilities, intel
@@ -292,6 +294,7 @@ export function auditTargetHref(targetType: string | null | undefined, targetId:
     case "report": return `/reports/${id}`;
     case "sigma_rule": return `/detections/rules/${id}`;
     case "noise_rule": return "/soc/tuning";
+    case "wallboard_link": return "/soc/wallboard";
     case "tuning_action":
     case "hermes_report":
     case "hermes_memory": return "/soc/hermes";

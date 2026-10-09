@@ -25,6 +25,38 @@
 - Rate limits are per identity (300 calls a minute) and per client id at the token endpoint (20 a minute), counted in Redis like sign-in.
 - The OpenAPI 3.1 document is generated from the route schemas (`pnpm openapi`, served at `/api/v1/openapi.json`); a unit test fails when `docs/openapi.json` is stale.
 
+## Signed office display links
+
+`/wallboard?token=…` and `GET /api/wallboard?token=…` are the only public wallboard paths.
+The display is a read-only summary with counts, customer names and case references/statuses;
+it omits alert and incident titles, raw telemetry, analyst names and record navigation.
+Requests without a token require a normal session. Supplying an invalid token never falls back
+to session access.
+
+Only platform users holding `dashboard:read` and either `response:approve` or `user:manage`
+can create, list or revoke links. Each link persists a fixed set of operational customer UUIDs,
+its issuer, expiry and revocation time. The versioned HMAC-SHA256 credential binds the link UUID
+and expiry, with a wallboard-specific domain prefix and constant-time verification using
+`BETTER_AUTH_SECRET`. The signature is never stored in the database or audit trail. Rotation of
+that secret invalidates all links.
+
+Every refresh checks signature, expiry, revocation, the current issuer's enabled state, break-glass
+MFA requirement and freshly resolved permissions. All selected customers must remain active and
+permitted. Training tenants are excluded. Summary queries use the app database under RLS, with
+explicit fixed tenant filters and platform scope disabled. The system database is used only to
+resolve the credential and its issuer before a scope exists. Link storage is protected by
+platform-only RLS. Creation and revocation are audited in the same transaction as the change.
+
+HTML and JSON responses are private/no-store, no-referrer and noindex. Tokens use a query key
+already redacted by the application logger. Treat the URL as a bearer credential: anyone who
+has it can view its summaries until access ends. The TV polls every 30 seconds, removes data
+when access is refused or local expiry is reached, and hides stale data after two minutes without
+a successful response.
+
+Migration `0035_wallboard_links` is additive; deploy it before the new web code. Recovery is to
+roll back the web code while retaining the unused table and policy. Do not remove the table
+while the wallboard code is still serving requests.
+
 ## Tenant isolation (defence in depth)
 
 1. Explicit `tenant_id` filters in every service query.

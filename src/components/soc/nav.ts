@@ -8,6 +8,7 @@ export const NAV: NavGroup[] = [
     label: "Operate",
     items: [
       { href: "/soc", label: "SOC dashboard", icon: "LayoutDashboard", perm: "dashboard:read", platformOnly: true },
+      { href: "/soc/wallboard", label: "TV wallboard", icon: "Monitor", perm: "dashboard:read", platformOnly: true },
       { href: "/soc/mssp", label: "Customers", icon: "Building2", perm: "mssp:read", platformOnly: true },
       { href: "/soc/trends", label: "Trends", icon: "ChartColumn", perm: "mssp:read", platformOnly: true },
       { href: "/soc/training", label: "Training", icon: "GraduationCap", perm: "alert:assign", platformOnly: true },

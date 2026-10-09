@@ -1,0 +1,2 @@
+.field { border-color: var(--color-muted); }
+.field:focus { border-color: var(--color-accent); }

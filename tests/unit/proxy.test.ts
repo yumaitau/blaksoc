@@ -23,14 +23,14 @@ describe("session proxy matcher", () => {
 
 describe("session gate", () => {
   it("does not send bearer-token machine endpoints or public pages to the login page", () => {
-    for (const path of ["/api/ingest/syslog", "/api/health", "/api/health/live", "/api/auth/sign-in", "/api/v1/alerts", "/api/v1/oauth/token", "/login", "/login/2fa", "/access-pending"]) {
+    for (const path of ["/api/ingest/syslog", "/api/health", "/api/health/live", "/api/auth/sign-in", "/api/v1/alerts", "/api/v1/oauth/token", "/login", "/login/2fa", "/access-pending", "/wallboard", "/api/wallboard"]) {
       expect(isPublicPath(path), path).toBe(true);
       expect(proxy(request(path)).headers.get("location"), path).toBeNull();
     }
   });
 
   it("still gates the app and session-authenticated APIs", () => {
-    for (const path of ["/soc", "/api/stream", "/api/reports/abc/export", "/loginx", "/api/healthz", "/api/v1x"]) {
+    for (const path of ["/soc", "/api/stream", "/api/reports/abc/export", "/loginx", "/api/healthz", "/api/v1x", "/wallboard/manage", "/wallboardx", "/api/wallboard/revoke", "/api/wallboardx"]) {
       expect(isPublicPath(path), path).toBe(false);
       const res = proxy(request(path));
       expect(res.status, path).toBe(307);
@@ -42,6 +42,16 @@ describe("session gate", () => {
 
   it("lets a request with a session cookie through", () => {
     expect(proxy(request("/soc", SESSION)).headers.get("location")).toBeNull();
+  });
+
+  it("prevents caching and referrer leakage on the signed display", () => {
+    for (const path of ["/wallboard?token=secret", "/api/wallboard?token=secret"]) {
+      const response = proxy(request(path));
+      expect(response.headers.get("cache-control")).toContain("no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(response.headers.get("content-security-policy")).toBeTruthy();
+    }
   });
 });
 
