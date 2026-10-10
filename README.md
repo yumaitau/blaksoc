@@ -48,6 +48,28 @@ every role (password `blaksoc-demo-2026`):
 
 Tests: `pnpm test` (unit) and `pnpm test:integration` (against a migrated, demo-seeded DB).
 
+## Office TV wallboard
+
+Open **Operate → TV wallboard** (`/soc/wallboard`) and choose **Open wallboard** for a display
+using your current workspace and signed-in session. The standalone screen at `/wallboard` shows
+the alert queue, incident totals and overdue SLAs, pending approvals, customer risk, endpoint
+reporting and hourly alert activity. It refreshes every 30 seconds and rotates through groups of
+six customers every 15 seconds. Use the full-screen control on the TV browser.
+
+SOC managers and platform administrators can generate a **signed display link** on the same
+settings page. Name the display, select its customers and choose a lifetime of 1, 7, 30 or 90 days.
+Copy the generated URL to the TV; it opens without a login. The selected customers are fixed when
+the link is created. Anyone holding it can read those summaries, so keep it on trusted office
+displays. Alert titles, raw events and analyst names are omitted. Links grant no access to other
+pages, APIs or response actions.
+
+Revoke a link from **Recent display links** to stop its next refresh. Every link that can still
+open the display stays on that list. Expiry, issuer account
+disablement or loss of the issuer's management permission also ends access. A disconnected TV
+shows an update warning and clears old data after two minutes. Signed URLs use `APP_URL` and
+`BETTER_AUTH_SECRET`; set these correctly for the deployment. Rotating the auth secret invalidates
+all display links. Run `pnpm db:migrate` to apply migration `0035_wallboard_links` before using them.
+
 ## Architecture
 
 ```
