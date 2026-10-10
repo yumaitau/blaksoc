@@ -215,6 +215,16 @@ BEGIN
   END LOOP;
 END $$;
 
+-- Personal SOC dashboard. Own row only. The service sets app.user_id in the same transaction;
+-- without it the comparison fails closed and the row is invisible.
+ALTER TABLE dashboard_layouts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE dashboard_layouts FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS own_dashboard_layout ON dashboard_layouts;
+CREATE POLICY own_dashboard_layout ON dashboard_layouts
+  TO blaksoc_app
+  USING (app_is_platform() AND user_id = nullif(current_setting('app.user_id', true), ''))
+  WITH CHECK (app_is_platform() AND user_id = nullif(current_setting('app.user_id', true), ''));
+
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON tenants;
