@@ -50,6 +50,8 @@ const schema = z.object({
   /** "AU" restricts AI inference to providers declaring Australian residency. */
   AI_DATA_RESIDENCY: z.enum(["AU", "ANY"]).default("AU"),
   DEMO_MODE: z.enum(["true", "false"]).default("false"),
+  /** Cloudflare Radar API token (Account > Radar > Read). Unset: the SOC dashboard explains how to set it. */
+  CLOUDFLARE_RADAR_TOKEN: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;

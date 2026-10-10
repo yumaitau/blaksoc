@@ -246,6 +246,13 @@
       "when": 1790628000000,
       "tag": "0035_wallboard_links",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1790629000000,
+      "tag": "0036_dashboard_layouts",
+      "breakpoints": true
     }
   ]
 }
