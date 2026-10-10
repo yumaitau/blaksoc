@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNull, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { systemDb } from "@/db/client";
 import { alerts, approvals, assets, incidents, tenants, user, wallboardLinks } from "@/db/schema";
 import { withScope } from "@/db/scope";
@@ -121,9 +121,17 @@ export async function createWallboardLink(ctx: AccessContext, input: { name: str
 
 export async function listWallboardLinks(ctx: AccessContext) {
   assertManager(ctx);
+  const now = new Date();
   return withScope({ tenantIds: [], platform: true }, async (tx) => {
-    const rows = await tx.select().from(wallboardLinks).orderBy(desc(wallboardLinks.createdAt)).limit(100);
-    return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString(), expiresAt: row.expiresAt.toISOString(), revokedAt: row.revokedAt?.toISOString() ?? null }));
+    // Every still-valid link stays visible. A short cap would let newer rows bury one that must be revoked.
+    const live = await tx.select().from(wallboardLinks)
+      .where(and(isNull(wallboardLinks.revokedAt), gte(wallboardLinks.expiresAt, now)))
+      .orderBy(desc(wallboardLinks.createdAt));
+    const history = await tx.select().from(wallboardLinks)
+      .where(or(isNotNull(wallboardLinks.revokedAt), lt(wallboardLinks.expiresAt, now)))
+      .orderBy(desc(wallboardLinks.createdAt))
+      .limit(50);
+    return [...live, ...history].map((row) => ({ ...row, createdAt: row.createdAt.toISOString(), expiresAt: row.expiresAt.toISOString(), revokedAt: row.revokedAt?.toISOString() ?? null }));
   });
 }
 

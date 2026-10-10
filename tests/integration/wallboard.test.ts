@@ -124,6 +124,20 @@ describe("office wallboard", () => {
     } finally { await adminDb().update(user).set({ isBreakGlass: false, twoFactorEnabled: false }).where(eq(user.id, issuerId)); }
   });
 
+  it("keeps a live link listed when newer revoked links would fill a short history", async () => {
+    const created = await link();
+    const buriedAt = new Date("2099-01-01T00:00:00Z");
+    await adminDb().insert(wallboardLinks).values(Array.from({ length: 100 }, (_, i) => ({
+      name: `Buried ${i}`,
+      tenantIds: [a],
+      createdBy: issuerId,
+      createdAt: buriedAt,
+      expiresAt: new Date("2099-01-02T00:00:00Z"),
+      revokedAt: buriedAt,
+    })));
+    expect((await listWallboardLinks(ctx)).some((row) => row.id === created.id)).toBe(true);
+  });
+
   it("deleting the issuer also invalidates and deletes its links", async () => {
     const created = await link();
     await adminDb().delete(user).where(eq(user.id, issuerId));

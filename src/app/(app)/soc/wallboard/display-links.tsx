@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input, Label, Select } from "@/components/ui/input";
-import { displayLinkRows, type DisplayLink } from "@/lib/wallboard/display-links";
+import { displayLinkRows, initialDisplayCustomers, type DisplayLink } from "@/lib/wallboard/display-links";
 import { WALLBOARD_EXPIRY_DAYS, type WallboardExpiryDays } from "@/lib/wallboard/types";
 import { createWallboardLinkAction, revokeWallboardLinkAction } from "./actions";
 import styles from "./display-links.module.css";
@@ -12,7 +12,7 @@ const formattedDate = (value: string) => new Date(value).toLocaleString("en-AU",
 
 export function DisplayLinks({ customers, initialLinks, initialNow }: { customers: { id: string; name: string }[]; initialLinks: DisplayLink[]; initialNow: number }) {
   const [name, setName] = useState("");
-  const [picked, setPicked] = useState<string[]>(customers.map((customer) => customer.id));
+  const [picked, setPicked] = useState<string[]>(() => initialDisplayCustomers(customers));
   const [days, setDays] = useState<WallboardExpiryDays>(30);
   const [issued, setIssued] = useState<{ url: string; expiresAt: string } | null>(null);
   const [createdLinks, setCreatedLinks] = useState<DisplayLink[]>([]);
@@ -46,7 +46,7 @@ export function DisplayLinks({ customers, initialLinks, initialNow }: { customer
       });
     }}>
       <div className="grid gap-4 sm:grid-cols-2"><div><Label htmlFor="display-name">Display name</Label><Input id="display-name" className={styles.field} required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Office TV" /></div><div><Label htmlFor="display-expiry">Link lifetime</Label><Select id="display-expiry" className={styles.field} value={days} onChange={(event) => setDays(Number(event.target.value) as WallboardExpiryDays)}>{WALLBOARD_EXPIRY_DAYS.map((value) => <option key={value} value={value}>{value} day{value === 1 ? "" : "s"}</option>)}</Select></div></div>
-      <fieldset><legend className="mb-2 text-sm font-medium">Customers on this display</legend><p className="mb-3 text-xs text-muted">The customer list is fixed when the link is created. New customers need a new link.</p><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{customers.map((customer) => <label key={customer.id} className="flex min-h-8 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" checked={picked.includes(customer.id)} onChange={(event) => setPicked((previous) => event.target.checked ? [...previous, customer.id] : previous.filter((id) => id !== customer.id))} />{customer.name}</label>)}</div>{!customers.length ? <p className="text-sm text-muted">Select a workspace with operational customers to create a link.</p> : null}</fieldset>
+      <fieldset><legend className="mb-2 text-sm font-medium">Customers on this display</legend><p className="mb-3 text-xs text-muted">Choose each customer to include. The list is fixed when the link is created. New customers need a new link.</p><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{customers.map((customer) => <label key={customer.id} className="flex min-h-8 cursor-pointer items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent" checked={picked.includes(customer.id)} onChange={(event) => setPicked((previous) => event.target.checked ? [...previous, customer.id] : previous.filter((id) => id !== customer.id))} />{customer.name}</label>)}</div>{!customers.length ? <p className="text-sm text-muted">Select a workspace with operational customers to create a link.</p> : null}</fieldset>
       <Button type="submit" disabled={pending || !name.trim() || !picked.length}>{pending ? "Saving…" : "Generate signed link"}</Button>
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
       {issued ? <div className="space-y-3 rounded-md bg-surface-2 p-4"><p role="status" className="text-sm font-medium">Display link created · expires {formattedDate(issued.expiresAt)}</p><Label htmlFor="issued-link">Copy this link now. It is only shown here.</Label><Input id="issued-link" className={styles.field} readOnly value={issued.url} onFocus={(event) => event.target.select()} /><div className="flex flex-wrap items-center gap-3"><Button type="button" variant="secondary" onClick={async () => {

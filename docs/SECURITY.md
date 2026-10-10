@@ -53,6 +53,14 @@ has it can view its summaries until access ends. The TV polls every 30 seconds, 
 when access is refused or local expiry is reached, and hides stale data after two minutes without
 a successful response.
 
+The management list always includes every unrevoked, unexpired link, so newer rows cannot hide
+one that still works. Revoked and expired links appear only as a short history. Creating a link
+does not pre-select every customer when more than one is available.
+
+`GET /api/wallboard?token=…` is rate limited per token hash (the raw token is not the Redis key)
+and, when a client address is trusted, per address. Excess polls receive 429 with Retry-After.
+The display keeps its last screen and retries.
+
 Migration `0035_wallboard_links` is additive; deploy it before the new web code. Recovery is to
 roll back the web code while retaining the unused table and policy. Do not remove the table
 while the wallboard code is still serving requests.

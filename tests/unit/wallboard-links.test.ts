@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { displayLinkRows, type DisplayLink } from "@/lib/wallboard/display-links";
+import { displayLinkRows, initialDisplayCustomers, type DisplayLink } from "@/lib/wallboard/display-links";
 
 const link = (patch: Partial<DisplayLink> = {}): DisplayLink => ({ id: "office", name: "Office TV", tenantIds: ["customer-a"], createdBy: "manager", createdAt: "2026-10-09T00:00:00.000Z", expiresAt: "2026-10-10T00:00:00.000Z", revokedAt: null, ...patch });
+
+describe("display link customer selection", () => {
+  it("starts empty when more than one customer is available", () => {
+    expect(initialDisplayCustomers([{ id: "a" }, { id: "b" }])).toEqual([]);
+    expect(initialDisplayCustomers([])).toEqual([]);
+  });
+
+  it("starts selected when the workspace has one customer", () => {
+    expect(initialDisplayCustomers([{ id: "a" }])).toEqual(["a"]);
+  });
+});
 
 describe("display link list revalidation", () => {
   it("reflects revocation and expiry updates from the server", () => {

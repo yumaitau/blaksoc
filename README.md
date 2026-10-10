@@ -63,7 +63,8 @@ the link is created. Anyone holding it can read those summaries, so keep it on t
 displays. Alert titles, raw events and analyst names are omitted. Links grant no access to other
 pages, APIs or response actions.
 
-Revoke a link from **Recent display links** to stop its next refresh. Expiry, issuer account
+Revoke a link from **Recent display links** to stop its next refresh. Every link that can still
+open the display stays on that list. Expiry, issuer account
 disablement or loss of the issuer's management permission also ends access. A disconnected TV
 shows an update warning and clears old data after two minutes. Signed URLs use `APP_URL` and
 `BETTER_AUTH_SECRET`; set these correctly for the deployment. Rotating the auth secret invalidates

@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({ signed: vi.fn(), snapshot: vi.fn(), access: vi
 vi.mock("@/lib/services/wallboard", () => ({ signedWallboardSnapshot: mocks.signed, wallboardSnapshot: mocks.snapshot }));
 vi.mock("@/lib/auth/session", () => ({ currentAccess: mocks.access }));
 vi.mock("@/lib/workspace", () => ({ currentWorkspace: mocks.workspace }));
+vi.mock("@/lib/redis", () => ({ redis: () => ({ multi() { throw new Error("redis down"); } }) }));
 
 import { GET } from "@/app/api/wallboard/route";
 
@@ -43,6 +44,22 @@ describe("wallboard API boundary", () => {
     expect(mocks.snapshot).toHaveBeenCalledWith(ctx, ["chosen", "other"]);
     expect((await get("?tenantIds=")).status).toBe(403);
     expect((await get("?tenantIds=a&tenantIds=b")).status).toBe(403);
+  });
+
+  it("rate limits one signed token without blocking a different token", async () => {
+    mocks.signed.mockResolvedValue({ generatedAt: "now" });
+    const flood = "v1.flood-token";
+    let limited: Response | null = null;
+    for (let i = 0; i < 130 && !limited; i++) {
+      const res = await get(`?token=${encodeURIComponent(flood)}`);
+      if (res.status === 429) limited = res;
+      else expect(res.status).toBe(200);
+    }
+    expect(limited?.status).toBe(429);
+    expect(limited?.headers.get("retry-after")).toBeTruthy();
+    expect(limited?.headers.get("cache-control")).toContain("no-store");
+    expect(await limited!.text()).not.toContain(flood);
+    expect((await get("?token=someone-else")).status).toBe(200);
   });
 
   it("reports anonymous, forbidden and unavailable states without exposing errors", async () => {
