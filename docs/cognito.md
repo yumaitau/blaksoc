@@ -12,8 +12,10 @@ Deployed on 2026-10-13: stack `blaksoc-auth` (`CREATE_COMPLETE`), from change se
 `7gaoc3sprutcum9vvej7kpp13d`; domain:
 `blaksoc-959038055523.auth.ap-southeast-2.amazoncognito.com`.
 Application release `d2191bed221c` deployed on 2026-10-13 as Helm revision 20, including the wallboard
-and customisable dashboard. The two approved existing staff accounts received Cognito email
-invitations. Web/worker readiness, public Postgres/Redis health, and a fresh HTTP redirect chain to
+and customisable dashboard. The two approved existing staff accounts were initially sent Cognito
+temporary-password invitations. The owner then requested that invitations contain no passwords;
+those passwords were invalidated and replaced with password-setup codes. Web/worker readiness,
+public Postgres/Redis health, and a fresh HTTP redirect chain to
 the Cognito password form passed; no Cloudflare prompt is in that chain. Initial password setup,
 authenticator enrollment and the authenticated browser round trip still require the invited users.
 
@@ -28,10 +30,20 @@ Use AWS account `959038055523`, profile `homelab-admin`, region `ap-southeast-2`
 3. Set `COGNITO_REGION=ap-southeast-2` and `COGNITO_ALLOWED_EMAIL_DOMAINS=yumait.com.au`. The domain is
    a hostname without `https://` or a trailing slash. Add customer email domains explicitly when they
    should sign in. Remove any retired `COGNITO_IDENTITY_PROVIDER` setting from local overrides.
-4. Create the approved staff accounts through Cognito administration and send invitations by email.
-   Let Cognito generate temporary passwords; do not print, export, copy into scripts, or set permanent
-   passwords for users. Users choose their own password and enroll their authenticator at first login.
-   Temporary passwords expire after one day; resend an invitation if necessary.
+4. Use password-setup codes for approved staff; **never send or resend temporary passwords**.
+   Create accounts with `AdminCreateUser` and `MessageAction=SUPPRESS` so Cognito's default
+   temporary-password invitation is not delivered. Do not use the console's send-invitation option.
+   Verify the email against the existing verified identity as described below.
+5. Cognito rejects `AdminResetUserPassword` while a user is in `FORCE_CHANGE_PASSWORD`. For a new
+   pending account only, use `AdminSetUserPassword(Permanent=true)` with a cryptographically random
+   bootstrap value generated and held only in SDK process memory, then immediately call
+   `AdminResetUserPassword`. This invalidates the bootstrap value, moves the account to
+   `RESET_REQUIRED`, and emails a code. Never print, persist, send, or place the bootstrap value in
+   command-line arguments. Do not overwrite a confirmed user's chosen password during onboarding.
+   If reset delivery fails after confirmation, retry the reset operation, not account creation.
+6. Users open `https://soc.yumait.au/login`, select **Forgot your password?**, enter their email,
+   and use the newest emailed code to choose their own password. Requesting a new code replaces the
+   earlier setup code. They then sign in with email/password and enroll their authenticator.
 
 Only the native `COGNITO` provider and password first factor are enabled. The template includes managed
 login branding, required TOTP, a 16-character password policy, email password recovery, short ID/access
@@ -43,7 +55,7 @@ creation does not automatically grant blakSOC roles.
 blakSOC requires `email_verified=true` in the Cognito ID token. An administrator-created account being
 `CONFIRMED` does not, by itself, prove that its email is verified. For migrating known staff, verify the
 approved address against the existing verified blakSOC identity before recording it as verified in
-Cognito; deliver the generated temporary password only to that address. Do not blanket-verify arbitrary
+Cognito; deliver the password-setup code only to that address. Do not blanket-verify arbitrary
 addresses or weaken the callback's verification check. New identities need verified email ownership
 before admission as well. Password recovery also requires a verified email address.
 
@@ -78,5 +90,6 @@ ID-token verification on the code exchange. A real Cognito browser round trip re
 
 References: [Better Auth generic OAuth](https://better-auth.com/docs/plugins/generic-oauth),
 [Cognito account creation](https://docs.aws.amazon.com/cognito/latest/developerguide/how-to-create-user-accounts.html),
+[Admin password reset](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminResetUserPassword.html),
 [Cognito password recovery](https://docs.aws.amazon.com/cognito/latest/developerguide/managing-users-passwords.html),
 [Cognito logout](https://docs.aws.amazon.com/cognito/latest/developerguide/logout-endpoint.html).

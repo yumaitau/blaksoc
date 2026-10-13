@@ -1,5 +1,9 @@
 # Production deployment from GitHub
 
+Bootstrap completed on 2026-10-13. The first push-driven release, `f0d860a`, passed all gates,
+published all three images through OIDC, and completed the production Helm upgrade and health check:
+[successful deployment run](https://github.com/yumaitau/blaksoc/actions/runs/38345385919).
+
 Pushing to `main` starts `ci`, `security` and `codeql`. When `ci` completes successfully,
 `.github/workflows/deploy.yml` checks all three workflows on that exact commit. It accepts only
 push runs from this repository's `main` branch; PR, fork and scheduled checks cannot authorize a
@@ -62,6 +66,9 @@ Local checks: `actionlint .github/workflows/deploy.yml .github/workflows/ci.yml`
 `python3 -m unittest discover -s tests/deploy -v`, CloudFormation validation and change-set review,
 and Kubernetes server-side RBAC dry run. The first successful GitHub deployment is the integration
 check for OIDC trust, ECR permissions, cluster access and production readiness.
+Bootstrap also passed IAM Access Analyzer validation and positive/negative permission checks.
+Local `cfn-lint` and `cfn-guard` were unavailable; AWS template validation and change-set validation
+were used, followed by review of the live roles and access entry.
 
 References: [GitHub OIDC on AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws),
 [ECR publishing permissions](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-push-iam.html),
