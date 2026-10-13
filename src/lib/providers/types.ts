@@ -22,6 +22,9 @@ export type NormalisedAlert = {
   hostname: string | null;
   userName: string | null;
   attackTechniques: string[];
+  /** ISM controls and Essential Eight strategies the detector mapped, in its own vocabulary; ingest normalises them. */
+  ismControls?: string[];
+  e8Strategies?: string[];
   /** Provider selector value used to route the alert to a tenant (e.g. Wazuh agent group). */
   routingKeys: string[];
   raw: Record<string, unknown>;

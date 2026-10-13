@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import type { IntelMatch } from "@/db/schema";
 import { HERMES_NOTE_TITLE, HermesBadge, HermesBanner } from "@/components/soc/hermes-badge";
 import { AttackChips, IntelVerdict, RefLink, RiskFactors, RiskScore, SeverityBadge, StatusBadge } from "@/components/soc/indicators";
+import { ComplianceRefsCard } from "@/components/soc/compliance-refs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,6 +140,7 @@ export default async function AlertDetail({ params }: { params: Promise<{ id: st
       {canTriage ? <DetectionContext alerts={[{ ...a, assetName: asset?.name ?? null, wazuhUrl: data.wazuhUrl, contributing: data.contributing }]} /> : a.description ? <p className="max-w-4xl whitespace-pre-wrap text-sm text-muted">{a.description}</p> : null}
 
       {provenance ? <ProvenanceCard p={provenance} /> : null}
+      <ComplianceRefsCard ism={a.ismControls} e8={a.e8Strategies} source={a.source} />
 
       <div className="grid gap-5 xl:grid-cols-3">
         <div className="space-y-5 xl:col-span-2">

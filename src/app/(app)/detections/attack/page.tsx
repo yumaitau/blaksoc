@@ -30,9 +30,11 @@ const TACTICS = [
 ] as const;
 
 const observed = (c: CoverageCell) => c.alerts + c.incidents > 0;
-const coverage = (c: CoverageCell) => (c.deployed > 0 ? "deployed" : c.rules > 0 ? "rules" : "none");
+const coverage = (c: CoverageCell) => (c.deployed > 0 ? "deployed" : c.external > 0 ? "external" : c.rules > 0 ? "rules" : "none");
+const detected = (c: CoverageCell) => c.deployed > 0 || c.external > 0;
 const TONE = {
   deployed: "border-ok/50 bg-ok/12",
+  external: "border-sev-low/50 bg-sev-low/12",
   rules: "border-sev-medium/50 bg-sev-medium/10",
   none: "border-border bg-surface-2/40",
 } as const;
@@ -51,8 +53,9 @@ export default async function AttackCoveragePage({ searchParams }: { searchParam
 
   // A parent's counts include its sub-techniques; score observed parents only when no sub-technique explains them.
   const observedLeaves = cells.filter((c) => observed(c) && !cells.some((s) => s.parentId === c.id && observed(s)));
-  const covered = observedLeaves.filter((c) => c.deployed > 0);
-  const gaps = observedLeaves.filter((c) => c.deployed === 0).sort((a, b) => b.incidents - a.incidents || b.alerts - a.alerts);
+  const covered = observedLeaves.filter(detected);
+  const byWedgetail = covered.filter((c) => c.deployed === 0).length;
+  const gaps = observedLeaves.filter((c) => !detected(c)).sort((a, b) => b.incidents - a.incidents || b.alerts - a.alerts);
   const pct = observedLeaves.length ? Math.round((covered.length / observedLeaves.length) * 100) : null;
   const scope = ws.tenant ? ws.tenant.name : "all customers";
 
@@ -67,14 +70,14 @@ export default async function AttackCoveragePage({ searchParams }: { searchParam
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <Card>
-          <CardHeader><CardTitle>Observed techniques with deployed detections</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Observed techniques with a detection</CardTitle></CardHeader>
           <CardContent>
             {pct == null ? (
               <p className="text-sm text-muted">No ATT&CK-mapped activity observed in {scope}.</p>
             ) : (
               <>
                 <div className={cn("num text-3xl font-semibold", pct >= 80 ? "text-ok" : pct >= 50 ? "text-sev-medium" : "text-sev-critical")}>{pct}%</div>
-                <p className="mt-1 text-sm text-muted">{covered.length} of {observedLeaves.length} observed techniques have an active deployment in {scope}.</p>
+                <p className="mt-1 text-sm text-muted">{covered.length} of {observedLeaves.length} observed techniques are detected in {scope}: {covered.length - byWedgetail} by deployed blakSOC rules{byWedgetail ? `, ${byWedgetail} by Wedgetail only` : ""}.</p>
               </>
             )}
             <Legend />
@@ -82,11 +85,11 @@ export default async function AttackCoveragePage({ searchParams }: { searchParam
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Observed but not deployed</CardTitle>
+            <CardTitle>Observed without a detection</CardTitle>
             <span className="text-xs text-muted">{gaps.length} gap{gaps.length === 1 ? "" : "s"}, by incidents then alerts</span>
           </CardHeader>
           {gaps.length === 0 ? (
-            <div className="p-4 text-sm text-muted">{pct == null ? "Nothing observed yet." : "Every observed technique has a deployed detection."}</div>
+            <div className="p-4 text-sm text-muted">{pct == null ? "Nothing observed yet." : "Every observed technique has a deployed or Wedgetail detection."}</div>
           ) : (
             <div className="grid max-h-56 divide-y divide-border overflow-y-auto">
               {gaps.map((g) => (
@@ -156,9 +159,10 @@ export default async function AttackCoveragePage({ searchParams }: { searchParam
                   {selected.parentId ? <Link href={`/detections/attack?t=${selected.parentId}`} className="text-xs text-accent hover:underline">Parent: {selected.parentId} {byId.get(selected.parentId)?.name}</Link> : null}
                   <dl className="grid grid-cols-2 gap-2 text-sm">
                     <Stat label="Rules (enabled)" value={selected.rules} />
-                    <Stat label="Active deployments" value={selected.deployed} tone={selected.deployed ? "ok" : observed(selected) ? "danger" : undefined} />
+                    <Stat label="Active deployments" value={selected.deployed} tone={selected.deployed ? "ok" : observed(selected) && !detected(selected) ? "danger" : undefined} />
                     <Stat label="Alerts (90 days)" value={selected.alerts} href={`/soc/alerts?technique=${selected.id}`} />
                     <Stat label="Incidents" value={selected.incidents} href="/soc/incidents" />
+                    {selected.external ? <Stat label="Wedgetail (90 days)" value={selected.external} tone="ok" href={`/soc/alerts?technique=${selected.id}&days=90`} /> : null}
                   </dl>
                   <div>
                     <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-faint">Detection rules</h4>
@@ -194,8 +198,8 @@ export default async function AttackCoveragePage({ searchParams }: { searchParam
 
 function Cell({ cell, selected, sub }: { cell: CoverageCell; selected: boolean; sub?: boolean }) {
   const cov = coverage(cell);
-  const gap = cov !== "deployed" && observed(cell);
-  const status = cov === "deployed" ? "deployed" : cov === "rules" ? "rules available, not deployed" : "no detection";
+  const gap = !detected(cell) && observed(cell);
+  const status = cov === "deployed" ? "deployed" : cov === "external" ? "detected by Wedgetail" : cov === "rules" ? "rules available, not deployed" : "no detection";
   return (
     <Link
       id={`tech-${cell.id}`}
@@ -246,9 +250,10 @@ function Legend() {
   return (
     <ul className="mt-4 space-y-1.5 border-t border-border pt-3 text-xs text-muted" aria-label="Legend">
       <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.deployed)} />Deployed detection</li>
+      <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.external)} />Detected by Wedgetail (its own rules)</li>
       <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.rules)} />Rule available, not deployed</li>
       <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.none)} />No detection</li>
-      <li className="flex items-center gap-2"><span className="size-3 rounded-sm border border-border ring-1 ring-sev-critical/60" />Observed without a deployed detection</li>
+      <li className="flex items-center gap-2"><span className="size-3 rounded-sm border border-border ring-1 ring-sev-critical/60" />Observed without a detection</li>
       <li className="flex items-center gap-2"><span className="num rounded bg-sev-high/15 px-1 text-[10px] font-semibold text-sev-high">3A</span>alerts<span className="num ml-2 rounded bg-danger/15 px-1 text-[10px] font-semibold text-danger">1I</span>incidents</li>
     </ul>
   );

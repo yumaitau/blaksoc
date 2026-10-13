@@ -2,6 +2,7 @@ import Link from "next/link";
 import { HERMES_NOTE_TITLE, HermesBadge, HermesBanner } from "@/components/soc/hermes-badge";
 import { AttackChips, EmptyState, IntelVerdict, PageHeader, RiskScore, SeverityBadge, StatusBadge } from "@/components/soc/indicators";
 import { Button } from "@/components/ui/button";
+import { STRATEGIES } from "@/lib/essential-eight/requirements";
 import { Card } from "@/components/ui/card";
 import { Input, Label, Select } from "@/components/ui/input";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
@@ -19,7 +20,7 @@ import { SaveView } from "./save-view";
 
 export const metadata = { title: "Alert queue" };
 
-const FILTER_KEYS = ["lane", "tenant", "status", "severity", "assignee", "intel", "intelLabel", "q", "technique", "category", "minRisk", "hermes", "hermesAction", "sort"] as const;
+const FILTER_KEYS = ["lane", "tenant", "status", "severity", "assignee", "intel", "intelLabel", "q", "technique", "ism", "e8", "days", "category", "minRisk", "hermes", "hermesAction", "sort"] as const;
 const PAGE_SIZE = 50;
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -68,6 +69,9 @@ export default async function AlertQueue({ searchParams }: { searchParams: Promi
     intelLabel: filters.intelLabel,
     q: filters.q,
     technique: filters.technique,
+    ism: filters.ism,
+    e8: filters.e8,
+    sinceHours: Number(filters.days) > 0 && Number(filters.days) <= 365 ? Number(filters.days) * 24 : undefined,
     category: filters.category,
     minRisk: Number.isFinite(minRisk) ? minRisk : undefined,
     hermes: parseHermesFilter(filters.hermes),
@@ -309,6 +313,23 @@ function FilterBar({ filters, customers }: { filters: Record<string, string>; cu
       <div>
         <Label htmlFor="f-technique">ATT&CK technique</Label>
         <Input id="f-technique" name="technique" defaultValue={filters.technique} placeholder="T1486" className="font-mono" />
+      </div>
+      <div>
+        <Label htmlFor="f-days">Occurred</Label>
+        <Select id="f-days" name="days" defaultValue={filters.days ?? ""}>
+          {withCurrent([["", "Any time"], ["1", "Last 24 hours"], ["7", "Last 7 days"], ["30", "Last 30 days"], ["90", "Last 90 days"]], filters.days).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </Select>
+      </div>
+      <div>
+        <Label htmlFor="f-ism">ISM control</Label>
+        <Input id="f-ism" name="ism" defaultValue={filters.ism} placeholder="ISM-1509" className="font-mono" />
+      </div>
+      <div>
+        <Label htmlFor="f-e8">Essential Eight</Label>
+        <Select id="f-e8" name="e8" defaultValue={filters.e8 ?? ""}>
+          <option value="">Any</option>
+          {STRATEGIES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </Select>
       </div>
       <div>
         <Label htmlFor="f-category">Category</Label>

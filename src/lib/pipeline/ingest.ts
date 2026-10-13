@@ -5,6 +5,7 @@ import {
 } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
+import { e8Strategies, ismControls } from "@/lib/compliance/refs";
 import { publish } from "@/lib/events";
 import { recordAlertGraph } from "@/lib/graph/store";
 import { filterByEntitlement, lookupWithCache, summariseIntel } from "@/lib/intel/enrich";
@@ -149,6 +150,8 @@ export async function ingestAlert(opts: {
       assetId: asset?.id ?? null,
       userName: alert.userName,
       attackTechniques: [...new Set([...alert.attackTechniques, ...intelMatchesFound.flatMap((m) => m.attackPatterns.map((a) => a.id).filter((x): x is string => !!x))])],
+      ismControls: ismControls(alert.ismControls),
+      e8Strategies: e8Strategies(alert.e8Strategies),
       intel,
       intelVerdict: intel?.verdict ?? "unchecked",
       raw: { ...alert.raw, ...(dupe?.raw && typeof dupe.raw === "object" && "wedgetailSync" in dupe.raw ? { wedgetailSync: dupe.raw.wedgetailSync } : {}) },

@@ -253,6 +253,13 @@
       "when": 1790629000000,
       "tag": "0036_dashboard_layouts",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790630000000,
+      "tag": "0037_alert_compliance_refs",
+      "breakpoints": true
     }
   ]
 }

@@ -340,6 +340,10 @@ export const alerts = pgTable(
     assetId: uuid("asset_id").references(() => assets.id, { onDelete: "set null" }),
     userName: text("user_name"),
     attackTechniques: text("attack_techniques").array().notNull().default([]),
+    /** ISM control ids (ISM-1509) the detector mapped this alert to. See src/lib/compliance/refs.ts. */
+    ismControls: text("ism_controls").array().notNull().default([]),
+    /** Essential Eight strategy ids (blakSOC's StrategyId), normalised from the detector's vocabulary. */
+    e8Strategies: text("e8_strategies").array().notNull().default([]),
     intel: jsonb("intel").$type<IntelContext>(),
     intelVerdict: text("intel_verdict").notNull().default("unchecked"),
     incidentId: uuid("incident_id").references(() => incidents.id, { onDelete: "set null" }),

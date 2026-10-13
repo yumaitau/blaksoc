@@ -55,14 +55,15 @@ export function normaliseWedgetail(event: Exclude<WedgetailEvent, WedgetailUpdat
   const mitre = generic ? event.alert.mitre : event.alert.mitre ?? event.mitre ?? (event.alert.classification?.match(/^T\d{4}(?:\.\d{3})?$/) ? [event.alert.classification] : []);
   const title = generic ? event.alert.ruleTitle : event.alert.title;
   const occurredAt = generic ? event.alert.firstSeen : event.alert.detectedAt;
-  // Keep IPs, ARNs and compliance references in raw for extraction, evidence and future cloud mappings.
+  const ism = generic ? event.alert.ism : event.alert.ism ?? event.ism ?? [];
+  const essentialEight = generic ? event.alert.essentialEight : event.alert.essentialEight ?? event.essentialEight ?? [];
+  // Keep IPs, ARNs and compliance references in raw too, for extraction and evidence.
   return {
     externalId: a.id, ruleId: a.ruleId, title, description: a.description ?? null, severity: a.severity,
     siemSeverity: null, category: "aws", occurredAt: new Date(occurredAt), assetExternalId: first("resource"),
-    hostname: first("host"), userName: first("principal"), attackTechniques: mitre, routingKeys: [],
+    hostname: first("host"), userName: first("principal"), attackTechniques: mitre, ismControls: ism, e8Strategies: essentialEight, routingKeys: [],
     raw: { schema: "wedgetail.alert.v1", ...a, entities: list, sourceIp: first("ip"), principalArn: first("principal"), resourceArn: first("resource"), mitre,
-      ism: generic ? event.alert.ism : event.alert.ism ?? event.ism ?? [],
-      essentialEight: generic ? event.alert.essentialEight : event.alert.essentialEight ?? event.essentialEight ?? [],
+      ism, essentialEight,
       url: generic ? event.url : event.alert.url },
   };
 }

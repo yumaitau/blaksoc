@@ -2,6 +2,7 @@ import { customerMatchFilter } from "@/lib/intel/match-filter";
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { alertObservables, alerts, assets, incidents, integrations, intelMatches, observables, patternAnnotations, responseActions, savedViews, tenants, tuningActions, user } from "@/db/schema";
+import { e8Strategy, ismControl } from "@/lib/compliance/refs";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { publish } from "@/lib/events";
@@ -23,6 +24,10 @@ export type AlertFilters = {
   intelLabel?: string;
   q?: string;
   technique?: string;
+  /** ISM control id, e.g. ISM-1509. */
+  ism?: string;
+  /** Essential Eight strategy id, e.g. mfa. */
+  e8?: string;
   category?: string;
   minRisk?: number;
   sinceHours?: number;
@@ -86,6 +91,8 @@ export async function listAlerts(ctx: AccessContext, f: AlertFilters = {}) {
       }
       if (f.q) where.push(alertTextMatch(f.q));
       if (f.technique) where.push(sql`exists (select 1 from unnest(${alerts.attackTechniques}) t where t like ${`${f.technique}%`})`);
+      if (f.ism) where.push(sql`${ismControl(f.ism) ?? f.ism} = any(${alerts.ismControls})`);
+      if (f.e8) where.push(sql`${e8Strategy(f.e8) ?? f.e8} = any(${alerts.e8Strategies})`);
       if (f.category) where.push(eq(alerts.category, f.category));
       if (f.minRisk != null) where.push(gte(alerts.riskScore, f.minRisk));
       if (f.lane) where.push(eq(alerts.lane, f.lane));

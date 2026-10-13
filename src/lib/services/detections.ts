@@ -187,7 +187,12 @@ export type CoverageCell = {
   deployed: number;
   alerts: number;
   incidents: number;
+  /** Alerts from external detectors that run their own rules (Wedgetail) in the last 90 days: the technique is detected there. */
+  external: number;
 };
+
+/** Alert sources whose detections come from their own rule set rather than blakSOC-deployed rules. */
+const EXTERNAL_DETECTORS = ["wedgetail"];
 
 /** ATT&CK coverage: detections available/deployed vs activity observed, per technique. */
 export async function attackCoverage(ctx: AccessContext, tenantIds?: string[]): Promise<CoverageCell[]> {
@@ -199,6 +204,7 @@ export async function attackCoverage(ctx: AccessContext, tenantIds?: string[]): 
       const rules = await tx.select({ techniques: sigmaRules.attackTechniques, tenantId: sigmaRules.tenantId, enabled: sigmaRules.enabled }).from(sigmaRules).where(or(isNull(sigmaRules.tenantId), inArray(sigmaRules.tenantId, scopeTenants)));
       const deployed = await tx.select({ techniques: sigmaRules.attackTechniques }).from(detectionDeployments).innerJoin(sigmaRules, eq(sigmaRules.id, detectionDeployments.ruleId)).where(and(inArray(detectionDeployments.tenantId, scopeTenants), eq(detectionDeployments.status, "active")));
       const alertRows = await tx.select({ t: sql<string>`unnest(${alerts.attackTechniques})`, n: sql<number>`count(*)::int` }).from(alerts).where(and(inArray(alerts.tenantId, scopeTenants), sql`${alerts.occurredAt} > now() - interval '90 days'`)).groupBy(sql`1`);
+      const externalRows = await tx.select({ t: sql<string>`unnest(${alerts.attackTechniques})`, n: sql<number>`count(*)::int` }).from(alerts).where(and(inArray(alerts.tenantId, scopeTenants), inArray(alerts.source, EXTERNAL_DETECTORS), sql`${alerts.occurredAt} > now() - interval '90 days'`)).groupBy(sql`1`);
       const incRows = await tx.select({ t: sql<string>`unnest(${incidents.attackTechniques})`, n: sql<number>`count(*)::int` }).from(incidents).where(inArray(incidents.tenantId, scopeTenants)).groupBy(sql`1`);
 
       const count = (list: string[][], id: string) => list.filter((ts) => ts.some((t) => t === id || t.startsWith(`${id}.`))).length;
@@ -207,7 +213,7 @@ export async function attackCoverage(ctx: AccessContext, tenantIds?: string[]): 
       const sumBy = (rows: { t: string; n: number }[], id: string) => rows.filter((r) => r.t === id || r.t.startsWith(`${id}.`)).reduce((s, r) => s + r.n, 0);
       return techniques.map((t) => ({
         id: t.id, name: t.name, tactics: t.tactics, parentId: t.parentId,
-        rules: count(ruleTech, t.id), deployed: count(depTech, t.id), alerts: sumBy(alertRows, t.id), incidents: sumBy(incRows, t.id),
+        rules: count(ruleTech, t.id), deployed: count(depTech, t.id), alerts: sumBy(alertRows, t.id), incidents: sumBy(incRows, t.id), external: sumBy(externalRows, t.id),
       }));
     },
     tenantIds,

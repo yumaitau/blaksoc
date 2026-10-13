@@ -48,9 +48,27 @@ The receiver accepts both upstream shapes:
 - Summary: `{ "schema": "wedgetail.alert.v1", "alert": { ... }, "entities": { ... } }` as documented
   in Wedgetail's `docs/integrations/kelpie.md`. Title, description, severity, ruleId and detectedAt
   map directly. Classification carries the first ATT&CK technique; optional `mitre` arrays
-  preserve additional techniques. Compliance references remain in description/raw; optional
-  `ism` and `essentialEight` arrays are also retained. Summary deliveries must use the **Wedgetail
+  preserve additional techniques. Optional `ism` and
+  `essentialEight` arrays are stored as below. Summary deliveries must use the **Wedgetail
   signature headers**, rather than Kelpie's intake token.
+
+## ATT&CK, ISM and Essential Eight
+
+`mitre` becomes the alert's ATT&CK techniques. `ism` (`ISM-1509`) and `essentialEight` (Wedgetail strategy keys
+such as `restrict_admin_privileges`, with or without a `:ML2` suffix) are normalised into the alert's
+`ism_controls` and `e8_strategies` columns using blakSOC's Essential Eight strategy ids
+(`src/lib/compliance/refs.ts`); unknown values are dropped. The raw arrays stay in raw evidence.
+
+- The alert page shows a **Compliance references** card with ASD's ISM control text (bundled snapshot in
+  `src/lib/compliance/ism-catalogue.ts`, CC BY 4.0).
+- The alert queue filters on **ISM control**, **Essential Eight** and **Occurred** window.
+- **Detect & respond → ISM & Essential Eight** (`/soc/compliance`) counts mapped detections per strategy and
+  control over 7, 30 or 90 days, beside each customer's latest Essential Eight assessment.
+- **ATT&CK coverage** counts a technique Wedgetail detected in the last 90 days as detected (its own rules), so
+  it is no longer listed as a gap.
+
+These are per-alert references. Wedgetail's own ISM status (met / partly met / gap), Essential Eight evidence
+assessment and rule-catalogue coverage are only available from its authenticated API and are not pulled yet.
 
 Entities map host to hostname, principal to userName/principalArn, IP to sourceIp and resource
 to assetExternalId/resourceArn. IPs are extracted for enrichment; ARNs and compliance references
