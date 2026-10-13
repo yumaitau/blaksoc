@@ -4,7 +4,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
-import { twoFactor } from "better-auth/plugins";
+import { genericOAuth, twoFactor } from "better-auth/plugins";
 import { and, eq, isNull } from "drizzle-orm";
 import { db } from "@/db/client";
 import { withScope } from "@/db/scope";
@@ -15,35 +15,12 @@ import { parseTrustedProxies } from "@/lib/net/client-ip";
 import { logger } from "@/lib/obs/log";
 import { redis } from "@/lib/redis";
 import { sharedRateLimitStore } from "./rate-limit";
+import { cognitoProvider, cognitoIdentityRejection, legacySignInBlocked } from "./cognito";
 import { ssoIdentityRejection } from "./sso-policy";
 
 const e = env();
 
-const microsoft =
-  e.ENTRA_CLIENT_ID && e.ENTRA_CLIENT_SECRET
-    ? {
-        microsoft: {
-          clientId: e.ENTRA_CLIENT_ID,
-          clientSecret: e.ENTRA_CLIENT_SECRET,
-          // Single-tenant: only the Yuma IT (or dedicated customer) Entra directory.
-          tenantId: e.ENTRA_TENANT_ID ?? "organizations",
-          prompt: "select_account" as const,
-        },
-      }
-    : {};
-
-const google =
-  e.GOOGLE_CLIENT_ID && e.GOOGLE_CLIENT_SECRET && e.GOOGLE_HOSTED_DOMAIN
-    ? {
-        google: {
-          clientId: e.GOOGLE_CLIENT_ID,
-          clientSecret: e.GOOGLE_CLIENT_SECRET,
-          // Staff Workspace only: sent as the `hd` hint and checked against the verified ID token.
-          hd: e.GOOGLE_HOSTED_DOMAIN,
-          prompt: "select_account" as const,
-        },
-      }
-    : {};
+const cognito = cognitoProvider(e);
 
 const appHost = new URL(e.APP_URL).hostname;
 
@@ -76,16 +53,19 @@ export const auth = betterAuth({
     },
   }),
   user: {
+    validateUserInfo: ({ user, source }) => {
+      if (source.oauth?.providerId !== "cognito") return;
+      const error = cognitoIdentityRejection(user, e.COGNITO_ALLOWED_EMAIL_DOMAINS, source.oauth.profile);
+      if (error) return { error, errorDescription: "This identity cannot access blakSOC." };
+    },
     additionalFields: {
       isBreakGlass: { type: "boolean", input: false, defaultValue: false },
       disabled: { type: "boolean", input: false, defaultValue: false },
     },
   },
-  // Password sign-in exists only for break-glass administrators; nobody self-registers.
+  // Retained for local demo/test fixtures; the production hook blocks legacy credentials.
   emailAndPassword: { enabled: true, disableSignUp: true, minPasswordLength: 16 },
-  socialProviders: { ...microsoft, ...google },
-  // freshAge: adding a passkey needs a sign-in from the last 15 minutes, so a stolen session cookie
-  // cannot be turned into a credential that outlives it.
+  // Keep existing session lifetimes and freshness requirements during the provider migration.
   session: { expiresIn: 60 * 60 * 12, updateAge: 60 * 60, freshAge: 60 * 15 },
   // Counted in Redis so the limit holds across web replicas (see rate-limit.ts).
   rateLimit: { enabled: true, window: 60, max: 30, customStorage: sharedRateLimitStore(redis, (err) => logger.warn("auth rate limit fell back to per-process counting", { err })) },
@@ -96,6 +76,10 @@ export const auth = betterAuth({
   },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
+      // Local demo/test fixtures retain legacy auth; production signs in only through Cognito.
+      if (!(e.NODE_ENV !== "production" && e.DEMO_MODE === "true") && legacySignInBlocked(ctx.path, ctx.params?.id)) {
+        throw new APIError("FORBIDDEN", { message: "Sign in through Amazon Cognito." });
+      }
       if (ctx.path !== "/sign-in/email") return;
       const email = String((ctx.body as { email?: string } | undefined)?.email ?? "").toLowerCase();
       const [u] = await db().select({ isBreakGlass: schema.user.isBreakGlass }).from(schema.user).where(eq(schema.user.email, email));
@@ -126,6 +110,7 @@ export const auth = betterAuth({
     },
   },
   plugins: [
+    genericOAuth({ config: cognito ? [cognito] : [] }),
     twoFactor({ issuer: "blakSOC" }),
     passkey({ rpID: e.PASSKEY_RP_ID ?? appHost, rpName: "blakSOC", origin: e.APP_URL }),
     sso({

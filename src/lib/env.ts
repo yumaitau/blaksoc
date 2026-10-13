@@ -13,16 +13,16 @@ const schema = z.object({
   BLAKSOC_SYSTEM_DB_PASSWORD: z.string().default("blaksoc_system"),
   REDIS_URL: z.string().default("redis://localhost:6379"),
   BETTER_AUTH_SECRET: z.string().min(32).default("dev-only-secret-change-me-dev-only-secret"),
+  /** Cognito managed login. Domain is a hostname, without a scheme or path. */
+  COGNITO_REGION: z.string().default("ap-southeast-2"),
+  COGNITO_USER_POOL_ID: z.string().optional(),
+  COGNITO_CLIENT_ID: z.string().optional(),
+  COGNITO_CLIENT_SECRET: z.string().optional(),
+  COGNITO_DOMAIN: z.string().optional(),
+  /** Exact email domains admitted by Cognito sign-in; no implicit subdomains. */
+  COGNITO_ALLOWED_EMAIL_DOMAINS: z.string().default("yumait.com.au"),
   /** 32-byte key, base64. Encrypts integration secrets at rest. */
   BLAKSOC_ENCRYPTION_KEY: z.string().default("ZGV2LW9ubHkta2V5LWNoYW5nZS1tZS0zMi1ieXRlcyE="),
-  ENTRA_TENANT_ID: z.string().optional(),
-  ENTRA_CLIENT_ID: z.string().optional(),
-  ENTRA_CLIENT_SECRET: z.string().optional(),
-  /** Yuma IT staff Google Workspace OAuth client. Requires GOOGLE_HOSTED_DOMAIN. */
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
-  /** Workspace domain whose `hd` claim staff Google sign-ins must carry. */
-  GOOGLE_HOSTED_DOMAIN: z.string().optional(),
   /** WebAuthn relying party id. Defaults to the APP_URL hostname. */
   PASSKEY_RP_ID: z.string().optional(),
   /** Australian Business Register web services GUID. Unset: setup checks the ATO example ABN only. */
@@ -56,18 +56,11 @@ const schema = z.object({
 
 export type Env = z.infer<typeof schema>;
 
-/** Google accepts any personal account unless sign-in is pinned to one Workspace domain. */
-function checkGoogle(e: Env) {
-  if (e.GOOGLE_CLIENT_ID && !e.GOOGLE_HOSTED_DOMAIN) throw new Error("GOOGLE_HOSTED_DOMAIN must be set when GOOGLE_CLIENT_ID is set");
-  if (e.GOOGLE_HOSTED_DOMAIN === "*") throw new Error("GOOGLE_HOSTED_DOMAIN must name one Workspace domain, not *");
-}
-
 let cached: Env | undefined;
 
 export function env(): Env {
   if (!cached) {
     cached = schema.parse(process.env);
-    checkGoogle(cached);
     // `next build` evaluates route modules to collect page data. Secrets exist only at runtime.
     if (cached.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
       // Development defaults for these would connect production to the wrong database or key.

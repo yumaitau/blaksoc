@@ -2,14 +2,39 @@
 
 ## Identity
 
-| Path | Who | Notes |
-|---|---|---|
-| Microsoft Entra ID (OIDC) | Yuma IT staff | `ENTRA_*` env; single-tenant app registration. MFA enforced by Entra Conditional Access. |
-| Google Workspace (OIDC) | Yuma IT staff | `GOOGLE_*` env. `GOOGLE_HOSTED_DOMAIN` is required with the client id; it is sent as the `hd` hint and checked against the verified ID token, so personal Google accounts are refused. |
-| Organisation SSO (OIDC, SAML or Google Workspace) | Customer users, government/enterprise IdPs | Registered per customer by platform admins only (`providersLimit` is 0 for everyone else). The SSO `resolveUser` hook refuses an identity whose email is outside the provider's domains, and a Google identity whose `hd` claim is not one of them (`src/lib/auth/sso-policy.ts`). Users arrive with **no role** until one is assigned. |
-| Passkey (WebAuthn) | Any user with access | Added at `/account/security` from a session no older than 15 minutes (`session.freshAge`), so a stolen cookie cannot mint a lasting credential. Adds and deletions are audited (`auth.passkey.add`, `auth.passkey.delete`). A passkey does not go back to the IdP: disable the blakSOC user to stop it working until SCIM deprovisioning exists (#102). |
-| Password | Break-glass administrators only | Sign-in hook rejects password auth for any non-break-glass user. TOTP enrolment is forced before any page loads (`BREAK_GLASS_REQUIRE_MFA`). Sessions show a red banner. |
-| Demo personas | `DEMO_MODE=true` only | Never enable in production. |
+Browser sign-in goes directly to Amazon Cognito using the authorization-code flow with PKCE.
+Better Auth validates Cognito's signed ID token against the configured pool issuer and client ID,
+then establishes a database-backed HttpOnly app session. Email/password credentials, password resets
+and required TOTP MFA belong to Cognito; there is no blakSOC login form or Cloudflare dependency in
+this flow.
+
+Only verified email addresses in `COGNITO_ALLOWED_EMAIL_DOMAINS` are admitted (exact domains, no
+implicit subdomains). Existing **verified** local users link by email without changing their ID or
+roles. New users have no roles. Disabled local users cannot create or use sessions. Never relax local
+email verification to work around a migration failure; investigate the identity first.
+
+Legacy password, passkey and SSO sign-in endpoints/callbacks are rejected outside non-production demo
+mode. Existing session rows are retained during rollout and expire normally; remove them during the
+cutover if immediate reauthentication is required. The app session lasts up to 12 hours; disabling an
+identity in Cognito alone does not invalidate an already issued app session. Disable the blakSOC user
+as well for immediate revocation. Logout clears the app session and redirects through Cognito's
+`/logout` endpoint to clear managed login. Only the native Cognito directory is enabled on the app client.
+
+Local legacy demo fixtures remain available to integration tests with `DEMO_MODE=true` outside
+production. [Cognito provisioning and cutover](cognito.md) documents production configuration.
+
+## Threat-intel content
+
+Feed descriptions and advisory summaries are sanitized on the server at the rendering boundary with
+`sanitize-html`, including previously stored content. Only basic formatting, tables and explicit
+HTTP/HTTPS links are allowed. Scripts, event handlers, styling, forms, images, SVG/MathML, embedded
+content and local/protocol-relative links are removed. External links open with
+`noopener noreferrer nofollow`. The existing nonce-based CSP remains in place.
+
+The customer-matches view excludes generic `github.com`/`www.github.com` host indicators and bare
+HTTP/HTTPS root URLs before its result limit. Specific repository/file URLs, lookalike domains and
+other evidence remain available. This display filter does not erase historical match evidence or
+change alert verdicts.
 
 ## Authorisation
 
@@ -184,5 +209,5 @@ Threats, trust boundaries and open risks: [`threat-model.md`](threat-model.md). 
 
 - Set strong `BETTER_AUTH_SECRET`, `BLAKSOC_ENCRYPTION_KEY`, DB/Redis passwords; rotate via your secret manager.
 - TLS everywhere; Wazuh/OpenCTI CAs can be pinned per integration (`caPem`) instead of disabling verification.
-- Keep `DEMO_MODE=false`. Store break-glass credentials + TOTP backup codes sealed and test them quarterly.
+- Keep `DEMO_MODE=false`. Document and test recovery through Cognito administrators; retired local passwords cannot provide production recovery.
 - The shipped NetworkPolicies give web and worker cluster-internal egress plus public TCP 443 (`networkPolicy.publicHttps`), with private, link-local (cloud metadata), CGNAT and loopback ranges excluded. Set `publicHttps: false` for an air-gapped install. Add the VPC CIDR of a managed Postgres or Redis to `networkPolicy.egressCidrs`. Do not set `egressCidrs` to `0.0.0.0/0` or `::/0`.

@@ -21,7 +21,7 @@ single-tenant SOC for customers who need isolated infrastructure.
 
 ## Quick start (development)
 
-Requirements: Node 22+, pnpm 10, Docker.
+Requirements: Node 22.12+, pnpm 10, Docker.
 
 ```bash
 pnpm install
@@ -34,17 +34,14 @@ pnpm dev                             # http://localhost:3107
 pnpm worker:dev                      # ingest, enrichment, sync, playbooks, response, intel refresh
 ```
 
-The seed prints a one-time **break-glass administrator** password. With `DEMO_MODE=true` it also
-creates three demo customers (synthetic Wazuh telemetry + an OpenCTI fixture) and personas for
-every role (password `blaksoc-demo-2026`):
+Browser sign-in goes straight to Amazon Cognito for email/password sign-in and authenticator MFA.
+Configure `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` and `COGNITO_DOMAIN` in `.env.local`; register `http://localhost:3107/api/auth/callback/cognito` and
+`http://localhost:3107/login?signedOut=1` on a separate development app client. See
+[the Cognito setup guide](docs/cognito.md). Missing configuration fails closed rather than showing a
+local password form.
 
-| Persona | Role |
-|---|---|
-| `manager@demo.blaksoc.local` | SOC Manager (approves containment) |
-| `l2@demo.blaksoc.local` / `l1@demo.blaksoc.local` | SOC Analyst L2/L3 / L1 |
-| `auditor@demo.blaksoc.local` | Auditor |
-| `wattle.admin@demo.blaksoc.local` | Customer Administrator (Wattle Health Services) |
-| `murray.security@demo.blaksoc.local` | Customer Security User (Murray Regional Water) |
+`DEMO_MODE=true` seeds synthetic customers and role personas for development/integration tests. Their
+legacy password flow is only enabled outside production. Normal browser access uses Cognito.
 
 Tests: `pnpm test` (unit) and `pnpm test:integration` (against a migrated, demo-seeded DB).
 

@@ -31,29 +31,20 @@ outside AWS ──agents──► NLB agents.soc.yumait.au ┘
 | Backups | S3 `coolify-yumabackups` (shared, ap-southeast-2) | blakSOC writes only under `blaksoc/`: nightly `pg_dump` to `blaksoc/postgres/`, cold syslog to `blaksoc/archive/`. IAM role `blaksoc-eks-storage` (inline policy `blaksoc-backups-prefix`) through EKS Pod Identity on service account `blaksoc/blaksoc` |
 | Wazuh dashboard | `https://wazuh.yumait.au` | Cloudflare Tunnel `blaksoc-wazuh` (cloudflared on the Wazuh host, outbound only) behind Cloudflare Access: `yumait.com.au` Google identities, 12-hour session |
 | Dashboard users | `blaksoc-wazuh-dashboard-users` | Personal Wazuh dashboard logins. `admin` (`INDEXER_PASSWORD` in `blaksoc-wazuh-credentials`) is the fallback |
-| Staff sign-in | Cloudflare Access SaaS app `blakSOC` (OIDC) | blakSOC SSO provider `yumait-staff` for `yumait.com.au`. Client ID and secret backed up in `blaksoc-eks-bootstrap` (`STAFF_SSO_*`) |
+| Staff sign-in | Amazon Cognito (pool deployed; application cutover pending) | Pool `ap-southeast-2_2jKCpYGkM` from `cognito.yaml`; existing Cloudflare `yumait-staff` configuration retained for rollback. See [cutover](../../docs/cognito.md). |
 | EKS audit | CloudWatch `/aws/eks/yumait-prod/cluster` | `audit` and `authenticator` control plane logs, 30 days. Read by the Wazuh host's role (`read-eks-control-plane-logs`) |
 | Enrolment password | SSM parameter `/blaksoc/wazuh/enrollment` | Passed to SSM commands as the reference `{{ssm:/blaksoc/wazuh/enrollment}}`, which Systems Manager resolves on the instance; CloudTrail and command history keep only the reference. Mirrors `ENROLLMENT_PASSWORD` in `blaksoc-wazuh-credentials` |
 
 ## Staff sign-in
 
-Yuma IT staff sign in with organisation SSO: on `https://soc.yumait.au/login`, enter the `yumait.com.au` address
-and choose **Continue with organisation SSO**. blakSOC sends them to Cloudflare Access (the same Google
-Workspace and one-time PIN login as the Wazuh dashboard), which returns an OIDC identity. Password sign-in is
-reserved for the break-glass administrator (`BREAK_GLASS_*` in `blaksoc-eks-bootstrap`; behind the
-**Emergency break-glass access** link, with TOTP enforced).
+The application now starts Amazon Cognito automatically at `/login`; it has no second email/password
+form. Provision the separate blakSOC user pool and its native email/password accounts before
+rolling out this version. Cognito handles password changes, resets and required authenticator MFA. The existing deployed Cloudflare OIDC connection is the rollback path until
+Cognito is verified. See [Cognito setup and cutover](../../docs/cognito.md).
 
-- Access app `blakSOC` (type SaaS, OIDC, PKCE): redirect URI
-  `https://soc.yumait.au/api/auth/sso/callback/yumait-staff`, policy "Yuma IT staff" (email domain
-  `yumait.com.au`), 12-hour session.
-- blakSOC provider `yumait-staff`: issuer is the Access app's OIDC issuer, domain `yumait.com.au`, no tenant
-  (platform staff). Its domain is marked verified so a sign-in links to an account created in advance.
-- Anyone in the domain can pass Access, but a new account holds no role until a platform admin grants one
-  (`/admin`). `justin@yumait.com.au` and `josh@yumait.com.au` hold `platform_admin`.
-- To rotate the client secret: regenerate it on the Access app, update `STAFF_SSO_CLIENT_SECRET` in
-  `blaksoc-eks-bootstrap`, then replace `clientSecret` in the `oidc_config` JSON of the `yumait-staff` row in
-  `sso_provider` (or call the SSO plugin's `updateSSOProvider` with a platform admin session). Registering
-  again under the same provider ID fails: `providerId` is unique.
+Existing users link by verified email and retain their roles. New users receive no role automatically.
+This changes blakSOC authentication only; Cloudflare DNS, Radar, ThreatSieve and the Wazuh tunnel are
+separate services and are not removed by this migration.
 
 ## Deploy a new version
 

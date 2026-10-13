@@ -49,7 +49,7 @@ export function proxy(request: NextRequest) {
   const id = requestIdFrom(request.headers);
   if (!isPublicPath(pathname) && !getSessionCookie(request)) {
     const url = new URL("/login", request.url);
-    url.searchParams.set("next", pathname);
+    url.searchParams.set("next", pathname + request.nextUrl.search);
     const res = NextResponse.redirect(url);
     res.headers.set(REQUEST_ID_HEADER, id);
     return res;

@@ -44,6 +44,11 @@ describe("session gate", () => {
     expect(proxy(request("/soc", SESSION)).headers.get("location")).toBeNull();
   });
 
+  it("preserves the query string through automatic sign-in", () => {
+    const response = proxy(request("/soc?tenant=wattle&tab=alerts"));
+    expect(new URL(response.headers.get("location")!).searchParams.get("next")).toBe("/soc?tenant=wattle&tab=alerts");
+  });
+
   it("prevents caching and referrer leakage on the signed display", () => {
     for (const path of ["/wallboard?token=secret", "/api/wallboard?token=secret"]) {
       const response = proxy(request(path));

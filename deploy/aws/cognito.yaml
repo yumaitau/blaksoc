@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: blakSOC email/password sign-in with Cognito managed login and required TOTP MFA; app roles remain in Postgres.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@2
+Parameters:
+  AppUrl:
+    Type: String
+    Default: https://soc.yumait.au
+    AllowedPattern: '^https://[A-Za-z0-9.-]+(:[0-9]+)?$'
+    Description: App origin, without a trailing slash.
+  DomainPrefix:
+    Type: String
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+    Description: Unique Cognito managed-login domain prefix.
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Dedicated directory; keeps other applications' users and policies isolated.
+        must: [Retain identities on replacement or deletion, No public self-registration, Require passwords and authenticator MFA]
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-users'
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      UsernameConfiguration: { CaseSensitive: false }
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+        InviteMessageTemplate:
+          EmailSubject: Your blakSOC account
+          EmailMessage: !Sub 'Your blakSOC username is {username}. Your temporary password is {####}. Sign in at ${AppUrl}/login to set your own password and enroll an authenticator app.'
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate: [email]
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      Policies:
+        SignInPolicy:
+          AllowedFirstAuthFactors: [PASSWORD]
+        PasswordPolicy:
+          MinimumLength: 16
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 1
+      AccountRecoverySetting:
+        RecoveryMechanisms: [{ Name: verified_email, Priority: 1 }]
+      Schema:
+        - { Name: email, AttributeDataType: String, Required: true, Mutable: true }
+        - { Name: name, AttributeDataType: String, Required: false, Mutable: true }
+      UserPoolTags: { App: blaksoc }
+  Client:
+    Type: AWS::Cognito::UserPoolClient
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Code flow with PKCE; server exchanges the code and keeps app sessions in HttpOnly cookies.
+        must: [No implicit grant, Callback and logout URLs must match the app, Use only the native Cognito directory]
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub '${AWS::StackName}-web'
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Sub '${AppUrl}/api/auth/callback/cognito']
+      LogoutURLs: [!Sub '${AppUrl}/login?signedOut=1']
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 1
+      TokenValidityUnits: { AccessToken: minutes, IdToken: minutes, RefreshToken: days }
+      RefreshTokenRotation: { Feature: ENABLED, RetryGracePeriodSeconds: 10 }
+      ReadAttributes: [email, email_verified, name]
+      WriteAttributes: [email, name]
+  Domain:
+    Type: AWS::Cognito::UserPoolDomain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: AWS-hosted sign-in avoids adding an app login form or a custom-domain certificate dependency.
+        must: [Pair managed login v2 with a client branding resource]
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Ref DomainPrefix
+      ManagedLoginVersion: 2
+  Branding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: Domain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: API-created clients need an explicit style before managed login is available.
+        must: [Keep a branding style assigned to the web client]
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref Client
+      UseCognitoProvidedValues: true
+Outputs:
+  UserPoolId:
+    Description: COGNITO_USER_POOL_ID
+    Value: !Ref UserPool
+  ClientId:
+    Description: COGNITO_CLIENT_ID (public client; no secret required)
+    Value: !Ref Client
+  Domain:
+    Description: COGNITO_DOMAIN
+    Value: !Sub '${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com'

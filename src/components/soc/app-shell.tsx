@@ -48,7 +48,7 @@ export function AppShell({ ctx, workspace, brand, children }: { ctx: AccessConte
               <div className="truncate text-[11px] capitalize text-faint">{roleNames || "no role"}</div>
             </div>
             <div className="flex items-center">
-              <a href="/account/security" aria-label="Passkeys" title="Passkeys" className="inline-flex size-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-fg">
+              <a href="/account/security" aria-label="Sign-in security" title="Sign-in security" className="inline-flex size-8 items-center justify-center rounded-md text-muted hover:bg-surface-2 hover:text-fg">
                 <Fingerprint className="size-4" />
               </a>
               <SignOutButton compact />

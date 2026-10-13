@@ -1,3 +1,4 @@
+import { customerMatchFilter } from "@/lib/intel/match-filter";
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import { alertObservables, alerts, assets, incidents, integrations, intelMatches, observables, patternAnnotations, responseActions, savedViews, tenants, tuningActions, user } from "@/db/schema";
@@ -208,7 +209,7 @@ export async function updateAlerts(ctx: AccessContext, ids: string[], patch: { s
   });
 }
 
-export async function intelMatchesFor(ctx: AccessContext, opts: { sinceHours?: number; limit?: number; tenantIds?: string[] } = {}) {
+export async function intelMatchesFor(ctx: AccessContext, opts: { sinceHours?: number; limit?: number; tenantIds?: string[]; hideGenericGithub?: boolean } = {}) {
   return scoped(
     ctx,
     "intel:read",
@@ -217,7 +218,13 @@ export async function intelMatchesFor(ctx: AccessContext, opts: { sinceHours?: n
         .select({ id: intelMatches.id, tenantId: intelMatches.tenantId, tenantName: tenants.name, alertId: intelMatches.alertId, verdict: intelMatches.verdict, score: intelMatches.score, summary: intelMatches.summary, matchedAt: intelMatches.matchedAt, sightingStatus: intelMatches.sightingStatus })
         .from(intelMatches)
         .innerJoin(tenants, eq(tenants.id, intelMatches.tenantId))
-        .where(and(inArray(intelMatches.tenantId, tenantIds), gte(intelMatches.matchedAt, new Date(Date.now() - (opts.sinceHours ?? 168) * 3600_000))))
+        .where(and(
+          inArray(intelMatches.tenantId, tenantIds),
+          gte(intelMatches.matchedAt, new Date(Date.now() - (opts.sinceHours ?? 168) * 3600_000)),
+          // Filter before LIMIT so historic generic-domain matches cannot crowd out useful rows.
+          // Keep repository/file URLs and lookalikes: those can be specific malicious indicators.
+          opts.hideGenericGithub ? customerMatchFilter(intelMatches.summary) : undefined,
+        ))
         .orderBy(desc(intelMatches.matchedAt))
         .limit(opts.limit ?? 50),
     opts.tenantIds,

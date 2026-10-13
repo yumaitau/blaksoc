@@ -360,6 +360,11 @@ async function ServiceIdentities({ ctx, p }: { ctx: AccessContext; p: P }) {
 
 async function Identity({ ctx, p }: { ctx: AccessContext; p: P }) {
   if (!p.identity) return <Denied>Identity providers are managed by platform administrators with the settings management permission.</Denied>;
+  if (env().COGNITO_CLIENT_ID || env().NODE_ENV === "production") {
+    return <Card><CardHeader><CardTitle>Amazon Cognito</CardTitle></CardHeader><CardContent>
+      <p className="text-sm text-muted">Sign-in and identity providers are managed in Amazon Cognito. Use Users &amp; access to manage blakSOC roles.</p>
+    </CardContent></Card>;
+  }
   const [providers, tenants] = await Promise.all([listSsoProviders(ctx), listTenants(ctx)]);
   const tenantName = new Map(tenants.map((t) => [t.id, t.name]));
   return (

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { EmptyState, IntelVerdict, PageHeader } from "@/components/soc/indicators";
+import { IntelHtml } from "@/components/soc/intel-html";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -139,7 +140,7 @@ async function Australian({ ctx, tag, coveredIds }: { ctx: AccessContext; tag?: 
                 </a>
                 <span className="shrink-0 text-xs text-muted">{a.source} · {fmtDateTime(a.publishedAt)}</span>
               </div>
-              {a.summary ? <p className="mt-1 line-clamp-2 text-xs text-muted">{a.summary}</p> : null}
+              {a.summary ? <IntelHtml className="mt-1" content={a.summary} /> : null}
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {a.tags.map((t) => (
                   <Link key={t} href={`/intel?tab=australia&tag=${t}`}><Badge variant="accent">{tagLabel(t)}</Badge></Link>
@@ -218,7 +219,7 @@ async function Search({ ctx, q }: { ctx: AccessContext; q: string }) {
                   <TD className="text-xs text-muted whitespace-nowrap">{r.entityType}</TD>
                   <TD className="max-w-md">
                     <div className="truncate font-mono text-xs" title={r.name}>{r.name}</div>
-                    {r.description ? <div className="line-clamp-2 text-xs text-muted">{r.description}</div> : null}
+                    {r.description ? <IntelHtml content={r.description} /> : null}
                     <div className="mt-0.5 font-mono text-[10.5px] text-faint">{r.id}</div>
                   </TD>
                   <TD>
@@ -250,7 +251,7 @@ async function Search({ ctx, q }: { ctx: AccessContext; q: string }) {
 
 async function Matches({ ctx }: { ctx: AccessContext }) {
   const ws = await currentWorkspace(ctx);
-  const rows = await intelMatchesFor(ctx, { sinceHours: 168, limit: 200, tenantIds: ws.tenantIds });
+  const rows = await intelMatchesFor(ctx, { sinceHours: 168, limit: 200, tenantIds: ws.tenantIds, hideGenericGithub: true });
   return (
     <Card>
       <CardHeader>

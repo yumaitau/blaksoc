@@ -12,5 +12,6 @@ describe("safeNextPath", () => {
       expect(new URL(out, "https://soc.example").origin, String(next)).toBe("https://soc.example");
     }
     expect(safeNextPath("/\\evil.example")).toBe("/");
+    expect(safeNextPath(["/soc", "/portal"])).toBe("/");
   });
 });

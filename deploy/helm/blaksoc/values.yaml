@@ -15,12 +15,10 @@ existingSecret: blaksoc
 runtimeSecretKeys:
   required: [DATABASE_URL, DATABASE_SYSTEM_URL, REDIS_URL, BETTER_AUTH_SECRET, BLAKSOC_ENCRYPTION_KEY]
   optional:
-    - ENTRA_TENANT_ID
-    - ENTRA_CLIENT_ID
-    - ENTRA_CLIENT_SECRET
-    - GOOGLE_CLIENT_ID
-    - GOOGLE_CLIENT_SECRET
-    - GOOGLE_HOSTED_DOMAIN
+    - COGNITO_USER_POOL_ID
+    - COGNITO_CLIENT_ID
+    - COGNITO_CLIENT_SECRET
+    - COGNITO_DOMAIN
     - ABR_GUID
     - M365_CONNECTOR_CLIENT_ID
     - M365_CONNECTOR_CLIENT_SECRET
@@ -36,6 +34,8 @@ externalSecret:
   remoteKey: ""
 
 config:
+  COGNITO_REGION: ap-southeast-2
+  COGNITO_ALLOWED_EMAIL_DOMAINS: yumait.com.au
   AI_DATA_RESIDENCY: AU
   # CIDRs of the proxies in front of blakSOC (ingress controller, load balancer, VPC). Client IPs for
   # sign-in rate limits and syslog allowlists are read from X-Forwarded-For past these. Empty trusts
