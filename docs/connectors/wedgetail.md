@@ -67,8 +67,34 @@ such as `restrict_admin_privileges`, with or without a `:ML2` suffix) are normal
 - **ATT&CK coverage** counts a technique Wedgetail detected in the last 90 days as detected (its own rules), so
   it is no longer listed as a gap.
 
-These are per-alert references. Wedgetail's own ISM status (met / partly met / gap), Essential Eight evidence
-assessment and rule-catalogue coverage are only available from its authenticated API and are not pulled yet.
+## Pulling ISM status and ATT&CK coverage (optional)
+
+Per-alert references say which controls a detection touched. To also show each install's own ISM control
+status (met / partly met / gap / outside Wedgetail) and its ATT&CK rule coverage, give blakSOC read access to
+the install's MCP endpoint:
+
+1. In Wedgetail, a user with **no data scope** opens **Settings → MCP** and creates a **read-only** token
+   (`wtp_…`, 1–90 days). Its access is capped by that user's current role; a scoped user's token is refused
+   ISM status.
+2. In blakSOC, edit the Wedgetail integration: add `"consoleUrl": "https://<console domain>"` to the
+   configuration and paste the token into the write-only **mcpToken** secret. Use **Pull now** on the
+   integration page to check it.
+
+blakSOC calls `POST <consoleUrl>/mcp` (JSON-RPC `tools/call`, `Authorization: Bearer`, no `Origin`) for the
+`ism_status` and `mitre_coverage` tools, at most hourly per install (two calls; the install allows 60 a minute).
+Calls leave through the public egress guard, refuse redirects, and are skipped when the customer's residency
+profile does not allow the integration's region. Only aggregate fields are stored in `wedgetail_posture`
+(control id, title, topic, responsibility, status, reason, E8 levels, detection counts; technique ids with
+rule and hunting counts). Owners, rule parameters, account IDs and attestations are never requested or kept.
+A failed pull keeps the last snapshot and backs off; a refused token waits a day. If the install's WAF uses a
+country allow-list, blakSOC's egress addresses must be allowed.
+
+The pulled data appears on **ISM & Essential Eight** (Wedgetail ISM per customer and a status column per
+control, gaps first) and on **ATT&CK coverage** (techniques with an enabled Wedgetail rule count as detected).
+
+Wedgetail's Essential Eight evidence assessment is not pulled: MCP offers it only through `call_api`, whose
+result is text truncated at 60,000 characters, and the 304-requirement assessment exceeds that. It needs an
+Essential Eight summary tool with a structured result upstream.
 
 Entities map host to hostname, principal to userName/principalArn, IP to sourceIp and resource
 to assetExternalId/resourceArn. IPs are extracted for enrichment; ARNs and compliance references

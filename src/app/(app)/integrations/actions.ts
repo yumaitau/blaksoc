@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import { withAccess } from "@/lib/actions";
 import { createWedgetailIntegration, createIntegration, linkTenant, setAlertFloor, testIntegration, updateIntegration } from "@/lib/services/integrations";
 import type { Severity } from "@/lib/providers/types";
+import { refreshWedgetailPosture } from "@/lib/services/wedgetail-posture";
 
 /** Zod issues name the field and rule only, never the submitted value, so they are safe to show. */
 async function explain<T>(p: Promise<T>): Promise<T> {
@@ -60,5 +61,14 @@ export async function setAlertFloorAction(id: string, severity: Severity) {
   return withAccess(async (ctx) => {
     await explain(setAlertFloor(ctx, id, severity));
     refresh(id);
+  });
+}
+
+export async function refreshWedgetailPostureAction(id: string) {
+  return withAccess(async (ctx) => {
+    const result = await refreshWedgetailPosture(ctx, id);
+    refresh(id);
+    revalidatePath("/soc/compliance");
+    return result;
   });
 }

@@ -1,5 +1,5 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { alerts, attackTechniques, user, detectionDeployments, incidents, integrations, integrationTenantLinks, sigmaRules, sigmaRuleTests, sigmaRuleVersions } from "@/db/schema";
+import { alerts, attackTechniques, user, detectionDeployments, wedgetailPosture, incidents, integrations, integrationTenantLinks, sigmaRules, sigmaRuleTests, sigmaRuleVersions } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
@@ -189,6 +189,8 @@ export type CoverageCell = {
   incidents: number;
   /** Alerts from external detectors that run their own rules (Wedgetail) in the last 90 days: the technique is detected there. */
   external: number;
+  /** Wedgetail installs in scope with an enabled rule for this technique (or a sub-technique), from their pulled coverage. */
+  externalRules: number;
 };
 
 /** Alert sources whose detections come from their own rule set rather than blakSOC-deployed rules. */
@@ -205,6 +207,8 @@ export async function attackCoverage(ctx: AccessContext, tenantIds?: string[]): 
       const deployed = await tx.select({ techniques: sigmaRules.attackTechniques }).from(detectionDeployments).innerJoin(sigmaRules, eq(sigmaRules.id, detectionDeployments.ruleId)).where(and(inArray(detectionDeployments.tenantId, scopeTenants), eq(detectionDeployments.status, "active")));
       const alertRows = await tx.select({ t: sql<string>`unnest(${alerts.attackTechniques})`, n: sql<number>`count(*)::int` }).from(alerts).where(and(inArray(alerts.tenantId, scopeTenants), sql`${alerts.occurredAt} > now() - interval '90 days'`)).groupBy(sql`1`);
       const externalRows = await tx.select({ t: sql<string>`unnest(${alerts.attackTechniques})`, n: sql<number>`count(*)::int` }).from(alerts).where(and(inArray(alerts.tenantId, scopeTenants), inArray(alerts.source, EXTERNAL_DETECTORS), sql`${alerts.occurredAt} > now() - interval '90 days'`)).groupBy(sql`1`);
+      const installs = await tx.select({ mitre: wedgetailPosture.mitre }).from(wedgetailPosture).where(inArray(wedgetailPosture.tenantId, scopeTenants));
+      const installTechniques = installs.map((i) => (i.mitre?.techniques ?? []).filter((t) => t.rules > 0).map((t) => t.id));
       const incRows = await tx.select({ t: sql<string>`unnest(${incidents.attackTechniques})`, n: sql<number>`count(*)::int` }).from(incidents).where(inArray(incidents.tenantId, scopeTenants)).groupBy(sql`1`);
 
       const count = (list: string[][], id: string) => list.filter((ts) => ts.some((t) => t === id || t.startsWith(`${id}.`))).length;
@@ -213,7 +217,7 @@ export async function attackCoverage(ctx: AccessContext, tenantIds?: string[]): 
       const sumBy = (rows: { t: string; n: number }[], id: string) => rows.filter((r) => r.t === id || r.t.startsWith(`${id}.`)).reduce((s, r) => s + r.n, 0);
       return techniques.map((t) => ({
         id: t.id, name: t.name, tactics: t.tactics, parentId: t.parentId,
-        rules: count(ruleTech, t.id), deployed: count(depTech, t.id), alerts: sumBy(alertRows, t.id), incidents: sumBy(incRows, t.id), external: sumBy(externalRows, t.id),
+        rules: count(ruleTech, t.id), deployed: count(depTech, t.id), alerts: sumBy(alertRows, t.id), incidents: sumBy(incRows, t.id), external: sumBy(externalRows, t.id), externalRules: count(installTechniques, t.id),
       }));
     },
     tenantIds,

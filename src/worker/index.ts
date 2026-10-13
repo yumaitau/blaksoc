@@ -12,6 +12,7 @@ import { releaseDueCollections } from "@/lib/services/dfir";
 import { archiveDueSyslog } from "@/lib/services/syslog";
 import { runDueHealth } from "@/lib/services/health";
 import { syncKelpie } from "@/lib/services/kelpie";
+import { syncWedgetailPosture } from "@/lib/services/wedgetail-posture";
 import { runDueSurface } from "@/lib/services/surface";
 import { runCorrelationAll } from "@/lib/services/correlation";
 import { runAlertRetention } from "@/lib/services/retention";
@@ -50,6 +51,7 @@ const handlers: Record<QueueName, Handler> = {
     }
     if (job.name === "dfir-release") return releaseDueCollections();
     if (job.name === "kelpie") return syncKelpie();
+    if (job.name === "wedgetail-posture") return syncWedgetailPosture();
   },
   [QUEUES.playbook]: async (job) => {
     const { tenantId, runId } = job.data as { tenantId: string; runId: string };

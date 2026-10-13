@@ -17,6 +17,7 @@ import { veeamConfig } from "@/lib/backup/status";
 import { BedrockProvider, OpenAICompatibleProvider } from "@/lib/ai/providers";
 import type { AIProvider } from "@/lib/ai/types";
 import { KelpieClient } from "@/lib/kelpie/client";
+import { WEDGETAIL_TOKEN } from "@/lib/wedgetail/posture";
 import { EmailNotifier, SmsNotifier, VoiceNotifier } from "./au-notify";
 import { WebhookNotifier, type Notifier } from "./notify";
 import { velociraptorHealth } from "@/lib/dfir/fixture";
@@ -65,10 +66,14 @@ const planned = (provider: string, name: string, category: ConnectorCategory, ca
 export const CONNECTORS: ConnectorDefinition[] = [
   {
     provider: "wedgetail", name: "Wedgetail", category: "siem", status: "available",
-    description: "Signed inbound AWS detections from the customer's Wedgetail install.",
-    capabilities: ["events"], remotePermissions: ["Wedgetail notification URL and HMAC secret"],
-    config: z.object({ region: z.enum(["ap-southeast-2", "ap-southeast-4"]).default("ap-southeast-2") }),
-    secrets: z.object({ signingSecret: z.string().min(32).max(256) }),
+    description: "Signed inbound AWS detections from the customer's Wedgetail install, plus its ISM status and ATT&CK rule coverage when an MCP token is set.",
+    capabilities: ["events"], remotePermissions: ["Wedgetail notification URL and HMAC secret", "Optional: console URL and a read-only MCP token (wtp_…) from an unscoped user, for ISM status and ATT&CK coverage"],
+    config: z.object({
+      region: z.enum(["ap-southeast-2", "ap-southeast-4"]).default("ap-southeast-2"),
+      /** Console origin (CloudFront or custom domain). blakSOC calls <consoleUrl>/mcp with mcpToken. */
+      consoleUrl: z.string().url().startsWith("https://").optional(),
+    }),
+    secrets: z.object({ signingSecret: z.string().min(32).max(256), mcpToken: z.string().regex(WEDGETAIL_TOKEN).optional() }),
     create: () => ({ kind: "events", provider: new WedgetailProvider() }),
   },
   {

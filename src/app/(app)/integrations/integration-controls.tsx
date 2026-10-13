@@ -7,7 +7,7 @@ import { ActionError, useAction } from "@/components/soc/use-action";
 import { Button } from "@/components/ui/button";
 import { Label, Select } from "@/components/ui/input";
 import type { Severity } from "@/lib/providers/types";
-import { setAlertFloorAction, testIntegrationAction, updateIntegrationAction } from "./actions";
+import { refreshWedgetailPostureAction, setAlertFloorAction, testIntegrationAction, updateIntegrationAction } from "./actions";
 
 export function IntegrationToggle({ id, name, enabled, disabled }: { id: string; name: string; enabled: boolean; disabled?: boolean }) {
   const [on, setOn] = useState(enabled);
@@ -110,5 +110,29 @@ export function AlertFloor({ id, value, disabled }: { id: string; value: Severit
       {pending ? <span className="text-xs text-muted">Saving…</span> : null}
       <ActionError error={error} />
     </div>
+  );
+}
+
+/** Pull a Wedgetail install's ISM status and ATT&CK coverage now instead of waiting for the hourly pull. */
+export function PullWedgetailPosture({ id }: { id: string }) {
+  const router = useRouter();
+  const { pending, run } = useAction();
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="secondary"
+      disabled={pending}
+      onClick={() => run(
+        () => refreshWedgetailPostureAction(id),
+        (r) => {
+          if (r && !r.ok) toast.error(`Pull failed: ${r.error ?? "unknown error"}`, { duration: 8_000 });
+          router.refresh();
+        },
+        { success: (r) => (r?.ok ? "Pulled ISM status and ATT&CK coverage from Wedgetail" : null) },
+      )}
+    >
+      {pending ? "Pulling…" : "Pull now"}
+    </Button>
   );
 }

@@ -260,6 +260,13 @@
       "when": 1790630000000,
       "tag": "0037_alert_compliance_refs",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1790631000000,
+      "tag": "0038_wedgetail_posture",
+      "breakpoints": true
     }
   ]
 }

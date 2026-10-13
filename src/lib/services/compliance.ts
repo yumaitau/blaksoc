@@ -1,8 +1,9 @@
 import { and, desc, gte, inArray, sql } from "drizzle-orm";
-import { alerts, e8Assessments, tenants } from "@/db/schema";
+import { alerts, e8Assessments, tenants, wedgetailPosture } from "@/db/schema";
 import { can, type AccessContext } from "@/lib/auth/access";
 import type { StrategyId } from "@/lib/essential-eight/requirements";
 import { levelsOf, type Level } from "@/lib/essential-eight/score";
+import type { IsmStatus } from "@/lib/wedgetail/posture";
 import { scoped } from "./common";
 
 export const COMPLIANCE_WINDOWS = [7, 30, 90] as const;
@@ -16,7 +17,14 @@ export type CustomerE8 = {
   assessed: Partial<Record<StrategyId, Level>> | null;
   assessedAt: string | null;
   alerts: Partial<Record<StrategyId, number>>;
+  /** ISM control status from the customer's Wedgetail installs, summed; null when none is pulling posture. */
+  wedgetail: { counts: Record<IsmStatus, number>; fetchedAt: string | null; error: string | null } | null;
 };
+
+/** One ISM control as Wedgetail rates it across the customers in scope. */
+export type WedgetailControl = { id: string; title: string; statuses: Record<IsmStatus, number>; reasons: { tenantId: string; status: IsmStatus; reason: string }[] };
+
+const emptyStatuses = (): Record<IsmStatus, number> => ({ met: 0, partial: 0, not_met: 0, not_applicable: 0 });
 
 const OPEN = sql`${alerts.status} not in ('RESOLVED', 'FALSE_POSITIVE')`;
 
@@ -52,6 +60,24 @@ export async function complianceSignals(ctx: AccessContext, tenantIds: readonly 
         .orderBy(tenants.name),
     ]);
 
+    const posture = await tx.select().from(wedgetailPosture).where(inArray(wedgetailPosture.tenantId, scope));
+    const controls = new Map<string, WedgetailControl>();
+    const byTenant = new Map<string, NonNullable<CustomerE8["wedgetail"]>>();
+    for (const row of posture) {
+      const t = byTenant.get(row.tenantId) ?? { counts: emptyStatuses(), fetchedAt: null, error: null };
+      if (row.lastError) t.error = row.lastError;
+      if (row.fetchedAt && (!t.fetchedAt || row.fetchedAt.toISOString() < t.fetchedAt)) t.fetchedAt = row.fetchedAt.toISOString();
+      for (const c of row.ism?.controls ?? []) {
+        if (c.withdrawn) continue;
+        t.counts[c.status]++;
+        const entry = controls.get(c.id) ?? { id: c.id, title: c.title, statuses: emptyStatuses(), reasons: [] };
+        entry.statuses[c.status]++;
+        entry.reasons.push({ tenantId: row.tenantId, status: c.status, reason: c.reason });
+        controls.set(c.id, entry);
+      }
+      byTenant.set(row.tenantId, t);
+    }
+
     const assessable = customerRows.filter((t) => can(ctx, "report:read", t.id)).map((t) => t.id);
     const latest = assessable.length
       ? await tx.selectDistinctOn([e8Assessments.tenantId], { tenantId: e8Assessments.tenantId, assessedAt: e8Assessments.assessedAt, result: e8Assessments.result })
@@ -67,6 +93,7 @@ export async function complianceSignals(ctx: AccessContext, tenantIds: readonly 
         assessed: row ? levelsOf(row.result.ratings) : null,
         assessedAt: row?.assessedAt.toISOString() ?? null,
         alerts: alertsFor,
+        wedgetail: byTenant.get(t.id) ?? null,
       };
     });
 
@@ -75,6 +102,7 @@ export async function complianceSignals(ctx: AccessContext, tenantIds: readonly 
       days,
       ism,
       e8,
+      wedgetailControls: [...controls.values()],
       customers,
       alerts: mapped[0]?.total ?? 0,
       mappedAlerts: mapped[0]?.mapped ?? 0,

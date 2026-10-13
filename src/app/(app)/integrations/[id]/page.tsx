@@ -7,10 +7,11 @@ import { requireAccess } from "@/lib/auth/session";
 import { CATEGORY_LABELS, secretFields } from "@/lib/integrations/form-spec";
 import type { ConnectorCategory } from "@/lib/connectors/registry";
 import { catalogue, integrationAudit, listIntegrations } from "@/lib/services/integrations";
+import { readWedgetailPosture } from "@/lib/services/wedgetail-posture";
 import { minSeverityFor, supportsAlertFloor } from "@/lib/integrations/alert-floor";
 import { fmtDateTime } from "@/lib/utils";
 import { IntegrationForm } from "../integration-form";
-import { AlertFloor, TestConnection } from "../integration-controls";
+import { AlertFloor, PullWedgetailPosture, TestConnection } from "../integration-controls";
 import { AuditHistory, ConnectionStatus, KeyValues } from "../parts";
 import { LinkTenantForm } from "./link-tenant-form";
 
@@ -27,6 +28,8 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
   const def = catalogue().find((c) => c.provider === row.provider);
   const manage = row.tenantId ? can(ctx, "integration:manage", row.tenantId) : ctx.isPlatform && can(ctx, "integration:manage");
   const audit = await integrationAudit(ctx, id);
+  const posture = row.provider === "wedgetail" ? await readWedgetailPosture(ctx, id) : null;
+  const consoleUrl = row.provider === "wedgetail" ? (row.config as { consoleUrl?: string }).consoleUrl : undefined;
   const linkable = ctx.isPlatform && !row.tenantId ? ctx.tenants.filter((t) => t.kind === "customer" && can(ctx, "integration:manage", t.id)) : [];
   const health = (row.health ?? (row.provider === "wedgetail" ? { detail: { created: 0, duplicate: 0, unrouted: 0, rejected: 0, ignored: 0 } } : null)) as { ok?: boolean; latencyMs?: number; detail?: Record<string, unknown> } | null;
 
@@ -103,6 +106,25 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
               ) : null}
             </CardContent>
           </Card>
+          {row.provider === "wedgetail" ? (
+            <Card>
+              <CardHeader><CardTitle>ISM &amp; ATT&amp;CK posture</CardTitle>{manage && consoleUrl ? <PullWedgetailPosture id={row.id} /> : null}</CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {!consoleUrl ? (
+                  <p className="text-xs text-muted">Optional. Add <code>consoleUrl</code> to the configuration and an <code>mcpToken</code> secret (a read-only <code>wtp_</code> token from Wedgetail <span className="whitespace-nowrap">Settings → MCP</span>, issued by an unscoped user) to pull this install&apos;s ISM control status and ATT&amp;CK rule coverage every hour.</p>
+                ) : (
+                  <>
+                    <div><div className="text-[11px] uppercase tracking-wider text-faint">Console</div><code className="break-all text-xs">{consoleUrl}</code></div>
+                    <div><div className="text-[11px] uppercase tracking-wider text-faint">Last pulled</div>{posture?.fetchedAt ? fmtDateTime(posture.fetchedAt) : <span className="text-faint">Not yet</span>}</div>
+                    {posture?.ism ? <div><div className="text-[11px] uppercase tracking-wider text-faint">ISM ({posture.ism.release})</div>{posture.ism.counts.met} met · {posture.ism.counts.partial} partly met · {posture.ism.counts.not_met} gap · {posture.ism.counts.not_applicable} outside Wedgetail</div> : null}
+                    {posture?.mitre ? <div><div className="text-[11px] uppercase tracking-wider text-faint">ATT&amp;CK (v{posture.mitre.version})</div>{posture.mitre.totals.relevantCovered} of {posture.mitre.totals.relevant} relevant techniques have an enabled rule</div> : null}
+                    {posture?.lastError ? <div><div className="text-[11px] uppercase tracking-wider text-faint">Last error</div><div className="break-words text-danger">{posture.lastError}</div><div className="text-xs text-muted">Next try {fmtDateTime(posture.nextAttemptAt)}</div></div> : null}
+                    <Link href="/soc/compliance" className="text-xs text-accent hover:underline">View ISM &amp; Essential Eight →</Link>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
           <Card>
             <CardHeader><CardTitle>Audit history</CardTitle></CardHeader>
             <CardContent className="max-h-96 overflow-auto"><AuditHistory rows={audit} /></CardContent>

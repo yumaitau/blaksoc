@@ -27,3 +27,4 @@ export * from "./graph";
 export * from "./correlation";
 export * from "./wallboard";
 export * from "./dashboard";
+export * from "./wedgetail";

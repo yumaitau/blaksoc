@@ -30,8 +30,9 @@ const TACTICS = [
 ] as const;
 
 const observed = (c: CoverageCell) => c.alerts + c.incidents > 0;
-const coverage = (c: CoverageCell) => (c.deployed > 0 ? "deployed" : c.external > 0 ? "external" : c.rules > 0 ? "rules" : "none");
-const detected = (c: CoverageCell) => c.deployed > 0 || c.external > 0;
+const byWedgetailCell = (c: CoverageCell) => c.external > 0 || c.externalRules > 0;
+const coverage = (c: CoverageCell) => (c.deployed > 0 ? "deployed" : byWedgetailCell(c) ? "external" : c.rules > 0 ? "rules" : "none");
+const detected = (c: CoverageCell) => c.deployed > 0 || byWedgetailCell(c);
 const TONE = {
   deployed: "border-ok/50 bg-ok/12",
   external: "border-sev-low/50 bg-sev-low/12",
@@ -162,7 +163,8 @@ export default async function AttackCoveragePage({ searchParams }: { searchParam
                     <Stat label="Active deployments" value={selected.deployed} tone={selected.deployed ? "ok" : observed(selected) && !detected(selected) ? "danger" : undefined} />
                     <Stat label="Alerts (90 days)" value={selected.alerts} href={`/soc/alerts?technique=${selected.id}`} />
                     <Stat label="Incidents" value={selected.incidents} href="/soc/incidents" />
-                    {selected.external ? <Stat label="Wedgetail (90 days)" value={selected.external} tone="ok" href={`/soc/alerts?technique=${selected.id}&days=90`} /> : null}
+                    {selected.external ? <Stat label="Wedgetail alerts (90 days)" value={selected.external} tone="ok" href={`/soc/alerts?technique=${selected.id}&days=90`} /> : null}
+                    {selected.externalRules ? <Stat label="Wedgetail installs with a rule" value={selected.externalRules} tone="ok" /> : null}
                   </dl>
                   <div>
                     <h4 className="mb-1.5 text-xs font-medium uppercase tracking-wider text-faint">Detection rules</h4>
@@ -250,7 +252,7 @@ function Legend() {
   return (
     <ul className="mt-4 space-y-1.5 border-t border-border pt-3 text-xs text-muted" aria-label="Legend">
       <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.deployed)} />Deployed detection</li>
-      <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.external)} />Detected by Wedgetail (its own rules)</li>
+      <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.external)} />Detected by Wedgetail (an enabled rule or a detection)</li>
       <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.rules)} />Rule available, not deployed</li>
       <li className="flex items-center gap-2"><span className={cn("size-3 rounded-sm border", TONE.none)} />No detection</li>
       <li className="flex items-center gap-2"><span className="size-3 rounded-sm border border-border ring-1 ring-sev-critical/60" />Observed without a detection</li>
