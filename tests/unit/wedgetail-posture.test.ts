@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { setEgressTransport } from "@/lib/net/egress";
-import { fetchPosture, mcpClient, mcpEndpoint, parseIsm, parseMitre, WEDGETAIL_TOKEN, WedgetailApiError } from "@/lib/wedgetail/posture";
-import { ISM, MITRE, TOKEN } from "../fixtures/wedgetail-posture";
+import { fetchPosture, mcpClient, mcpEndpoint, parseE8, parseIsm, parseMitre, WEDGETAIL_TOKEN, WedgetailApiError } from "@/lib/wedgetail/posture";
+import { E8, ISM, MITRE, TOKEN } from "../fixtures/wedgetail-posture";
 
 afterEach(() => setEgressTransport());
 
@@ -36,15 +36,47 @@ describe("Wedgetail posture", () => {
     setEgressTransport(async (input, init) => {
       const body = JSON.parse(String(init?.body));
       seen.push({ url: String(input), headers: init?.headers as Record<string, string>, body });
-      const structured = body.params.name === "ism_status" ? ISM : MITRE;
+      const structured = body.params.name === "ism_status" ? ISM : body.params.name === "essential_eight_summary" ? E8 : MITRE;
       return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { isError: false, content: [{ type: "text", text: "…" }], structuredContent: structured } }), { status: 200 });
     });
     const posture = await fetchPosture(mcpClient("https://wedgetail.example.com", TOKEN));
     expect(posture.ism.release).toBe("September 2026");
     expect(posture.mitre?.techniques).toHaveLength(2);
-    expect(seen.map((s) => s.body.params.name)).toEqual(["ism_status", "mitre_coverage"]);
+    expect(posture.e8?.strategies.map((s) => s.strategy)).toEqual(["mfa", "restrict_admin"]);
+    expect(seen.map((s) => s.body.params.name)).toEqual(["ism_status", "mitre_coverage", "essential_eight_summary"]);
     expect(seen[0]).toMatchObject({ url: "https://wedgetail.example.com/mcp", headers: { authorization: `Bearer ${TOKEN}` }, body: { method: "tools/call" } });
     expect(Object.keys(seen[0]!.headers).map((h) => h.toLowerCase())).not.toContain("origin");
+  });
+
+  it("maps Wedgetail strategies to blakSOC's, drops unknown ones and keeps no requirement list", () => {
+    const e8 = parseE8(E8);
+    expect(e8.strategies).toEqual([
+      { strategy: "mfa", maturity: 1, levels: E8.strategies[0]!.levels },
+      { strategy: "restrict_admin", maturity: 0, levels: E8.strategies[1]!.levels },
+    ]);
+    expect(JSON.stringify(e8)).not.toContain("requirements");
+  });
+
+  it("pulls ISM and ATT&CK without the Essential Eight summary when the install lacks the tool or refuses it", async () => {
+    for (const refusal of [
+      { error: { code: -32602, message: "Unknown tool: essential_eight_summary" } },
+      { result: { isError: true, content: [{ type: "text", text: "{\"error\":\"Not available to scoped users\"}" }] } },
+    ]) {
+      setEgressTransport(async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        if (body.params.name === "essential_eight_summary") return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, ...refusal }), { status: 200 });
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { isError: false, content: [], structuredContent: body.params.name === "ism_status" ? ISM : MITRE } }), { status: 200 });
+      });
+      const posture = await fetchPosture(mcpClient("https://wedgetail.example.com", TOKEN));
+      expect(posture.e8).toBeNull();
+      expect(posture.ism.counts.met).toBe(1);
+    }
+    setEgressTransport(async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.params.name === "essential_eight_summary") return new Response("", { status: 429 });
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: { isError: false, content: [], structuredContent: body.params.name === "ism_status" ? ISM : MITRE } }), { status: 200 });
+    });
+    await expect(fetchPosture(mcpClient("https://wedgetail.example.com", TOKEN))).rejects.toThrow(/rate limited/);
   });
 
   it("reports refused tokens as permanent and never echoes the response body", async () => {

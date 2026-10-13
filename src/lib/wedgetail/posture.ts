@@ -1,8 +1,11 @@
 import { z } from "zod";
+import { e8Strategy } from "@/lib/compliance/refs";
+import type { StrategyId } from "@/lib/essential-eight/requirements";
+import type { Level } from "@/lib/essential-eight/score";
 import { egressFetch } from "@/lib/net/egress";
 
 /**
- * Pulls a Wedgetail install's own ISM control status and ATT&CK rule coverage over its MCP endpoint
+ * Pulls a Wedgetail install's own ISM control status, Essential Eight assessment summary and ATT&CK rule coverage over its MCP endpoint
  * (POST <console>/mcp, Streamable HTTP, stateless JSON). The install's REST API accepts only console
  * sessions, so a read-only `wtp_` token on MCP is the supported machine path. Only aggregate fields are
  * kept: no account IDs, rule parameters, attestations or people.
@@ -11,7 +14,8 @@ export const WEDGETAIL_TOKEN = /^wtp_[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 const MAX_BYTES = 2 * 1024 * 1024;
 
 export class WedgetailApiError extends Error {
-  constructor(message: string, readonly permanent = false) {
+  /** toolFailed: the install answered, but refused or failed this one tool (unknown tool, scope refusal). */
+  constructor(message: string, readonly permanent = false, readonly toolFailed = false) {
     super(message);
     this.name = "WedgetailApiError";
   }
@@ -47,6 +51,23 @@ const mitreCoverage = z.object({
   totals: z.object({ techniques: z.number().int(), covered: z.number().int(), relevant: z.number().int(), relevantCovered: z.number().int() }),
 });
 
+const E8_STATUSES = ["met", "partly_met", "gap", "outside_wedgetail", "attested"] as const;
+export type WedgetailE8Status = (typeof E8_STATUSES)[number];
+
+const e8Summary = z.object({
+  model: z.string().max(100),
+  generatedAt: z.string().max(40),
+  strategies: z.array(z.object({
+    strategy: z.string().max(60),
+    maturity: z.number().int().min(0).max(3),
+    levels: z.array(z.object({
+      level: z.number().int().min(1).max(3),
+      total: z.number().int().nonnegative(),
+      counts: z.object(Object.fromEntries(E8_STATUSES.map((s) => [s, z.number().int().nonnegative()])) as Record<WedgetailE8Status, z.ZodNumber>),
+    })).max(3),
+  })).max(8),
+});
+
 export type WedgetailIsm = {
   release: string;
   generatedAt: string;
@@ -61,6 +82,13 @@ export type WedgetailMitre = {
   gaps: string[];
 };
 
+/** Wedgetail's own Essential Eight evidence assessment: maturity and requirement counts per strategy. */
+export type WedgetailE8 = {
+  model: string;
+  generatedAt: string;
+  strategies: { strategy: StrategyId; maturity: Level; levels: { level: 1 | 2 | 3; total: number; counts: Record<WedgetailE8Status, number> }[] }[];
+};
+
 export function parseIsm(value: unknown): WedgetailIsm {
   const data = ismResponse.parse(value);
   const counts = Object.fromEntries(ISM_STATUSES.map((s) => [s, 0])) as Record<IsmStatus, number>;
@@ -70,6 +98,18 @@ export function parseIsm(value: unknown): WedgetailIsm {
     generatedAt: data.generatedAt,
     counts,
     controls: data.controls.map((c) => ({ id: c.id, title: c.title, topic: c.topic, responsibility: c.responsibility, status: c.status, reason: c.reason, e8: c.e8 ?? [], withdrawn: !!c.withdrawn, detections: c.detections ?? null })),
+  };
+}
+
+export function parseE8(value: unknown): WedgetailE8 {
+  const data = e8Summary.parse(value);
+  return {
+    model: data.model,
+    generatedAt: data.generatedAt,
+    strategies: data.strategies.flatMap((s) => {
+      const strategy = e8Strategy(s.strategy);
+      return strategy ? [{ strategy, maturity: s.maturity as Level, levels: s.levels.map((l) => ({ ...l, level: l.level as 1 | 2 | 3 })) }] : [];
+    }),
   };
 }
 
@@ -121,19 +161,24 @@ export function mcpClient(consoleUrl: string, token: string, timeoutMs = 20_000)
     } catch {
       throw new WedgetailApiError("Wedgetail MCP did not return JSON.");
     }
-    if (body.error) throw new WedgetailApiError(`Wedgetail MCP error: ${String(body.error.message ?? "unknown").slice(0, 200)}`, true);
+    if (body.error) throw new WedgetailApiError(`Wedgetail MCP error: ${String(body.error.message ?? "unknown").slice(0, 200)}`, true, true);
     const result = body.result;
     if (!result) throw new WedgetailApiError("Wedgetail MCP returned no result.");
-    if (result.isError) throw new WedgetailApiError(`Wedgetail tool ${tool} failed: ${String(result.content?.[0]?.text ?? "").slice(0, 200)}`);
+    if (result.isError) throw new WedgetailApiError(`Wedgetail tool ${tool} failed: ${String(result.content?.[0]?.text ?? "").slice(0, 200)}`, false, true);
     if (result.structuredContent !== undefined) return result.structuredContent;
     throw new WedgetailApiError(`Wedgetail tool ${tool} returned no structured result.`);
   };
 }
 
-export type WedgetailPosture = { ism: WedgetailIsm; mitre: WedgetailMitre | null };
+export type WedgetailPosture = { ism: WedgetailIsm; mitre: WedgetailMitre | null; e8: WedgetailE8 | null };
 
 export async function fetchPosture(call: McpCall): Promise<WedgetailPosture> {
   const ism = parseIsm(await call("ism_status", {}));
   const mitre = parseMitre(await call("mitre_coverage", {}));
-  return { ism, mitre };
+  // Installs before essential_eight_summary answer "Unknown tool", and a scoped owner's token is refused it.
+  const e8 = await call("essential_eight_summary", {}).then(parseE8, (err) => {
+    if (err instanceof WedgetailApiError && err.toolFailed) return null;
+    throw err;
+  });
+  return { ism, mitre, e8 };
 }

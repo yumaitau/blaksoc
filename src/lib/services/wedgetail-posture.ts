@@ -12,7 +12,7 @@ import { logger } from "@/lib/obs/log";
 import { scoped } from "./common";
 import { fetchPosture, mcpClient, WedgetailApiError, type McpCall } from "@/lib/wedgetail/posture";
 
-/** Posture changes slowly; an install allows 60 MCP calls a minute and each pull makes two. */
+/** Posture changes slowly; an install allows 60 MCP calls a minute and each pull makes three. */
 export const POSTURE_EVERY_MS = 60 * 60_000;
 
 export type PostureConnect = (consoleUrl: string, token: string) => McpCall;
@@ -33,7 +33,7 @@ function credentials(row: IntegrationRow): { consoleUrl: string; token: string }
 }
 
 /**
- * Pull ISM status and ATT&CK coverage from every enabled Wedgetail install that has a console URL and
+ * Pull ISM status, the Essential Eight summary and ATT&CK coverage from every enabled Wedgetail install that has a console URL and
  * MCP token, when due. A failure keeps the last good snapshot and backs off; a refused token waits a day.
  */
 export async function syncWedgetailPosture(opts: { now?: Date; connect?: PostureConnect; force?: string } = {}): Promise<Counts> {
@@ -59,7 +59,7 @@ export async function syncWedgetailPosture(opts: { now?: Date; connect?: Posture
     if (!opts.force && state && state.nextAttemptAt > now) { counts.skipped++; continue; }
     try {
       const posture = await fetchPosture(connect(creds.consoleUrl, creds.token));
-      const values = { ism: posture.ism, mitre: posture.mitre, fetchedAt: now, attemptedAt: now, attempts: 0, nextAttemptAt: new Date(now.getTime() + POSTURE_EVERY_MS), lastError: null };
+      const values = { ism: posture.ism, mitre: posture.mitre, e8: posture.e8, fetchedAt: now, attemptedAt: now, attempts: 0, nextAttemptAt: new Date(now.getTime() + POSTURE_EVERY_MS), lastError: null };
       await withScope(systemScope(tenantId), (tx) =>
         tx.insert(wedgetailPosture).values({ integrationId: row.id, tenantId, ...values }).onConflictDoUpdate({ target: wedgetailPosture.integrationId, set: values }));
       counts.pulled++;

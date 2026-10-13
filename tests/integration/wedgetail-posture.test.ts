@@ -10,7 +10,7 @@ import { attackCoverage } from "@/lib/services/detections";
 import { createWedgetailIntegration, updateIntegration } from "@/lib/services/integrations";
 import { readWedgetailPosture, refreshWedgetailPosture, syncWedgetailPosture } from "@/lib/services/wedgetail-posture";
 import { WedgetailApiError } from "@/lib/wedgetail/posture";
-import { ISM, MITRE, TOKEN } from "../fixtures/wedgetail-posture";
+import { E8, ISM, MITRE, TOKEN } from "../fixtures/wedgetail-posture";
 
 const stamp = `wt-posture-${Date.now()}`;
 const userId = `${stamp}-lead`;
@@ -23,7 +23,7 @@ function staff(tenantId: string, permissions = ["integration:manage", "integrati
     grants: [{ roleKey: "soc_manager", tenantId, permissions: new Set(permissions as never[]) }], tenantIds: [tenantId],
     tenants: [{ id: tenantId, slug: "fictional", name: "Fictional", kind: "customer" }] };
 }
-const ok = () => async (tool: string) => (tool === "ism_status" ? ISM : MITRE);
+const ok = () => async (tool: string) => (tool === "ism_status" ? ISM : tool === "essential_eight_summary" ? E8 : MITRE);
 
 beforeAll(async () => {
   const rows = await adminDb().insert(tenants).values([
@@ -56,6 +56,7 @@ describe("Wedgetail posture pull", () => {
     expect(row!.ism!.counts).toEqual({ met: 1, partial: 1, not_met: 1, not_applicable: 0 });
     expect(JSON.stringify(row!.ism)).not.toContain("CISO");
     expect(row!.mitre!.techniques.map((t) => t.id)).toContain("T1078");
+    expect(row!.e8!.strategies.map((s) => [s.strategy, s.maturity])).toEqual([["mfa", 1], ["restrict_admin", 0]]);
 
     let called = false;
     await syncWedgetailPosture({ now: new Date(now.getTime() + 60_000), connect: () => async () => { called = true; return ISM; } });
@@ -82,6 +83,7 @@ describe("Wedgetail posture pull", () => {
     await syncWedgetailPosture({ force: integrationId, connect: ok });
     const data = await complianceSignals(lead, [a, b], 30);
     expect(data.customers.find((c) => c.tenantId === a)?.wedgetail?.counts).toEqual({ met: 1, partial: 1, not_met: 0, not_applicable: 0 });
+    expect(data.customers.find((c) => c.tenantId === a)?.wedgetail?.e8).toEqual({ mfa: { maturity: 1, gap: 2, partlyMet: 0 }, restrict_admin: { maturity: 0, gap: 1, partlyMet: 0 } });
     expect(data.customers.find((c) => c.tenantId === b)?.wedgetail).toBeNull();
     expect(data.wedgetailControls.map((c) => c.id).sort()).toEqual(["ISM-1228", "ISM-1509"]);
     const cells = await attackCoverage(lead, [a]);

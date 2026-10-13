@@ -6,6 +6,7 @@ import { can } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { CATEGORY_LABELS, secretFields } from "@/lib/integrations/form-spec";
 import type { ConnectorCategory } from "@/lib/connectors/registry";
+import { STRATEGY_SHORT } from "@/lib/essential-eight/requirements";
 import { catalogue, integrationAudit, listIntegrations } from "@/lib/services/integrations";
 import { readWedgetailPosture } from "@/lib/services/wedgetail-posture";
 import { minSeverityFor, supportsAlertFloor } from "@/lib/integrations/alert-floor";
@@ -108,15 +109,16 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
           </Card>
           {row.provider === "wedgetail" ? (
             <Card>
-              <CardHeader><CardTitle>ISM &amp; ATT&amp;CK posture</CardTitle>{manage && consoleUrl ? <PullWedgetailPosture id={row.id} /> : null}</CardHeader>
+              <CardHeader><CardTitle>ISM, Essential Eight &amp; ATT&amp;CK posture</CardTitle>{manage && consoleUrl ? <PullWedgetailPosture id={row.id} /> : null}</CardHeader>
               <CardContent className="space-y-3 text-sm">
                 {!consoleUrl ? (
-                  <p className="text-xs text-muted">Optional. Add <code>consoleUrl</code> to the configuration and an <code>mcpToken</code> secret (a read-only <code>wtp_</code> token from Wedgetail <span className="whitespace-nowrap">Settings → MCP</span>, issued by an unscoped user) to pull this install&apos;s ISM control status and ATT&amp;CK rule coverage every hour.</p>
+                  <p className="text-xs text-muted">Optional. Add <code>consoleUrl</code> to the configuration and an <code>mcpToken</code> secret (a read-only <code>wtp_</code> token from Wedgetail <span className="whitespace-nowrap">Settings → MCP</span>, issued by an unscoped user) to pull this install&apos;s ISM control status, Essential Eight evidence maturity and ATT&amp;CK rule coverage every hour.</p>
                 ) : (
                   <>
                     <div><div className="text-[11px] uppercase tracking-wider text-faint">Console</div><code className="break-all text-xs">{consoleUrl}</code></div>
                     <div><div className="text-[11px] uppercase tracking-wider text-faint">Last pulled</div>{posture?.fetchedAt ? fmtDateTime(posture.fetchedAt) : <span className="text-faint">Not yet</span>}</div>
                     {posture?.ism ? <div><div className="text-[11px] uppercase tracking-wider text-faint">ISM ({posture.ism.release})</div>{posture.ism.counts.met} met · {posture.ism.counts.partial} partly met · {posture.ism.counts.not_met} gap · {posture.ism.counts.not_applicable} outside Wedgetail</div> : null}
+                    {posture?.e8 ? <div><div className="text-[11px] uppercase tracking-wider text-faint">Essential Eight evidence</div>{posture.e8.strategies.map((s) => `${STRATEGY_SHORT[s.strategy]} ML${s.maturity}`).join(" · ")}</div> : posture?.fetchedAt ? <div><div className="text-[11px] uppercase tracking-wider text-faint">Essential Eight evidence</div><span className="text-faint">Not available from this install (update Wedgetail, or use a token from an unscoped user)</span></div> : null}
                     {posture?.mitre ? <div><div className="text-[11px] uppercase tracking-wider text-faint">ATT&amp;CK (v{posture.mitre.version})</div>{posture.mitre.totals.relevantCovered} of {posture.mitre.totals.relevant} relevant techniques have an enabled rule</div> : null}
                     {posture?.lastError ? <div><div className="text-[11px] uppercase tracking-wider text-faint">Last error</div><div className="break-words text-danger">{posture.lastError}</div><div className="text-xs text-muted">Next try {fmtDateTime(posture.nextAttemptAt)}</div></div> : null}
                     <Link href="/soc/compliance" className="text-xs text-accent hover:underline">View ISM &amp; Essential Eight →</Link>

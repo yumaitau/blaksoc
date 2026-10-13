@@ -6,24 +6,13 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { requireAccess } from "@/lib/auth/session";
 import { ISM_RELEASE } from "@/lib/compliance/ism-catalogue";
 import { ismText } from "@/lib/compliance/refs";
-import { STRATEGIES, type StrategyId } from "@/lib/essential-eight/requirements";
+import { STRATEGIES, STRATEGY_SHORT as SHORT } from "@/lib/essential-eight/requirements";
 import { COMPLIANCE_WINDOWS, complianceSignals, type ComplianceWindow, type RefSignal, type WedgetailControl } from "@/lib/services/compliance";
 import type { IsmStatus } from "@/lib/wedgetail/posture";
 import { cn, fmtDateTime, timeAgo } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 
 export const metadata = { title: "ISM & Essential Eight" };
-
-const SHORT: Record<StrategyId, string> = {
-  patch_applications: "Patch apps",
-  patch_os: "Patch OS",
-  mfa: "MFA",
-  restrict_admin: "Admin privileges",
-  application_control: "App control",
-  office_macros: "Office macros",
-  user_app_hardening: "App hardening",
-  regular_backups: "Backups",
-};
 
 const queue = (params: Record<string, string>, days: number) => `/soc/alerts?${new URLSearchParams({ ...params, days: String(days) })}`;
 
@@ -82,7 +71,7 @@ export default async function CompliancePage({ searchParams }: { searchParams: P
       <Card>
         <CardHeader className="flex-wrap">
           <CardTitle>Essential Eight by customer</CardTitle>
-          <span className="text-xs text-muted">Assessed maturity · mapped detections in the last {days} days</span>
+          <span className="text-xs text-muted">Assessed maturity · Wedgetail evidence maturity (WT) · mapped detections in the last {days} days</span>
         </CardHeader>
         <CardContent className="overflow-x-auto p-0">
           <Table>
@@ -110,10 +99,12 @@ export default async function CompliancePage({ searchParams }: { searchParams: P
                   </TD>
                   {STRATEGIES.map((s) => {
                     const level = c.assessed?.[s.id];
+                    const wt = c.wedgetail?.e8?.[s.id];
                     const hits = c.alerts[s.id] ?? 0;
                     return (
                       <TD key={s.id} className="text-center">
                         <div className={cn("text-sm font-medium", level === undefined ? "text-faint" : level === 0 ? "text-danger" : level === 1 ? "text-warn" : "text-fg")}>{level === undefined ? "—" : `ML${level}`}</div>
+                        {wt ? <div className={cn("text-xs", wt.maturity === 0 ? "text-danger" : wt.maturity === 1 ? "text-warn" : "text-muted")} title={wt.maturity < 3 ? `Wedgetail evidence: ML${wt.maturity}. Toward ML${wt.maturity + 1}: ${wt.gap} gap, ${wt.partlyMet} partly met.` : "Wedgetail evidence: ML3."}>WT ML{wt.maturity}</div> : null}
                         {hits ? <Link href={queue({ tenant: c.tenantId, e8: s.id }, days)} className="text-xs text-accent hover:underline">{hits} detection{hits === 1 ? "" : "s"}</Link> : <div className="text-xs text-faint">0</div>}
                       </TD>
                     );
@@ -130,7 +121,7 @@ export default async function CompliancePage({ searchParams }: { searchParams: P
         <CardHeader><CardTitle>Essential Eight strategies</CardTitle></CardHeader>
         <CardContent className="overflow-x-auto p-0">
           <SignalTable rows={STRATEGIES.map((s) => ({ key: s.id, anchor: `e8-${s.id}`, label: s.label, row: e8.get(s.id), href: queue({ e8: s.id }, days) }))} />
-          <p className="border-t border-border px-4 py-2 text-xs text-muted">Wedgetail&apos;s own Essential Eight evidence assessment is not available over its MCP endpoint yet, so maturity here is the customer&apos;s blakSOC assessment.</p>
+          <p className="border-t border-border px-4 py-2 text-xs text-muted">ML is the customer&apos;s blakSOC assessment. WT is the maturity Wedgetail&apos;s evidence supports, the lowest across a customer&apos;s installs. It is evidence for an assessor, not a compliance determination.</p>
         </CardContent>
       </Card>
 

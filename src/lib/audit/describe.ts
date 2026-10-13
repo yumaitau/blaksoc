@@ -156,7 +156,7 @@ const DESCRIBE: Record<string, Describer> = {
   "integration.update": ({ d }) => (Array.isArray(d.fields) && d.fields.length ? `Updated the integration's ${fields(d.fields.map(String))}` : "Updated the integration"),
   "integration.test": ({ d }) => `Tested the integration connection: ${d.ok ? "passed" : "failed"}`,
   "integration.link_tenant": "Linked the integration to a customer",
-  "integration.wedgetail_posture": ({ d }) => `Pulled ISM and ATT&CK posture from Wedgetail: ${d.ok ? "succeeded" : "failed"}`,
+  "integration.wedgetail_posture": ({ d }) => `Pulled ISM, Essential Eight and ATT&CK posture from Wedgetail: ${d.ok ? "succeeded" : "failed"}`,
   "kelpie.case_push": ({ d }) => `Pushed the incident to Kelpie${str(d.caseNumber) ? ` as case ${str(d.caseNumber)}` : ""}`,
   "kelpie.case_sync": "Synced the incident from Kelpie",
 

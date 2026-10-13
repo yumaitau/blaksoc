@@ -20,6 +20,18 @@ export const STRATEGIES = [
 
 export type StrategyId = (typeof STRATEGIES)[number]["id"];
 
+/** Column-width strategy names. */
+export const STRATEGY_SHORT: Record<StrategyId, string> = {
+  patch_applications: "Patch apps",
+  patch_os: "Patch OS",
+  mfa: "MFA",
+  restrict_admin: "Admin privileges",
+  application_control: "App control",
+  office_macros: "Office macros",
+  user_app_hardening: "App hardening",
+  regular_backups: "Backups",
+};
+
 export const DISCLAIMER = "This is a self-assessment. It is not an ACSC-endorsed audit.";
 
 export const MODEL_NOTE =

@@ -17,9 +17,15 @@ export type CustomerE8 = {
   assessed: Partial<Record<StrategyId, Level>> | null;
   assessedAt: string | null;
   alerts: Partial<Record<StrategyId, number>>;
-  /** ISM control status from the customer's Wedgetail installs, summed; null when none is pulling posture. */
-  wedgetail: { counts: Record<IsmStatus, number>; fetchedAt: string | null; error: string | null } | null;
+  /**
+   * ISM control status from the customer's Wedgetail installs, summed, and Wedgetail's own Essential Eight
+   * maturity per strategy (the lowest across installs); null when none is pulling posture.
+   */
+  wedgetail: { counts: Record<IsmStatus, number>; e8: Partial<Record<StrategyId, WedgetailStrategy>> | null; fetchedAt: string | null; error: string | null } | null;
 };
+
+/** Wedgetail's evidence maturity for one strategy, with its requirement gaps up to the next level. */
+export type WedgetailStrategy = { maturity: Level; gap: number; partlyMet: number };
 
 /** One ISM control as Wedgetail rates it across the customers in scope. */
 export type WedgetailControl = { id: string; title: string; statuses: Record<IsmStatus, number>; reasons: { tenantId: string; status: IsmStatus; reason: string }[] };
@@ -64,9 +70,16 @@ export async function complianceSignals(ctx: AccessContext, tenantIds: readonly 
     const controls = new Map<string, WedgetailControl>();
     const byTenant = new Map<string, NonNullable<CustomerE8["wedgetail"]>>();
     for (const row of posture) {
-      const t = byTenant.get(row.tenantId) ?? { counts: emptyStatuses(), fetchedAt: null, error: null };
+      const t = byTenant.get(row.tenantId) ?? { counts: emptyStatuses(), e8: null, fetchedAt: null, error: null };
       if (row.lastError) t.error = row.lastError;
       if (row.fetchedAt && (!t.fetchedAt || row.fetchedAt.toISOString() < t.fetchedAt)) t.fetchedAt = row.fetchedAt.toISOString();
+      for (const s of row.e8?.strategies ?? []) {
+        // Gaps that hold the strategy at its maturity: the next level's unmet requirements.
+        const next = s.levels.find((l) => l.level === s.maturity + 1)?.counts;
+        const entry = { maturity: s.maturity, gap: next?.gap ?? 0, partlyMet: next?.partly_met ?? 0 };
+        const prev = t.e8?.[s.strategy];
+        t.e8 = { ...t.e8, [s.strategy]: prev && prev.maturity <= entry.maturity ? prev : entry };
+      }
       for (const c of row.ism?.controls ?? []) {
         if (c.withdrawn) continue;
         t.counts[c.status]++;

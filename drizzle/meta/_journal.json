@@ -267,6 +267,13 @@
       "when": 1790631000000,
       "tag": "0038_wedgetail_posture",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1790632000000,
+      "tag": "0039_wedgetail_posture_e8",
+      "breakpoints": true
     }
   ]
 }

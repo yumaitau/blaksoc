@@ -1,10 +1,10 @@
 import { index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
-import type { WedgetailIsm, WedgetailMitre } from "@/lib/wedgetail/posture";
+import type { WedgetailE8, WedgetailIsm, WedgetailMitre } from "@/lib/wedgetail/posture";
 import { tenants } from "./platform";
 import { integrations } from "./security";
 
 /**
- * Latest ISM control status and ATT&CK rule coverage pulled from a customer's Wedgetail install over MCP.
+ * Latest ISM control status, Essential Eight assessment summary and ATT&CK rule coverage pulled from a customer's Wedgetail install over MCP.
  * One row per integration; the last good snapshot stays when a later pull fails.
  */
 export const wedgetailPosture = pgTable(
@@ -14,6 +14,8 @@ export const wedgetailPosture = pgTable(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     ism: jsonb("ism").$type<WedgetailIsm>(),
     mitre: jsonb("mitre").$type<WedgetailMitre>(),
+    /** Null when the install predates essential_eight_summary or the token's owner is scoped. */
+    e8: jsonb("e8").$type<WedgetailE8>(),
     fetchedAt: timestamp("fetched_at", { withTimezone: true }),
     attemptedAt: timestamp("attempted_at", { withTimezone: true }).notNull().defaultNow(),
     attempts: integer("attempts").notNull().default(0),
