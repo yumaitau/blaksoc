@@ -2,7 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { ZodError } from "zod";
 import { withAccess } from "@/lib/actions";
-import { createIntegration, linkTenant, setAlertFloor, testIntegration, updateIntegration } from "@/lib/services/integrations";
+import { createWedgetailIntegration, createIntegration, linkTenant, setAlertFloor, testIntegration, updateIntegration } from "@/lib/services/integrations";
 import type { Severity } from "@/lib/providers/types";
 
 /** Zod issues name the field and rule only, never the submitted value, so they are safe to show. */
@@ -23,9 +23,14 @@ const refresh = (id?: string) => {
 export async function createIntegrationAction(input: { tenantId: string | null; provider: string; name: string; config: unknown; secrets: Record<string, string> }) {
   return withAccess(async (ctx) => {
     const secrets = Object.fromEntries(Object.entries(input.secrets).filter(([, v]) => v));
+    if (input.provider === "wedgetail") {
+      const created = await explain(createWedgetailIntegration(ctx, { tenantId: input.tenantId, name: input.name.trim(), config: input.config }));
+      refresh();
+      return created;
+    }
     const id = await explain(createIntegration(ctx, { ...input, name: input.name.trim(), secrets }));
     refresh();
-    return id;
+    return { id };
   });
 }
 

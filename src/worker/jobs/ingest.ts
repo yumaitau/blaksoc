@@ -41,7 +41,7 @@ export async function storeVulnerabilities(tenantId: string, list: (typeof vulne
 
 async function eventIntegrations(): Promise<IntegrationRow[]> {
   const rows = await systemDb().select().from(integrations).where(and(eq(integrations.enabled, true), inArray(integrations.category, ["siem", "endpoint", "identity"])));
-  return rows.filter((r) => connectorDef(r.provider)?.capabilities.includes("events"));
+  return rows.filter((r) => r.provider !== "wedgetail" && connectorDef(r.provider)?.capabilities.includes("events"));
 }
 
 /** Which tenants a SIEM integration serves: its owner, or its tenant links for shared clusters. */
@@ -153,6 +153,7 @@ async function saveCursor(row: IntegrationRow, cursor: string): Promise<void> {
 
 /** One integration's poll. Returns how many alerts it created. */
 export async function pollIntegration(row: IntegrationRow, tierOf: (id: string) => Tier, log: Log): Promise<number> {
+  if (row.provider === "wedgetail") return 0;
   try {
     const provider = eventProvider(row);
     const links = await tenantLinks(row);
@@ -263,6 +264,7 @@ export async function probeHealth() {
   const rows = await systemDb().select().from(integrations).where(eq(integrations.enabled, true));
   const { instantiate } = await import("@/lib/connectors/instances");
   for (const row of rows) {
+    if (row.provider === "wedgetail") continue;
     try {
       const inst = instantiate(row);
       if (inst.kind === "notify") continue;

@@ -96,7 +96,8 @@ SIEMs ──┘                         ▼   ▼
 - `deploy/` — Docker targets, full-stack Compose (with OpenCTI + feeds + Ollama), Wazuh active-response scripts, Helm chart.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY.md](docs/SECURITY.md). Connector setup guides:
-[Microsoft 365](docs/connectors/entra-setup.md), [Tawny EDR](docs/connectors/tawny.md).
+[Microsoft 365](docs/connectors/entra-setup.md), [Tawny EDR](docs/connectors/tawny.md),
+[Wedgetail](docs/connectors/wedgetail.md).
 
 ## Multi-tenancy in one paragraph
 
