@@ -17,7 +17,7 @@ threat-intel enrichment, risk scoring and alert-created playbooks.
    same signature scheme. The parameters are `/wedgetail/integrations/webhook-url` and
    `/wedgetail/integrations/webhook-secret`. Enable notifications and choose a severity threshold.
 4. Send a test alert and check the integration's **Connection** panel for **Last received**
-   and the `created`, `duplicate`, `unrouted` and `rejected` counts.
+   and the `created`, `duplicate`, `unrouted`, `rejected` and `ignored` counts.
 
 Use HTTPS. The ingest URL is `/api/ingest/wedgetail/<integrationId>` on the blakSOC origin.
 Disabling the integration stops deliveries with 404. To rotate, enter a new signingSecret in
@@ -63,13 +63,21 @@ analyst status, doubling sightings, or rerunning alert-created notifications/pla
 already bound to another install in the same tenant is refused as unrouted; use distinct alert IDs
 across installs. Concurrent deliveries serialise on that deduplication key.
 
-202 means created; 200 means refreshed or status applied/ignored; 400 means invalid payload;
+202 means created or an unhandled signed notice ignored; 200 means refreshed or status applied/ignored;
+400 means invalid payload;
 401 means invalid/stale signature; 404 means unknown/disabled integration; 409 means unrouted;
 413 means oversized; 429 includes Retry-After; 503 means retry later. Retry a status event returning
 409 after its creation event has arrived. Unknown installs only contribute to the metric's fixed
 `integration="unknown"` rejected bucket. For known installs, rejected deliveries increment health
 counts but do not advance Last received. Valid status events count as duplicate (existing finding).
 Prometheus uses `blaksoc_ingest_alerts_total{provider="wedgetail",outcome="..."}`.
+
+Signed JSON objects with a `type` starting with `wedgetail.` other than the handled
+`wedgetail.alert.created` and `wedgetail.alert.updated` events receive
+`202 { "outcome": "ignored" }`. This includes incident-created and incident-escalated notices.
+Ignored deliveries advance Last received and increment `ignored` in health and the metric;
+their payloads are not stored and do not trigger enrichment, audit entries or playbooks.
+Malformed JSON/envelopes, malformed handled alerts and invalid/stale signatures are still refused.
 
 ## Inbound status sync
 

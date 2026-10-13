@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PERMISSIONS, type Permission } from "@/lib/auth/permissions";
 import * as S from "./schemas";
-import { wedgetailEvent } from "@/lib/providers/wedgetail";
+import { unhandledWedgetailEvent, wedgetailEvent } from "@/lib/providers/wedgetail";
 import { TOKEN_TTL_SECONDS } from "./tokens";
 
 type Operation = {
@@ -119,16 +119,16 @@ export function openApiDocument() {
   paths["/api/ingest/wedgetail/{integrationId}"] = {
     post: {
       servers: [{ url: "/" }], operationId: "ingestWedgetail", summary: "Ingest a signed Wedgetail alert or status update into the integration's tenant",
-      description: 'HMAC-SHA256 of the exact "<timestamp>.<raw body>" bytes, per-integration secret, signature v1=<lowercase hex>. Canonical decimal timestamp seconds must be within ±300 seconds. Maximum body 262144 bytes. Never routes by payload tenant/account. Status updates require alert.updatedAt; old or repeated updates are ignored. No outbound status notification.',
+      description: 'HMAC-SHA256 of the exact "<timestamp>.<raw body>" bytes, per-integration secret, signature v1=<lowercase hex>. Canonical decimal timestamp seconds must be within ±300 seconds. Maximum body 262144 bytes. Never routes by payload tenant/account. Status updates require alert.updatedAt; old or repeated updates are ignored. No outbound status notification. Other signed JSON objects with a wedgetail.* type return 202 with outcome=ignored and are counted without storing their payload.',
       security: [{ wedgetailHmac: [] }],
       parameters: [
         { name: "integrationId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
         { name: "x-wedgetail-timestamp", in: "header", required: true, schema: { type: "string", pattern: "^[0-9]{10,12}$" } },
         { name: "x-wedgetail-event-id", in: "header", required: false, description: "Sender delivery ID; deduplication uses the signed alert.id", schema: { type: "string" } },
       ],
-      requestBody: { required: true, content: { "application/json": { schema: schemaFor(wedgetailEvent, "input") } } },
+      requestBody: { required: true, content: { "application/json": { schema: schemaFor(z.union([...wedgetailEvent.options, unhandledWedgetailEvent]), "input") } } },
       responses: {
-        "202": { description: "Created" }, "200": { description: "Duplicate refreshed or status applied/ignored" },
+        "202": { description: "Created or unhandled signed Wedgetail notice ignored" }, "200": { description: "Duplicate refreshed or status applied/ignored" },
         "400": { description: "Invalid event or insecure transport" }, "401": { description: "Invalid or stale signature" },
         "404": { description: "Unknown or disabled integration" }, "409": { description: "Unrouted: status target not received yet, or finding belongs to another install" },
         "413": { description: "Body exceeds 256 KB" }, "429": { description: "300 requests per integration per minute exceeded; see Retry-After" }, "503": { description: "Temporarily unavailable; retry delivery" },

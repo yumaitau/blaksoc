@@ -31,6 +31,10 @@ const updated = z.object({
   alert: z.object({ id: identifier, status: z.enum(Object.keys(WEDGETAIL_STATUSES) as [keyof typeof WEDGETAIL_STATUSES, ...(keyof typeof WEDGETAIL_STATUSES)[]]), updatedAt: date }),
 });
 export const wedgetailEvent = z.union([updated, created, summary]);
+/** Other signed Wedgetail notices are acknowledged without validating or retaining their contents. */
+export const unhandledWedgetailEvent = z.object({
+  type: z.string().regex(/^wedgetail\.(?!(?:alert\.created|alert\.updated)$)/),
+});
 export type WedgetailEvent = z.infer<typeof wedgetailEvent>;
 export type WedgetailUpdate = z.infer<typeof updated>;
 

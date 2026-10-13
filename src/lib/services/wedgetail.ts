@@ -8,14 +8,14 @@ import { intelProviderFor, secretAad, type IntegrationRow } from "@/lib/connecto
 import { decryptSecret } from "@/lib/crypto";
 import { ingestAlerts, ingestLag } from "@/lib/obs/metrics";
 import { ingestAlert, IngestIntegrationConflict, IngestIntegrationUnavailable } from "@/lib/pipeline/ingest";
-import { normaliseWedgetail, verifyWedgetail, wedgetailEvent, WEDGETAIL_BODY_LIMIT, WEDGETAIL_STATUSES, type WedgetailUpdate } from "@/lib/providers/wedgetail";
+import { normaliseWedgetail, unhandledWedgetailEvent, verifyWedgetail, wedgetailEvent, WEDGETAIL_BODY_LIMIT, WEDGETAIL_STATUSES, type WedgetailUpdate } from "@/lib/providers/wedgetail";
 import { evaluateTriggers } from "@/lib/soar/engine";
 
 export class WedgetailError extends Error {
   constructor(readonly status: number, readonly code: string) { super(code); }
 }
 export type WedgetailIntegration = IntegrationRow & { tenantId: string };
-export type WedgetailOutcome = "created" | "duplicate" | "unrouted" | "rejected";
+export type WedgetailOutcome = "created" | "duplicate" | "unrouted" | "rejected" | "ignored";
 
 /** System connection is only for credential resolution before a tenant is known. */
 export async function wedgetailIntegration(id: string): Promise<WedgetailIntegration | null> {
@@ -30,7 +30,7 @@ export async function recordWedgetailOutcome(row: WedgetailIntegration | null, o
   if (!row) return;
   const now = new Date();
   await withScope(systemScope(row.tenantId), (tx) => tx.update(integrations).set({
-    health: sql`jsonb_build_object('ok', true, 'latencyMs', 0, 'detail', ('{"created":0,"duplicate":0,"unrouted":0,"rejected":0}'::jsonb || coalesce(${integrations.health}->'detail', '{}'::jsonb)) || jsonb_build_object(${outcome}::text, coalesce((${integrations.health}->'detail'->>${outcome})::bigint, 0) + 1) ${outcome !== "rejected" ? sql`|| jsonb_build_object('lastReceivedAt', ${now.toISOString()}::text)` : sql``})`,
+    health: sql`jsonb_build_object('ok', true, 'latencyMs', 0, 'detail', ('{"created":0,"duplicate":0,"unrouted":0,"rejected":0,"ignored":0}'::jsonb || coalesce(${integrations.health}->'detail', '{}'::jsonb)) || jsonb_build_object(${outcome}::text, coalesce((${integrations.health}->'detail'->>${outcome})::bigint, 0) + 1) ${outcome !== "rejected" ? sql`|| jsonb_build_object('lastReceivedAt', ${now.toISOString()}::text)` : sql``})`,
     ...(outcome !== "rejected" ? { status: "healthy", lastSuccessAt: now } : {}),
   }).where(and(eq(integrations.id, row.id), eq(integrations.tenantId, row.tenantId))));
 }
@@ -68,6 +68,10 @@ export async function acceptWedgetail(row: WedgetailIntegration, body: Uint8Arra
   let payload: unknown;
   try { payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)); }
   catch { throw new WedgetailError(400, "invalid_event"); }
+  if (unhandledWedgetailEvent.safeParse(payload).success) {
+    await recordWedgetailOutcome(row, "ignored");
+    return { outcome: "ignored" };
+  }
   const parsed = wedgetailEvent.safeParse(payload);
   if (!parsed.success) throw new WedgetailError(400, "invalid_event");
   const event = parsed.data;

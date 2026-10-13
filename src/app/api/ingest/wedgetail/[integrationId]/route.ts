@@ -49,7 +49,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ integra
         return Response.json({ error: "not_found" }, { status: 404 });
       }
       const result = await acceptWedgetail(row, await readBody(req), req.headers);
-      return Response.json(result, { status: result.outcome === "created" ? 202 : 200 });
+      return Response.json(result, { status: result.outcome === "created" || result.outcome === "ignored" ? 202 : 200 });
     } catch (err) {
       if (err instanceof WedgetailError) {
         if (err.code !== "unrouted") await recordWedgetailOutcome(row, "rejected").catch(() => logger.warn("wedgetail rejected count unavailable"));

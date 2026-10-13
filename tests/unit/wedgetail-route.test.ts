@@ -54,6 +54,38 @@ describe("Wedgetail inbound route", () => {
     expect(mocks.count).toHaveBeenCalledWith({ provider: "wedgetail", integration: id, outcome: "duplicate" });
   });
 
+  it.each(["wedgetail.incident.created", "wedgetail.incident.escalated", "wedgetail.future.notice"])("acknowledges signed %s notices without storing them", async (type) => {
+    const setHealth = vi.fn().mockReturnValue({ where: () => Promise.resolve() });
+    mocks.tx.update.mockReturnValue({ set: setHealth });
+    const body = JSON.stringify({ type, incident: { id: "wt-fictional-incident", title: "Fictional AWS incident", accountId: "111122223333" }, url: "https://wedgetail.example.com/incidents/wt-fictional-incident" });
+    const response = await request(body);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ outcome: "ignored" });
+    expect(mocks.count).toHaveBeenCalledExactlyOnceWith({ provider: "wedgetail", integration: id, outcome: "ignored" });
+    expect(mocks.tx.update).toHaveBeenCalledTimes(1);
+    expect(setHealth).toHaveBeenCalledWith(expect.objectContaining({ health: expect.any(Object), status: "healthy", lastSuccessAt: expect.any(Date) }));
+    expect(mocks.tx.select).not.toHaveBeenCalled();
+    expect(mocks.ingest).not.toHaveBeenCalled();
+    expect(mocks.intel).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.publish).not.toHaveBeenCalled();
+    expect(mocks.triggers).not.toHaveBeenCalled();
+    expect(mocks.lag).not.toHaveBeenCalled();
+  });
+
+  it("refuses unsigned/stale unhandled notices and malformed envelopes or handled events", async () => {
+    const body = JSON.stringify({ type: "wedgetail.incident.created", incident: { id: "wt-fictional-incident" } });
+    for (const options of [{ signature: "" }, { signature: "v1=bad" }, { timestamp: String(Math.floor(Date.now() / 1000) - 301) }]) {
+      expect((await request(body, options)).status).toBe(401);
+    }
+    for (const malformed of ["not-json", "null", "[]", "{}", JSON.stringify("wedgetail.incident.created"), JSON.stringify({ type: 123 }), JSON.stringify({ type: "other.incident.created" }), JSON.stringify({ type: "wedgetail.alert.created" }), JSON.stringify({ type: "wedgetail.alert.updated" })]) {
+      expect((await request(malformed)).status).toBe(400);
+    }
+    expect(mocks.count.mock.calls.every(([labels]) => labels.outcome === "rejected")).toBe(true);
+    expect(mocks.ingest).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
   it("rejects bad, stale, future and missing signatures without ingesting", async () => {
     const body = JSON.stringify(WEDGETAIL_CREATED);
     for (const options of [{ signature: "v1=bad" }, { signature: "" }, { timestamp: String(Math.floor(Date.now() / 1000) - 301) }, { timestamp: String(Math.floor(Date.now() / 1000) + 301) }]) {

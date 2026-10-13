@@ -53,7 +53,14 @@ describe("Wedgetail contract", () => {
   });
 
   it("validates status event timestamps and maps acknowledged, closed and reopened", () => {
-    expect(WEDGETAIL_STATUSES).toMatchObject({ acknowledged: "TRIAGING", closed: "RESOLVED", closed_false_positive: "FALSE_POSITIVE", new: "NEW", reopened: "NEW" });
+    expect(WEDGETAIL_STATUSES).toEqual({
+      new: "NEW", acknowledged: "TRIAGING", in_progress: "INVESTIGATING",
+      closed_true_positive: "RESOLVED", closed_benign: "RESOLVED", closed_false_positive: "FALSE_POSITIVE",
+      reopened: "NEW", closed: "RESOLVED",
+    });
+    for (const status of ["new", "acknowledged", "in_progress", "closed_true_positive", "closed_benign", "closed_false_positive"]) {
+      expect(wedgetailEvent.safeParse({ type: "wedgetail.alert.updated", alert: { id: "fictional", status, updatedAt: "2026-10-13T00:00:01Z" } }).success).toBe(true);
+    }
     expect(wedgetailEvent.safeParse({ type: "wedgetail.alert.updated", alert: { id: "fictional", status: "closed", updatedAt: "not-a-date" } }).success).toBe(false);
     expect(wedgetailEvent.safeParse({ type: "wedgetail.alert.updated", alert: { id: "fictional", status: "closed" } }).success).toBe(false);
     expect(wedgetailEvent.safeParse({ ...WEDGETAIL_CREATED, alert: { ...WEDGETAIL_CREATED.alert, firstSeen: "yesterday" } }).success).toBe(false);

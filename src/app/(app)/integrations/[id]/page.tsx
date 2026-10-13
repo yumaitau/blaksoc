@@ -28,7 +28,7 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
   const manage = row.tenantId ? can(ctx, "integration:manage", row.tenantId) : ctx.isPlatform && can(ctx, "integration:manage");
   const audit = await integrationAudit(ctx, id);
   const linkable = ctx.isPlatform && !row.tenantId ? ctx.tenants.filter((t) => t.kind === "customer" && can(ctx, "integration:manage", t.id)) : [];
-  const health = (row.health ?? (row.provider === "wedgetail" ? { detail: { created: 0, duplicate: 0, unrouted: 0, rejected: 0 } } : null)) as { ok?: boolean; latencyMs?: number; detail?: Record<string, unknown> } | null;
+  const health = (row.health ?? (row.provider === "wedgetail" ? { detail: { created: 0, duplicate: 0, unrouted: 0, rejected: 0, ignored: 0 } } : null)) as { ok?: boolean; latencyMs?: number; detail?: Record<string, unknown> } | null;
 
   return (
     <div className="space-y-5">
