@@ -28,7 +28,7 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
   const manage = row.tenantId ? can(ctx, "integration:manage", row.tenantId) : ctx.isPlatform && can(ctx, "integration:manage");
   const audit = await integrationAudit(ctx, id);
   const linkable = ctx.isPlatform && !row.tenantId ? ctx.tenants.filter((t) => t.kind === "customer" && can(ctx, "integration:manage", t.id)) : [];
-  const health = row.health as { ok?: boolean; latencyMs?: number; detail?: Record<string, unknown> } | null;
+  const health = (row.health ?? (row.provider === "wedgetail" ? { detail: { created: 0, duplicate: 0, unrouted: 0, rejected: 0 } } : null)) as { ok?: boolean; latencyMs?: number; detail?: Record<string, unknown> } | null;
 
   return (
     <div className="space-y-5">
@@ -87,7 +87,8 @@ export default async function IntegrationPage({ params }: { params: Promise<{ id
           <Card>
             <CardHeader><CardTitle>Connection</CardTitle><ConnectionStatus status={row.status} enabled={row.enabled} /></CardHeader>
             <CardContent className="space-y-3 text-sm">
-              <div><div className="text-[11px] uppercase tracking-wider text-faint">Last successful sync</div>{fmtDateTime(row.lastSuccessAt)}</div>
+              {row.provider === "wedgetail" ? <div><div className="text-[11px] uppercase tracking-wider text-faint">Ingest path</div><code className="break-all text-xs">/api/ingest/wedgetail/{row.id}</code></div> : null}
+              <div><div className="text-[11px] uppercase tracking-wider text-faint">{row.provider === "wedgetail" ? "Last received" : "Last successful sync"}</div>{fmtDateTime(row.lastSuccessAt)}</div>
               <div>
                 <div className="text-[11px] uppercase tracking-wider text-faint">Last error</div>
                 {row.lastError ? <div className="text-danger break-words">{row.lastError}<div className="text-xs text-muted">{fmtDateTime(row.lastErrorAt)}</div></div> : <span className="text-faint">None</span>}

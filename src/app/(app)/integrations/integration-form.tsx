@@ -21,6 +21,7 @@ export function IntegrationForm(props: Props) {
   const [owner, setOwner] = useState(props.mode === "create" ? (props.owners[0]?.id ?? "") : "");
   const [config, setConfig] = useState(props.configJson);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
+  const [created, setCreated] = useState<{ id: string; secret: string; ingestPath: string } | null>(null);
   const [enabled, setEnabled] = useState(props.mode === "edit" ? props.enabled : true);
 
   function submit(e: React.FormEvent) {
@@ -33,7 +34,11 @@ export function IntegrationForm(props: Props) {
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return setError("Configuration must be a JSON object.");
     if (props.mode === "create") {
-      run(() => createIntegrationAction({ tenantId: owner || null, provider: props.provider, name, config: parsed, secrets }), (id) => router.push(id ? `/integrations/${id}` : "/integrations"), {
+      run(() => createIntegrationAction({ tenantId: owner || null, provider: props.provider, name, config: parsed, secrets }), (result) => {
+        setSecrets({});
+        if (result && "secret" in result && result.secret && result.ingestPath) setCreated({ id: result.id, secret: result.secret, ingestPath: result.ingestPath });
+        else router.push(result ? `/integrations/${result.id}` : "/integrations");
+      }, {
         success: `Integration ${name.trim()} added`,
       });
     } else {
@@ -43,6 +48,15 @@ export function IntegrationForm(props: Props) {
       }, { success: `Integration ${name.trim()} saved` });
     }
   }
+
+  if (created) return (
+    <div className="space-y-4">
+      <p className="text-sm">Copy this secret now. It will only be shown once. Paste the URL and secret into Wedgetail Settings → Notifications → blakSOC.</p>
+      <div><Label htmlFor={`${uid}-url`}>Ingest URL</Label><Input id={`${uid}-url`} readOnly value={`${window.location.origin}${created.ingestPath}`} /></div>
+      <div><Label htmlFor={`${uid}-secret`}>HMAC secret (shown once)</Label><Input id={`${uid}-secret`} readOnly value={created.secret} autoComplete="off" /></div>
+      <Button type="button" onClick={() => { setCreated(null); router.push(`/integrations/${created.id}`); }}>Done</Button>
+    </div>
+  );
 
   return (
     <form onSubmit={submit} className="space-y-4" autoComplete="off">
@@ -57,7 +71,7 @@ export function IntegrationForm(props: Props) {
             <Select id={`${uid}-owner`} value={owner} onChange={(e) => setOwner(e.target.value)}>
               {props.owners.map((o) => <option key={o.id ?? "platform"} value={o.id ?? ""}>{o.name}</option>)}
             </Select>
-            <p className="mt-1 text-[11px] text-faint">{props.provider === "syslog" ? "Lines from this firewall stay with the selected owner." : "Platform integrations are shared and linked to customers separately."}</p>
+            <p className="mt-1 text-[11px] text-faint">{props.provider === "wedgetail" ? "Alerts from this install stay with the selected owner." : props.provider === "syslog" ? "Lines from this firewall stay with the selected owner." : "Platform integrations are shared and linked to customers separately."}</p>
           </div>
         ) : (
           <div>
@@ -76,7 +90,7 @@ export function IntegrationForm(props: Props) {
         <p className="mt-1 text-[11px] text-faint">Do not put passwords, tokens or keys here. Use the secret fields below.</p>
       </div>
 
-      {props.secretFields.length ? (
+      {props.secretFields.length && !(props.mode === "create" && props.provider === "wedgetail") ? (
         <fieldset className="space-y-2 rounded-md border border-border p-3">
           <legend className="px-1 text-xs font-medium text-muted">
             Secrets (write-only){props.mode === "edit" ? (props.hasSecret ? " · stored. Leave blank to keep the current value." : " · none stored yet") : ""}

@@ -34,6 +34,13 @@ describe("OpenAPI document", () => {
     for (const op of OPERATIONS) if (op.scope) expect(PERMISSIONS).toContain(op.scope);
   });
 
+  it("documents the Wedgetail root endpoint with signature auth instead of OAuth", () => {
+    const doc = openApiDocument();
+    const operation = doc.paths["/api/ingest/wedgetail/{integrationId}"]!.post;
+    expect(operation).toMatchObject({ servers: [{ url: "/" }], security: [{ wedgetailHmac: [] }], responses: { "401": expect.any(Object), "404": expect.any(Object), "413": expect.any(Object) } });
+    expect(doc.components.securitySchemes.wedgetailHmac).toMatchObject({ in: "header", name: "x-wedgetail-signature" });
+  });
+
   it("resolves every component reference", () => {
     const doc = openApiDocument();
     const refs = [...JSON.stringify(doc).matchAll(/"\$ref":"#\/components\/schemas\/(\w+)"/g)].map((m) => m[1]!);

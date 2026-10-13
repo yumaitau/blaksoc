@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { auditLog, integrations, integrationTenantLinks, tenants } from "@/db/schema";
 import { withScope } from "@/db/scope";
@@ -54,6 +55,7 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
   const def = connectorDef(input.provider);
   if (!def || def.status !== "available") throw new Error(`connector ${input.provider} is not available`);
   const config = stampSyslogTenant(def.provider, def.config.parse(input.config) as Record<string, unknown>, input.tenantId);
+  if (def.provider === "wedgetail" && !input.tenantId) throw new Error("Wedgetail ingest belongs to one tenant");
   const secrets = def.secrets.parse(input.secrets ?? {});
   const id = await withScope({ tenantIds: input.tenantId ? [input.tenantId] : [], platform: !input.tenantId }, async (tx) => {
     const training = input.tenantId ? await assertDemoOnly(tx, input.tenantId, def.provider) : false;
@@ -67,6 +69,13 @@ export async function createIntegration(ctx: AccessContext, input: { tenantId: s
   if (def.provider === "veeam" && input.tenantId) await syncVeeamBackups(input.tenantId);
   await refreshSubscriptions();
   return id;
+}
+
+/** Return the generated credential only from creation; normal reads remain write-only. */
+export async function createWedgetailIntegration(ctx: AccessContext, input: { tenantId: string | null; name: string; config: unknown }) {
+  const secret = randomBytes(32).toString("base64url");
+  const id = await createIntegration(ctx, { ...input, provider: "wedgetail", secrets: { signingSecret: secret } });
+  return { id, secret, ingestPath: `/api/ingest/wedgetail/${id}` };
 }
 
 /** Webhook, Teams and Slack subscriptions may have changed. A failure only delays the refresh to the cache TTL. */
@@ -129,6 +138,11 @@ export async function testIntegration(ctx: AccessContext, id: string) {
   return scoped(ctx, "integration:manage", async (tx) => {
     const [row] = await tx.select().from(integrations).where(eq(integrations.id, id));
     if (!row) throw new AccessDenied("integration not found");
+    if (row.provider === "wedgetail") {
+      const health = { ok: row.enabled, latencyMs: 0, error: undefined, detail: (row.health?.detail as Record<string, unknown> | undefined) ?? { note: "Awaiting an inbound delivery" } };
+      await audit(tx, { ...actor(ctx), tenantId: row.tenantId, action: "integration.test", targetType: "integration", targetId: id, detail: { ok: health.ok } });
+      return health;
+    }
     let health: { ok: boolean; latencyMs: number; detail?: Record<string, unknown>; error?: string };
     try {
       const inst = instantiate(row);

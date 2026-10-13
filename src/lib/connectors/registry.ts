@@ -9,6 +9,7 @@ import { NO_DATA_CAPABILITIES, type DataCapabilities } from "@/lib/providers/dat
 import { DEMO_DATA_CAPABILITIES, DemoProvider } from "@/lib/providers/demo";
 import type { ProviderHealth, SecurityEventProvider } from "@/lib/providers/types";
 import { SYSLOG_DATA_CAPABILITIES, SyslogProvider } from "@/lib/providers/syslog";
+import { WedgetailProvider } from "@/lib/providers/wedgetail";
 import { TawnyProvider } from "@/lib/providers/tawny";
 import { VeeamProvider } from "@/lib/providers/veeam";
 import { WAZUH_DATA_CAPABILITIES, WazuhProvider } from "@/lib/providers/wazuh";
@@ -62,6 +63,14 @@ const planned = (provider: string, name: string, category: ConnectorCategory, ca
 });
 
 export const CONNECTORS: ConnectorDefinition[] = [
+  {
+    provider: "wedgetail", name: "Wedgetail", category: "siem", status: "available",
+    description: "Signed inbound AWS detections from the customer's Wedgetail install.",
+    capabilities: ["events"], remotePermissions: ["Wedgetail notification URL and HMAC secret"],
+    config: z.object({ region: z.enum(["ap-southeast-2", "ap-southeast-4"]).default("ap-southeast-2") }),
+    secrets: z.object({ signingSecret: z.string().min(32).max(256) }),
+    create: () => ({ kind: "events", provider: new WedgetailProvider() }),
+  },
   {
     provider: "wazuh",
     name: "Wazuh",

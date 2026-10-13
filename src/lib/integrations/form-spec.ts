@@ -34,6 +34,7 @@ const EXAMPLES: Record<string, Record<string, unknown>> = {
   sms: { from: "+61400000000", mode: "fixture", events: ["incident.created"] },
   voice: { from: "+61400000000", mode: "fixture", events: ["incident.created"] },
   email: { host: "smtp.example.com", port: 587, from: "soc@example.com", mode: "fixture", events: ["incident.created"] },
+  wedgetail: { region: "ap-southeast-2" },
   syslog: { region: "ap-southeast-2" },
   velociraptor: { mode: "fixture" },
   defender: { tenantDomain: "example.org", mode: "fixture" },

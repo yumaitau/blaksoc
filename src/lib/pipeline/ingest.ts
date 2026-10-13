@@ -1,7 +1,7 @@
 import { and, eq, gte, inArray, ne, sql } from "drizzle-orm";
 import type { Tx } from "@/db/client";
 import {
-  alertObservables, alerts, assetSources, assets, cveIntel, incidentAlerts, incidents, intelMatches, observables, type IntelContext, type IntelMatch,
+  alertObservables, alerts, assetSources, assets, cveIntel, incidentAlerts, incidents, integrations, intelMatches, observables, type IntelContext, type IntelMatch,
 } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { systemScope } from "@/lib/auth/access";
@@ -19,6 +19,9 @@ import { scoreAlert } from "@/lib/risk/engine";
 import { dispositionStats, liveNoiseRules, recordNoiseHits } from "@/lib/services/tuning";
 import type { DispositionStats } from "@/lib/tuning/disposition";
 import { firstMatch, passiveReasonFor } from "@/lib/tuning/noise";
+
+export class IngestIntegrationUnavailable extends Error {}
+export class IngestIntegrationConflict extends Error {}
 
 export type IngestResult = { alertId: string; created: boolean; riskScore: number; intelVerdict: string; lane: "active" | "passive" };
 
@@ -40,6 +43,8 @@ export async function ingestAlert(opts: {
   alert: NormalisedAlert;
   intel: IntelProvider | null;
   batch?: IngestBatch;
+  /** Push providers may refresh an existing finding without recreating notifications. */
+  updateExisting?: boolean;
 }): Promise<IngestResult> {
   const { tenantId, alert } = opts;
   const obs: Observable[] = extractObservables({ ...alert.raw, _host: alert.hostname });
@@ -49,11 +54,17 @@ export async function ingestAlert(opts: {
   let intelMatchesFound = opts.intel ? (await lookupWithCache(opts.intel, obs)).matches : [];
 
   const result = await withScope(systemScope(tenantId), async (tx) => {
+    if (opts.updateExisting) await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${tenantId}|${opts.source}|${alert.externalId}`}, 0))`);
+    if (opts.updateExisting && opts.integrationId) {
+      const [integration] = await tx.select({ enabled: integrations.enabled }).from(integrations).where(and(eq(integrations.id, opts.integrationId), eq(integrations.tenantId, tenantId), eq(integrations.provider, opts.source))).for("share");
+      if (!integration?.enabled) throw new IngestIntegrationUnavailable();
+    }
     const [dupe] = await tx
-      .select({ id: alerts.id, riskScore: alerts.riskScore, intelVerdict: alerts.intelVerdict, lane: alerts.lane })
+      .select({ id: alerts.id, riskScore: alerts.riskScore, intelVerdict: alerts.intelVerdict, lane: alerts.lane, integrationId: alerts.integrationId, raw: alerts.raw, ingestedAt: alerts.ingestedAt })
       .from(alerts)
       .where(and(eq(alerts.tenantId, tenantId), eq(alerts.source, opts.source), eq(alerts.externalId, alert.externalId)));
-    if (dupe) return { alertId: dupe.id, created: false, riskScore: dupe.riskScore, intelVerdict: dupe.intelVerdict, lane: dupe.lane };
+    if (dupe && opts.updateExisting && dupe.integrationId !== opts.integrationId) throw new IngestIntegrationConflict();
+    if (dupe && !opts.updateExisting) return { alertId: dupe.id, created: false, riskScore: dupe.riskScore, intelVerdict: dupe.intelVerdict, lane: dupe.lane };
 
     intelMatchesFound = await filterByEntitlement(tx, tenantId, intelMatchesFound);
     const intel: IntelContext | null = opts.intel ? summariseIntel(intelMatchesFound) : null;
@@ -75,7 +86,7 @@ export async function ingestAlert(opts: {
       ? await tx
           .select({ n: sql<number>`count(*)::int` })
           .from(alerts)
-          .where(and(eq(alerts.tenantId, tenantId), eq(alerts.assetId, asset.id), eq(alerts.ruleId, alert.ruleId), gte(alerts.occurredAt, since)))
+          .where(and(eq(alerts.tenantId, tenantId), eq(alerts.assetId, asset.id), eq(alerts.ruleId, alert.ruleId), gte(alerts.occurredAt, since), dupe ? ne(alerts.id, dupe.id) : undefined))
       : [];
 
     const openIncidentOnAsset = asset
@@ -120,41 +131,42 @@ export async function ingestAlert(opts: {
     });
 
     const ingestedAt = new Date();
-    const ocsf = normaliseOcsf(alert, { source: opts.source, sourceEventId: alert.externalId, tenantId, ingestedAt }, obs, score);
+    const ocsf = normaliseOcsf(alert, { source: opts.source, sourceEventId: alert.externalId, tenantId, ingestedAt: dupe?.ingestedAt ?? ingestedAt }, obs, score);
 
-    const [row] = await tx
-      .insert(alerts)
-      .values({
-        tenantId,
-        integrationId: opts.integrationId,
-        source: opts.source,
-        externalId: alert.externalId,
-        ruleId: alert.ruleId,
-        title: alert.title,
-        description: alert.description,
-        category: alert.category,
-        siemSeverity: alert.siemSeverity,
-        severity: alert.severity,
-        riskScore: score,
-        riskFactors: factors,
-        assetId: asset?.id ?? null,
-        userName: alert.userName,
-        attackTechniques: [...new Set([...alert.attackTechniques, ...intelMatchesFound.flatMap((m) => m.attackPatterns.map((a) => a.id).filter((x): x is string => !!x))])],
-        intel,
-        intelVerdict: intel?.verdict ?? "unchecked",
-        raw: alert.raw,
-        ocsf: ocsf?.finding ?? null,
-        ocsfSourceEvent: ocsf?.sourceEvent ?? null,
-        normalizationVersion: ocsf ? NORMALIZATION_VERSION : null,
-        occurredAt: alert.occurredAt,
-        ingestedAt,
-        lane: noise ? "passive" : "active",
-        passiveReason: noise ? passiveReasonFor(noise.reason) : null,
-        noiseRuleId: noise?.id ?? null,
-      })
-      .returning({ id: alerts.id });
+    const values = {
+      tenantId,
+      integrationId: opts.integrationId,
+      source: opts.source,
+      externalId: alert.externalId,
+      ruleId: alert.ruleId,
+      title: alert.title,
+      description: alert.description,
+      category: alert.category,
+      siemSeverity: alert.siemSeverity,
+      severity: alert.severity,
+      riskScore: score,
+      riskFactors: factors,
+      assetId: asset?.id ?? null,
+      userName: alert.userName,
+      attackTechniques: [...new Set([...alert.attackTechniques, ...intelMatchesFound.flatMap((m) => m.attackPatterns.map((a) => a.id).filter((x): x is string => !!x))])],
+      intel,
+      intelVerdict: intel?.verdict ?? "unchecked",
+      raw: { ...alert.raw, ...(dupe?.raw && typeof dupe.raw === "object" && "wedgetailSync" in dupe.raw ? { wedgetailSync: dupe.raw.wedgetailSync } : {}) },
+      ocsf: ocsf?.finding ?? null,
+      ocsfSourceEvent: ocsf?.sourceEvent ?? null,
+      normalizationVersion: ocsf ? NORMALIZATION_VERSION : null,
+      occurredAt: alert.occurredAt,
+      ingestedAt,
+      lane: noise ? ("passive" as const) : ("active" as const),
+      passiveReason: noise ? passiveReasonFor(noise.reason) : null,
+      noiseRuleId: noise?.id ?? null,
+    };
+    const [row] = dupe
+      ? await tx.update(alerts).set({ ...values, ingestedAt: undefined, updatedAt: ingestedAt }).where(and(eq(alerts.id, dupe.id), eq(alerts.tenantId, tenantId))).returning({ id: alerts.id })
+      : await tx.insert(alerts).values(values).returning({ id: alerts.id });
     const alertId = row!.id;
-    if (noise) await recordNoiseHits(tx, noise.id, 1, now);
+    const existingIntel = dupe ? await tx.select().from(intelMatches).where(and(eq(intelMatches.tenantId, tenantId), eq(intelMatches.alertId, alertId))) : [];
+    if (noise && !dupe) await recordNoiseHits(tx, noise.id, 1, now);
 
     const intelRows: { id: string; match: IntelMatch }[] = [];
     for (const o of obs) {
@@ -164,12 +176,16 @@ export async function ingestAlert(opts: {
         .values({ tenantId, type: o.type, value: o.value, verdict, sightings: 1 })
         .onConflictDoUpdate({
           target: [observables.tenantId, observables.type, observables.value],
-          set: { sightings: sql`${observables.sightings} + 1`, lastSeen: sql`now()`, verdict: sql`case when excluded.verdict in ('malicious','suspicious') then excluded.verdict else ${observables.verdict} end` },
+          set: { sightings: dupe ? observables.sightings : sql`${observables.sightings} + 1`, lastSeen: sql`now()`, verdict: sql`case when excluded.verdict in ('malicious','suspicious') then excluded.verdict else ${observables.verdict} end` },
         })
         .returning({ id: observables.id });
       await tx.insert(alertObservables).values({ tenantId, alertId, observableId: ob!.id, field: o.field ?? null }).onConflictDoNothing();
       for (const m of intel?.matches.filter((m) => m.observable.value === o.value && m.verdict !== "benign") ?? []) {
-        const [im] = await tx.insert(intelMatches).values({ tenantId, alertId, observableId: ob!.id, openctiId: m.openctiId, verdict: m.verdict, score: m.score, summary: m }).returning({ id: intelMatches.id });
+        const existing = existingIntel.find((im) => im.observableId === ob!.id && im.openctiId === m.openctiId);
+        const matchValues = { tenantId, alertId, observableId: ob!.id, openctiId: m.openctiId, verdict: m.verdict, score: m.score, summary: m };
+        const [im] = existing
+          ? await tx.update(intelMatches).set(matchValues).where(and(eq(intelMatches.id, existing.id), eq(intelMatches.tenantId, tenantId))).returning({ id: intelMatches.id })
+          : await tx.insert(intelMatches).values(matchValues).returning({ id: intelMatches.id });
         intelRows.push({ id: im!.id, match: m });
       }
     }
@@ -182,7 +198,7 @@ export async function ingestAlert(opts: {
       intel: intelRows,
     });
 
-    return { alertId, created: true, riskScore: score, intelVerdict: intel?.verdict ?? "unchecked", lane: noise ? ("passive" as const) : ("active" as const) };
+    return { alertId, created: !dupe, riskScore: score, intelVerdict: intel?.verdict ?? "unchecked", lane: noise ? ("passive" as const) : ("active" as const) };
   });
 
   // A passive alert is not news: no live-queue event for it.

@@ -20,6 +20,7 @@ export type Provenance = {
 };
 
 const PRODUCTS: Record<string, OcsfProduct> = {
+  wedgetail: { name: "Wedgetail", vendor_name: "Yuma IT" },
   wazuh: { name: "Wazuh", vendor_name: "Wazuh" },
   tawny: { name: "Tawny EDR", vendor_name: "Yuma IT" },
   entra: { name: "Microsoft Entra ID", vendor_name: "Microsoft" },
