@@ -11,7 +11,11 @@ Deployed on 2026-10-13: stack `blaksoc-auth` (`CREATE_COMPLETE`), from change se
 `native-password-20261013`. Pool: `ap-southeast-2_2jKCpYGkM`; public app client:
 `7gaoc3sprutcum9vvej7kpp13d`; domain:
 `blaksoc-959038055523.auth.ap-southeast-2.amazoncognito.com`.
-Initial staff account setup and the application rollout are separate cutover steps below.
+Application release `d2191bed221c` deployed on 2026-10-13 as Helm revision 20, including the wallboard
+and customisable dashboard. The two approved existing staff accounts received Cognito email
+invitations. Web/worker readiness, public Postgres/Redis health, and a fresh HTTP redirect chain to
+the Cognito password form passed; no Cloudflare prompt is in that chain. Initial password setup,
+authenticator enrollment and the authenticated browser round trip still require the invited users.
 
 Use AWS account `959038055523`, profile `homelab-admin`, region `ap-southeast-2`.
 

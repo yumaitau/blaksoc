@@ -31,22 +31,33 @@ outside AWS ──agents──► NLB agents.soc.yumait.au ┘
 | Backups | S3 `coolify-yumabackups` (shared, ap-southeast-2) | blakSOC writes only under `blaksoc/`: nightly `pg_dump` to `blaksoc/postgres/`, cold syslog to `blaksoc/archive/`. IAM role `blaksoc-eks-storage` (inline policy `blaksoc-backups-prefix`) through EKS Pod Identity on service account `blaksoc/blaksoc` |
 | Wazuh dashboard | `https://wazuh.yumait.au` | Cloudflare Tunnel `blaksoc-wazuh` (cloudflared on the Wazuh host, outbound only) behind Cloudflare Access: `yumait.com.au` Google identities, 12-hour session |
 | Dashboard users | `blaksoc-wazuh-dashboard-users` | Personal Wazuh dashboard logins. `admin` (`INDEXER_PASSWORD` in `blaksoc-wazuh-credentials`) is the fallback |
-| Staff sign-in | Amazon Cognito (pool deployed; application cutover pending) | Pool `ap-southeast-2_2jKCpYGkM` from `cognito.yaml`; existing Cloudflare `yumait-staff` configuration retained for rollback. See [cutover](../../docs/cognito.md). |
+| Staff sign-in | Amazon Cognito (live since 2026-10-13) | Pool `ap-southeast-2_2jKCpYGkM` from `cognito.yaml`; existing Cloudflare `yumait-staff` configuration retained for rollback and unused by the current app. See [cutover](../../docs/cognito.md). |
 | EKS audit | CloudWatch `/aws/eks/yumait-prod/cluster` | `audit` and `authenticator` control plane logs, 30 days. Read by the Wazuh host's role (`read-eks-control-plane-logs`) |
 | Enrolment password | SSM parameter `/blaksoc/wazuh/enrollment` | Passed to SSM commands as the reference `{{ssm:/blaksoc/wazuh/enrollment}}`, which Systems Manager resolves on the instance; CloudTrail and command history keep only the reference. Mirrors `ENROLLMENT_PASSWORD` in `blaksoc-wazuh-credentials` |
 
 ## Staff sign-in
 
-The application now starts Amazon Cognito automatically at `/login`; it has no second email/password
-form. Provision the separate blakSOC user pool and its native email/password accounts before
-rolling out this version. Cognito handles password changes, resets and required authenticator MFA. The existing deployed Cloudflare OIDC connection is the rollback path until
-Cognito is verified. See [Cognito setup and cutover](../../docs/cognito.md).
+The application starts Amazon Cognito automatically at `/login`; it has no second email/password
+form. The separate blakSOC user pool and two initial staff accounts are provisioned. Cognito handles
+password changes, resets and required authenticator MFA. The retired Cloudflare OIDC configuration
+remains available for rollback while staff complete initial sign-in. See [Cognito setup and
+cutover](../../docs/cognito.md).
 
 Existing users link by verified email and retain their roles. New users receive no role automatically.
 This changes blakSOC authentication only; Cloudflare DNS, Radar, ThreatSieve and the Wazuh tunnel are
 separate services and are not removed by this migration.
 
-## Deploy a new version
+## Deploy from main
+
+See [GitHub deployment setup and operation](../../docs/deployment.md). The `deploy production`
+workflow publishes to ECR and upgrades this Helm release after CI, security and CodeQL pass for
+the same push to `main`. Authentication uses GitHub OIDC, with separate image publishing and
+namespace deployment roles; there are no stored AWS access keys in GitHub.
+
+## Manual deployment fallback
+
+Normal releases deploy automatically from `main`. The following administrator procedure is for
+recovery when GitHub deployment is unavailable; do not run it concurrently with the workflow.
 
 1. Merge to main. Build the three images for `linux/amd64` and push with the main commit as the tag:
 

@@ -1,0 +1,176 @@
+name: deploy production
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# Never cancel a Helm upgrade halfway through. Each run rechecks main before deploying.
+concurrency:
+  group: blaksoc-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REGISTRY: 959038055523.dkr.ecr.ap-southeast-2.amazonaws.com
+
+jobs:
+  gate:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+      sha: ${{ steps.check.outputs.sha }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Require successful checks for the current main commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: python3 scripts/deploy/check-release.py
+
+  image:
+    needs: gate
+    if: needs.gate.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: web, file: Dockerfile }
+          - { target: worker, file: Dockerfile }
+          - { target: hermes, file: hermes/Dockerfile }
+    env:
+      TARGET: ${{ matrix.target }}
+      IMAGE_TAG: ${{ needs.gate.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+          role-session-name: blaksoc-publish-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: '959038055523'
+      - name: Reuse an immutable image when retrying a release
+        id: existing
+        shell: bash
+        run: |
+          if aws ecr describe-images --repository-name "blaksoc-${TARGET}" \
+            --image-ids "imageTag=${IMAGE_TAG}" > /dev/null 2> "$RUNNER_TEMP/image-error.txt"; then
+            echo 'exists=true' >> "$GITHUB_OUTPUT"
+          elif [[ "$(<"$RUNNER_TEMP/image-error.txt")" == *'(ImageNotFoundException)'* ]]; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+          else
+            cat "$RUNNER_TEMP/image-error.txt" >&2
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: steps.existing.outputs.exists != 'true'
+      - name: Log in to ECR with the temporary role
+        if: steps.existing.outputs.exists != 'true'
+        run: aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        if: steps.existing.outputs.exists != 'true'
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/blaksoc-${{ matrix.target }}:${{ needs.gate.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/yumaitau/blaksoc
+            org.opencontainers.image.revision=${{ needs.gate.outputs.sha }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+      - name: Remove registry login
+        if: always()
+        run: docker logout "$ECR_REGISTRY"
+
+  deploy:
+    needs: [gate, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://soc.yumait.au
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      RELEASE_SHA: ${{ needs.gate.outputs.sha }}
+      IMAGE_TAG: ${{ needs.gate.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+      - name: Recheck main and all release checks after building
+        id: check
+        run: python3 scripts/deploy/check-release.py
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        if: steps.check.outputs.deploy == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: blaksoc-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: '959038055523'
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        if: steps.check.outputs.deploy == 'true'
+        with:
+          version: v4.3.0
+      - name: Install kubectl for the production cluster version
+        if: steps.check.outputs.deploy == 'true'
+        env:
+          KUBECTL_VERSION: v1.37.1
+        run: |
+          curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSLo kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+      - name: Upgrade production with rollback on failure
+        if: steps.check.outputs.deploy == 'true'
+        run: |
+          aws eks update-kubeconfig --name yumait-prod --alias yumait-prod
+          helm upgrade --install blaksoc deploy/helm/blaksoc --kube-context yumait-prod -n blaksoc \
+            -f deploy/helm/blaksoc/values.yaml -f deploy/helm/blaksoc/values-yumait-prod.yaml \
+            --set-string "image.tag=${IMAGE_TAG}" --rollback-on-failure --wait --timeout 10m --history-max 20
+          kubectl --context yumait-prod -n blaksoc rollout status deployment/blaksoc-blaksoc-web --timeout=2m
+          kubectl --context yumait-prod -n blaksoc rollout status deployment/blaksoc-blaksoc-worker --timeout=2m
+      - name: Check public health and record release
+        if: steps.check.outputs.deploy == 'true'
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 \
+            --max-time 30 https://soc.yumait.au/api/health | jq -e '.ok == true'
+          {
+            echo "Deployed [${RELEASE_SHA}](https://github.com/yumaitau/blaksoc/commit/${RELEASE_SHA}) to https://soc.yumait.au."
+            echo
+            echo 'Web, worker and Hermes use the same immutable image tag. Helm migrations and readiness checks passed.'
+          } >> "$GITHUB_STEP_SUMMARY"
