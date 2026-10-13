@@ -1,10 +1,12 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { systemDb } from "@/db/client";
-import { alerts, approvals, assets, incidents, tenants, user, wallboardLinks } from "@/db/schema";
+import { alerts, approvals, assets, attackTechniques, incidents, platformSettings, tenants, user, wallboardLinks } from "@/db/schema";
+import type { Tx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { audit } from "@/lib/audit";
 import { AccessDenied, can, dbScope, resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { env } from "@/lib/env";
+import { defaultWallboardLayout, normalizeWallboardLayout, wallboardLayoutForSave, type WallboardPanel } from "@/lib/wallboard/layout";
 import { signWallboardToken, verifyWallboardToken } from "@/lib/wallboard/token";
 import { WALLBOARD_EXPIRY_DAYS, type WallboardExpiryDays, type WallboardSnapshot } from "@/lib/wallboard/types";
 
@@ -29,20 +31,70 @@ function customerScope(ctx: AccessContext, requested?: readonly string[]): strin
   return [...new Set(requested ?? customers.map((t) => t.id))];
 }
 
-/** Returns aggregate operational data only: no alert titles, raw events or analyst details. */
-export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly string[], linkExpiresAt: Date | null = null): Promise<WallboardSnapshot> {
+const PLATFORM = { tenantIds: [], platform: true } as const;
+const LAYOUT_KEY = "wallboard.layout";
+
+export type WallboardLayouts = { published: WallboardPanel[]; draft: WallboardPanel[]; publishedAt: string | null };
+
+async function storedLayouts(tx: Tx): Promise<WallboardLayouts> {
+  const [row] = await tx.select({ value: platformSettings.value }).from(platformSettings).where(eq(platformSettings.key, LAYOUT_KEY));
+  const value = (row?.value && typeof row.value === "object" ? row.value : {}) as { published?: unknown; draft?: unknown; publishedAt?: unknown };
+  const published = normalizeWallboardLayout(value.published);
+  return {
+    published,
+    draft: value.draft === undefined ? published : normalizeWallboardLayout(value.draft),
+    publishedAt: typeof value.publishedAt === "string" ? value.publishedAt : null,
+  };
+}
+
+/** The arrangement is not operational data, so any display reads the published one. */
+export async function readWallboardLayouts(ctx: AccessContext): Promise<WallboardLayouts> {
+  assertManager(ctx);
+  return withScope(PLATFORM, storedLayouts);
+}
+
+/** Saving keeps a private draft. Publishing replaces what every display shows on its next refresh. */
+export async function saveWallboardLayout(ctx: AccessContext, input: unknown, publish: boolean): Promise<WallboardLayouts> {
+  assertManager(ctx);
+  const layout = wallboardLayoutForSave(input);
+  return withScope(PLATFORM, async (tx) => {
+    const current = await storedLayouts(tx);
+    const next: WallboardLayouts = publish ? { published: layout, draft: layout, publishedAt: new Date().toISOString() } : { ...current, draft: layout };
+    const set = { value: next, updatedBy: ctx.principal.userId, updatedAt: new Date() };
+    await tx.insert(platformSettings).values({ key: LAYOUT_KEY, ...set }).onConflictDoUpdate({ target: platformSettings.key, set });
+    if (publish) {
+      const panels = layout.filter((p) => !p.hidden).map((p) => p.id);
+      await audit(tx, { actorId: ctx.principal.userId, actorKind: "user", tenantId: null, action: "wallboard.publish", targetType: "wallboard_layout", targetId: LAYOUT_KEY, detail: { panels: panels.length, order: panels } });
+    }
+    return next;
+  });
+}
+
+/**
+ * Returns aggregate operational data only: no alert titles, raw events or analyst details.
+ * `draft` swaps in the unpublished arrangement and is limited to wallboard managers.
+ */
+export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly string[], linkExpiresAt: Date | null = null, draft = false): Promise<WallboardSnapshot> {
   const selected = customerScope(ctx, tenantIds);
+  if (draft) assertManager(ctx);
   const now = new Date();
+  const hourAgo = new Date(now.getTime() - 3600_000);
+  const dayAgo = new Date(now.getTime() - 86_400_000);
   const firstHour = new Date(now);
   firstHour.setUTCMinutes(0, 0, 0);
   firstHour.setUTCHours(firstHour.getUTCHours() - 23);
   const empty: WallboardSnapshot = {
     generatedAt: now.toISOString(), scopeName: "All customers", customerCount: 0,
-    counts: { openAlerts: 0, criticalAlerts: 0, awaitingTriage: 0, unassigned: 0, activeIncidents: 0, overdueIncidents: 0, pendingApprovals: 0 },
+    counts: { openAlerts: 0, criticalAlerts: 0, awaitingTriage: 0, unassigned: 0, activeIncidents: 0, overdueIncidents: 0, pendingApprovals: 0, newLastHour: 0, closedLast24h: 0, intelMatched: 0, incidentsOpened24h: 0, incidentsClosed24h: 0 },
     activity: Array.from({ length: 24 }, (_, hour) => ({ hour: new Date(firstHour.getTime() + hour * 3600_000).toISOString(), count: 0 })),
+    severity: { critical: 0, high: 0, medium: 0, low: 0, informational: 0 }, oldestUntriagedAt: null, techniques: [],
     customers: [], incidentSummary: [], linkExpiresAt: linkExpiresAt?.toISOString() ?? null,
+    layout: defaultWallboardLayout(), preview: draft,
   };
+  // Nothing to show: skip the database entirely, including the stored arrangement.
   if (!selected.length) return empty;
+  const layouts = await withScope(PLATFORM, storedLayouts);
+  empty.layout = draft ? layouts.draft : layouts.published;
   return withScope(dbScope(ctx, selected, false), async (tx) => {
     const customerRows = await tx.select({ id: tenants.id, name: tenants.name }).from(tenants)
       .where(and(inArray(tenants.id, selected), eq(tenants.kind, "customer"), eq(tenants.status, "active"), realCustomer));
@@ -57,7 +109,28 @@ export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly
       unassigned: sql<number>`count(*) filter (where ${alerts.assigneeId} is null)::int`,
       healthAlerts: sql<number>`count(*) filter (where ${alerts.source} = 'health')::int`,
       risk: sql<number>`coalesce(max(${alerts.riskScore}), 0)::int`,
+      intelMatched: sql<number>`count(*) filter (where ${alerts.intelVerdict} in ('malicious','suspicious'))::int`,
+      critical: sql<number>`count(*) filter (where ${alerts.severity} = 'critical')::int`,
+      high: sql<number>`count(*) filter (where ${alerts.severity} = 'high')::int`,
+      medium: sql<number>`count(*) filter (where ${alerts.severity} = 'medium')::int`,
+      low: sql<number>`count(*) filter (where ${alerts.severity} = 'low')::int`,
+      informational: sql<number>`count(*) filter (where ${alerts.severity} = 'informational')::int`,
+      oldestUntriaged: sql<string | null>`to_char(min(${alerts.occurredAt}) filter (where ${alerts.status} = 'NEW') at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`,
     }).from(alerts).where(open).groupBy(alerts.tenantId);
+    const [flow] = await tx.select({
+      newLastHour: sql<number>`count(*) filter (where ${alerts.occurredAt} >= ${hourAgo.toISOString()})::int`,
+      closedLast24h: sql<number>`count(*) filter (where ${alerts.status} in ('RESOLVED','FALSE_POSITIVE') and ${alerts.updatedAt} >= ${dayAgo.toISOString()})::int`,
+    }).from(alerts).where(and(inArray(alerts.tenantId, ids), eq(alerts.lane, "active"), or(gte(alerts.occurredAt, hourAgo), gte(alerts.updatedAt, dayAgo))));
+    const [incidentFlow] = await tx.select({
+      opened: sql<number>`count(*) filter (where ${incidents.createdAt} >= ${dayAgo.toISOString()})::int`,
+      closed: sql<number>`count(*) filter (where ${incidents.closedAt} >= ${dayAgo.toISOString()})::int`,
+    }).from(incidents).where(and(inArray(incidents.tenantId, ids), or(gte(incidents.createdAt, dayAgo), gte(incidents.closedAt, dayAgo))));
+    const techniqueCounts = await tx.select({ id: sql<string>`unnest(${alerts.attackTechniques})`, count: sql<number>`count(*)::int` })
+      .from(alerts).where(and(inArray(alerts.tenantId, ids), eq(alerts.lane, "active"), gte(alerts.occurredAt, dayAgo)))
+      .groupBy(sql`1`).orderBy(desc(sql`2`), sql`1`).limit(6);
+    const techniqueNames = techniqueCounts.length
+      ? new Map((await tx.select({ id: attackTechniques.id, name: attackTechniques.name }).from(attackTechniques).where(inArray(attackTechniques.id, techniqueCounts.map((t) => t.id)))).map((t) => [t.id, t.name]))
+      : new Map<string, string>();
     const active = and(inArray(incidents.tenantId, ids), notInArray(incidents.status, ["CLOSED"]));
     const incidentCounts = await tx.select({
       tenantId: incidents.tenantId, activeIncidents: sql<number>`count(*)::int`,
@@ -72,27 +145,34 @@ export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly
     const hourly = await tx.select({ hour: sql<string>`to_char(date_trunc('hour', ${alerts.occurredAt} at time zone 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS".000Z"')`, count: sql<number>`count(*)::int` })
       .from(alerts).where(and(inArray(alerts.tenantId, ids), gte(alerts.occurredAt, firstHour), sql`${alerts.occurredAt} <= ${now.toISOString()}`))
       .groupBy(sql`1`);
-    const incidentRows = await tx.select({ id: incidents.id, ref: incidents.ref, severity: incidents.severity, status: incidents.status, tenantName: tenants.name, slaDueAt: incidents.slaDueAt })
-      .from(incidents).innerJoin(tenants, eq(tenants.id, incidents.tenantId)).where(active).orderBy(desc(incidents.riskScore), desc(incidents.updatedAt)).limit(4);
+    const incidentRows = await tx.select({ id: incidents.id, ref: incidents.ref, severity: incidents.severity, status: incidents.status, tenantName: tenants.name, slaDueAt: incidents.slaDueAt, createdAt: incidents.createdAt })
+      .from(incidents).innerJoin(tenants, eq(tenants.id, incidents.tenantId)).where(active).orderBy(desc(incidents.riskScore), desc(incidents.updatedAt)).limit(6);
     const byAlerts = new Map(alertCounts.map((r) => [r.tenantId, r]));
     const byIncidents = new Map(incidentCounts.map((r) => [r.tenantId, r]));
     const byEndpoints = new Map(endpointCounts.map((r) => [r.tenantId, r]));
     const customers = customerRows.map((t) => ({
       id: t.id, name: t.name, openAlerts: byAlerts.get(t.id)?.openAlerts ?? 0,
-      criticalAlerts: byAlerts.get(t.id)?.criticalAlerts ?? 0, activeIncidents: byIncidents.get(t.id)?.activeIncidents ?? 0,
+      criticalAlerts: byAlerts.get(t.id)?.criticalAlerts ?? 0, awaitingTriage: byAlerts.get(t.id)?.awaitingTriage ?? 0, activeIncidents: byIncidents.get(t.id)?.activeIncidents ?? 0,
       endpoints: byEndpoints.get(t.id)?.endpoints ?? 0, offlineEndpoints: byEndpoints.get(t.id)?.offlineEndpoints ?? 0,
       healthAlerts: byAlerts.get(t.id)?.healthAlerts ?? 0, risk: byAlerts.get(t.id)?.risk ?? 0,
     })).sort((a, b) => b.risk - a.risk || b.openAlerts - a.openAlerts || a.name.localeCompare(b.name));
     const hourlyCounts = new Map(hourly.map((r) => [r.hour, r.count]));
+    const sum = (key: "critical" | "high" | "medium" | "low" | "informational") => alertCounts.reduce((n, r) => n + r[key], 0);
+    const oldest = alertCounts.map((r) => r.oldestUntriaged).filter((v): v is string => !!v).sort()[0] ?? null;
     return {
       ...empty, customerCount: customers.length, scopeName: customers.length === 1 ? customers[0]!.name : `${customers.length} customers`, customers,
       counts: {
         openAlerts: alertCounts.reduce((n, r) => n + r.openAlerts, 0), criticalAlerts: alertCounts.reduce((n, r) => n + r.criticalAlerts, 0),
         awaitingTriage: alertCounts.reduce((n, r) => n + r.awaitingTriage, 0), unassigned: alertCounts.reduce((n, r) => n + r.unassigned, 0),
         activeIncidents: incidentCounts.reduce((n, r) => n + r.activeIncidents, 0), overdueIncidents: incidentCounts.reduce((n, r) => n + r.overdueIncidents, 0), pendingApprovals: pending?.n ?? 0,
+        newLastHour: flow?.newLastHour ?? 0, closedLast24h: flow?.closedLast24h ?? 0, intelMatched: alertCounts.reduce((n, r) => n + r.intelMatched, 0),
+        incidentsOpened24h: incidentFlow?.opened ?? 0, incidentsClosed24h: incidentFlow?.closed ?? 0,
       },
+      severity: { critical: sum("critical"), high: sum("high"), medium: sum("medium"), low: sum("low"), informational: sum("informational") },
+      oldestUntriagedAt: oldest,
+      techniques: techniqueCounts.map((t) => ({ id: t.id, name: techniqueNames.get(t.id) ?? null, count: t.count })),
       activity: empty.activity.map((bucket) => ({ ...bucket, count: hourlyCounts.get(bucket.hour) ?? 0 })),
-      incidentSummary: incidentRows.map((r) => ({ ...r, slaDueAt: r.slaDueAt?.toISOString() ?? null })),
+      incidentSummary: incidentRows.map((r) => ({ ...r, slaDueAt: r.slaDueAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() })),
     };
   });
 }

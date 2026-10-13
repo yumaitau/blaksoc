@@ -227,6 +227,7 @@ const DESCRIBE: Record<string, Describer> = {
   "report.board_deliver": "Delivered the board report",
   "wallboard.create": ({ d }) => `Created ${named("signed display link", d.name)}`,
   "wallboard.revoke": ({ d }) => `Revoked ${named("signed display link", d.name)}`,
+  "wallboard.publish": ({ d }) => `Published the wallboard layout${typeof d.panels === "number" ? ` (${count(d.panels, "panel")})` : ""}`,
   "audit.export": ({ d }) => `Exported ${howMany(d.rows) !== undefined ? count(howMany(d.rows)!, "audit entry", "audit entries") : "the audit trail"} to CSV`,
 
   // Assets, vulnerabilities, intel
@@ -294,7 +295,8 @@ export function auditTargetHref(targetType: string | null | undefined, targetId:
     case "report": return `/reports/${id}`;
     case "sigma_rule": return `/detections/rules/${id}`;
     case "noise_rule": return "/soc/tuning";
-    case "wallboard_link": return "/soc/wallboard";
+    case "wallboard_link":
+    case "wallboard_layout": return "/soc/wallboard";
     case "tuning_action":
     case "hermes_report":
     case "hermes_memory": return "/soc/hermes";

@@ -58,7 +58,8 @@ export async function GET(request: Request) {
       const workspace = await currentWorkspace(ctx);
       tenantIds = workspace.tenantIds.filter((id) => ctx.tenants.some((t) => t.id === id && t.kind === "customer"));
     }
-    return response(200, await wallboardSnapshot(ctx, tenantIds));
+    // Only a signed-in wallboard manager can see the unpublished arrangement; a display link never can.
+    return response(200, await wallboardSnapshot(ctx, tenantIds, null, query.get("preview") === "draft"));
   } catch (err) {
     if (err instanceof AccessDenied) return response(403, { error: "You do not have access to this customer scope." });
     logger.error("wallboard refresh failed", { err });

@@ -45,6 +45,11 @@ describe("wallboard page access and scope", () => {
     expect(mocks.workspace).not.toHaveBeenCalled();
   });
 
+  it("previews the draft layout only for a signed-in display", async () => {
+    expect(queryOf(await page({ preview: "draft" })).get("preview")).toBe("draft");
+    expect(queryOf(await page({ token: "signed", preview: "draft" })).has("preview")).toBe(false);
+  });
+
   it("remounts the display when its credential or scope changes", async () => {
     const first = await page({ token: "first" });
     const second = await page({ token: "second" });

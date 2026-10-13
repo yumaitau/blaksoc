@@ -23,6 +23,7 @@ export default async function WallboardPage({ searchParams }: { searchParams: Pr
       const ids = ws.tenantIds.filter((id) => ctx.tenants.some((tenant) => tenant.id === id && tenant.kind === "customer"));
       if (ids.length) query.set("tenantIds", ids.join(","));
     }
+    if (params.preview === "draft") query.set("preview", "draft");
   }
   const endpoint = `/api/wallboard?${query}`;
   return <Wallboard key={endpoint} endpoint={endpoint} />;

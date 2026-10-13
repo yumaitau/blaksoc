@@ -39,11 +39,20 @@ describe("wallboard API boundary", () => {
     mocks.workspace.mockResolvedValue({ tenantIds: ["workspace"] });
     mocks.snapshot.mockResolvedValue({ counts: {} });
     expect((await get()).status).toBe(200);
-    expect(mocks.snapshot).toHaveBeenCalledWith(ctx, ["workspace"]);
+    expect(mocks.snapshot).toHaveBeenCalledWith(ctx, ["workspace"], null, false);
     expect((await get("?tenantIds=chosen,other")).status).toBe(200);
-    expect(mocks.snapshot).toHaveBeenCalledWith(ctx, ["chosen", "other"]);
+    expect(mocks.snapshot).toHaveBeenCalledWith(ctx, ["chosen", "other"], null, false);
+    expect((await get("?tenantIds=chosen&preview=draft")).status).toBe(200);
+    expect(mocks.snapshot).toHaveBeenLastCalledWith(ctx, ["chosen"], null, true);
     expect((await get("?tenantIds=")).status).toBe(403);
     expect((await get("?tenantIds=a&tenantIds=b")).status).toBe(403);
+  });
+
+  it("never previews the draft layout through a display link", async () => {
+    mocks.signed.mockResolvedValue({ generatedAt: "now" });
+    expect((await get("?token=valid&preview=draft")).status).toBe(200);
+    expect(mocks.signed).toHaveBeenCalledWith("valid");
+    expect(mocks.snapshot).not.toHaveBeenCalled();
   });
 
   it("rate limits one signed token without blocking a different token", async () => {
