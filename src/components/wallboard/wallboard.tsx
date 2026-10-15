@@ -3,6 +3,7 @@
 import { ArrowLeft, ArrowRight, EyeOff, GripVertical, Maximize, Minimize, MoveHorizontal, RefreshCw, Shrink } from "lucide-react";
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import { BrandMark } from "@/components/soc/brand";
+import type { RadarSection, RadarShare } from "@/lib/radar/snapshot";
 import { panelName, type PanelId, type WallboardPanel } from "@/lib/wallboard/layout";
 import { WALLBOARD_SEVERITIES, type WallboardSnapshot } from "@/lib/wallboard/types";
 import styles from "./wallboard.module.css";
@@ -226,6 +227,10 @@ function renderPanel(id: PanelId, data: WallboardSnapshot, now: number, page: nu
     case "severity": return <Severity data={data} />;
     case "flow": return <Flow data={data} now={now} />;
     case "techniques": return <Techniques data={data} />;
+    case "radar-l7": return <RadarShares id={id} heading="Application attacks" meta="Australia · 24h · by industry" data={data} section={data.radar.l7} />;
+    case "radar-l3": return <RadarShares id={id} heading="Network attacks" meta="Australia · 24h · by protocol" data={data} section={data.radar.l3} />;
+    case "radar-outages": return <RadarOutages data={data} />;
+    case "radar-bots": return <RadarShares id={id} heading="Bot traffic" meta="Australia · 24h · human vs automated" data={data} section={data.radar.bots} />;
   }
 }
 
@@ -341,6 +346,37 @@ function Techniques({ data }: { data: WallboardSnapshot }) {
         <span className={styles.reference}>{t.id}</span><span>{t.name ?? "Unmapped technique"}</span><strong>{number.format(t.count)}</strong>
         <div aria-hidden="true"><div style={{ width: `${t.count / peak * 100}%` }} /></div>
       </li>)}</ul> : <p className={styles.empty}>No techniques mapped in the last 24 hours.</p>}
+    </Panel>
+  );
+}
+
+/** Shown in place of Radar figures: missing token, or Cloudflare's answer for this section. */
+function radarNotice(data: WallboardSnapshot, error: string | null): ReactNode {
+  if (!data.radar.configured) return <p className={styles.empty}>Set CLOUDFLARE_RADAR_TOKEN (Account &gt; Radar &gt; Read) to show Cloudflare Radar.</p>;
+  if (error) return <p className={`${styles.empty} ${styles.warning}`}>{error}</p>;
+  return null;
+}
+
+function RadarShares({ id, heading, meta, data, section }: { id: string; heading: string; meta: string; data: WallboardSnapshot; section: RadarSection<RadarShare> }) {
+  const peak = Math.max(0.0001, ...section.rows.map((row) => row.pct));
+  return (
+    <Panel id={id} heading={heading} meta={`${meta} · Cloudflare Radar`}>
+      {radarNotice(data, section.error) ?? (section.rows.length ? <ul className={styles.shares}>{section.rows.slice(0, 6).map((row) => <li key={row.key}>
+        <span>{row.label}</span><strong>{row.pct.toFixed(1)}%</strong>
+        <div aria-hidden="true"><div style={{ width: `${Math.max(2, row.pct / peak * 100)}%` }} /></div>
+      </li>)}</ul> : <p className={styles.empty}>No Radar data in this window.</p>)}
+    </Panel>
+  );
+}
+
+function RadarOutages({ data }: { data: WallboardSnapshot }) {
+  const section = data.radar.outages;
+  return (
+    <Panel id="radar-outages" heading="Internet outages" meta="Australia · 7 days · Cloudflare Radar">
+      {radarNotice(data, section.error) ?? (section.rows.length ? <ul className={styles.outages}>{section.rows.slice(0, 5).map((row) => <li key={row.id}>
+        <p>{row.scope || row.locations || "Outage"}<small>{[row.scope ? row.locations : "", row.cause].filter(Boolean).join(" · ")}</small></p>
+        <span className={row.end ? styles.secondary : styles.warning}>{row.end ? `Ended ${date.format(Date.parse(row.end))}` : row.start ? `Ongoing since ${date.format(Date.parse(row.start))}` : "Ongoing"}</span>
+      </li>)}</ul> : <p className={styles.empty}>No outages recorded in this window.</p>)}
     </Panel>
   );
 }

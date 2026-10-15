@@ -1,5 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { adminDb } from "@/db/client";
 import { alerts, assets, attackTechniques, auditLog, incidents, platformSettings, roleAssignments, roles, tenants, user, wallboardLinks } from "@/db/schema";
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
@@ -8,6 +8,8 @@ import { env } from "@/lib/env";
 import { createWallboardLink, listWallboardLinks, readWallboardLayouts, revokeWallboardLink, saveWallboardLayout, signedWallboardSnapshot, wallboardSnapshot } from "@/lib/services/wallboard";
 import { defaultWallboardLayout, placePanel, setPanelHidden } from "@/lib/wallboard/layout";
 import { signWallboardToken } from "@/lib/wallboard/token";
+
+vi.mock("server-only", () => ({}));
 
 const stamp = `wallboard-${Date.now()}`;
 const issuerId = `${stamp}-issuer`;
@@ -160,6 +162,7 @@ describe("office wallboard", () => {
     expect(data.counts).toMatchObject({ openAlerts: 2, awaitingTriage: 2, newLastHour: 1, closedLast24h: 1, intelMatched: 1, incidentsOpened24h: 1, incidentsClosed24h: 1, activeIncidents: 1 });
     expect(Date.parse(data.oldestUntriagedAt!)).toBeLessThan(Date.now() - 4.9 * 3600_000);
     expect(data.techniques).toEqual([{ id: "T1110", name: expect.any(String), count: 2 }]);
+    expect(data.radar).toMatchObject({ l7: { rows: [] }, outages: { rows: [] } });
     expect(data.customers[0]).toMatchObject({ awaitingTriage: 2 });
     expect(data.incidentSummary[0]?.createdAt).toEqual(expect.any(String));
     expect(JSON.stringify(data)).not.toMatch(/PRIVATE|Private analyst|example\.invalid|raw|title|ownerName/);

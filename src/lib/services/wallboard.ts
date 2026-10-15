@@ -6,6 +6,8 @@ import { withScope } from "@/db/scope";
 import { audit } from "@/lib/audit";
 import { AccessDenied, can, dbScope, resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { env } from "@/lib/env";
+import { loadRadar } from "@/lib/radar/load";
+import { unconfiguredRadar } from "@/lib/radar/snapshot";
 import { defaultWallboardLayout, normalizeWallboardLayout, wallboardLayoutForSave, type WallboardPanel } from "@/lib/wallboard/layout";
 import { signWallboardToken, verifyWallboardToken } from "@/lib/wallboard/token";
 import { WALLBOARD_EXPIRY_DAYS, type WallboardExpiryDays, type WallboardSnapshot } from "@/lib/wallboard/types";
@@ -77,6 +79,8 @@ export async function saveWallboardLayout(ctx: AccessContext, input: unknown, pu
 export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly string[], linkExpiresAt: Date | null = null, draft = false): Promise<WallboardSnapshot> {
   const selected = customerScope(ctx, tenantIds);
   if (draft) assertManager(ctx);
+  // Platform-wide and cached for a minute, so every display and the designer preview share it.
+  const radar = loadRadar();
   const now = new Date();
   const hourAgo = new Date(now.getTime() - 3600_000);
   const dayAgo = new Date(now.getTime() - 86_400_000);
@@ -88,14 +92,14 @@ export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly
     counts: { openAlerts: 0, criticalAlerts: 0, awaitingTriage: 0, unassigned: 0, activeIncidents: 0, overdueIncidents: 0, pendingApprovals: 0, newLastHour: 0, closedLast24h: 0, intelMatched: 0, incidentsOpened24h: 0, incidentsClosed24h: 0 },
     activity: Array.from({ length: 24 }, (_, hour) => ({ hour: new Date(firstHour.getTime() + hour * 3600_000).toISOString(), count: 0 })),
     severity: { critical: 0, high: 0, medium: 0, low: 0, informational: 0 }, oldestUntriagedAt: null, techniques: [],
-    customers: [], incidentSummary: [], linkExpiresAt: linkExpiresAt?.toISOString() ?? null,
+    customers: [], incidentSummary: [], radar: unconfiguredRadar(), linkExpiresAt: linkExpiresAt?.toISOString() ?? null,
     layout: defaultWallboardLayout(), preview: draft,
   };
   // Nothing to show: skip the database entirely, including the stored arrangement.
-  if (!selected.length) return empty;
+  if (!selected.length) return { ...empty, radar: await radar };
   const layouts = await withScope(PLATFORM, storedLayouts);
   empty.layout = draft ? layouts.draft : layouts.published;
-  return withScope(dbScope(ctx, selected, false), async (tx) => {
+  const snapshot = await withScope(dbScope(ctx, selected, false), async (tx): Promise<WallboardSnapshot> => {
     const customerRows = await tx.select({ id: tenants.id, name: tenants.name }).from(tenants)
       .where(and(inArray(tenants.id, selected), eq(tenants.kind, "customer"), eq(tenants.status, "active"), realCustomer));
     const ids = customerRows.map((t) => t.id);
@@ -175,6 +179,7 @@ export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly
       incidentSummary: incidentRows.map((r) => ({ ...r, slaDueAt: r.slaDueAt?.toISOString() ?? null, createdAt: r.createdAt.toISOString() })),
     };
   });
+  return { ...snapshot, radar: await radar };
 }
 
 export async function createWallboardLink(ctx: AccessContext, input: { name: string; tenantIds: readonly string[]; expiresInDays: WallboardExpiryDays }) {

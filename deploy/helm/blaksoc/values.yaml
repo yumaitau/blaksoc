@@ -25,6 +25,7 @@ runtimeSecretKeys:
     - SSO_TRUSTED_ORIGINS
     - BLAKSOC_SUPPLIER_ABN
     - WAZUH_MANAGER
+    - CLOUDFLARE_RADAR_TOKEN
 
 # Optional: build existingSecret from AWS Secrets Manager (or another store) via External Secrets.
 externalSecret:

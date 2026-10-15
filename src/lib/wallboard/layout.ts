@@ -11,6 +11,10 @@ export const PANELS = [
   { id: "severity", name: "Open alerts by severity", span: "third", hidden: false },
   { id: "flow", name: "Queue flow", span: "third", hidden: false },
   { id: "techniques", name: "ATT&CK techniques", span: "third", hidden: true },
+  { id: "radar-l7", name: "Radar application attacks", span: "third", hidden: true },
+  { id: "radar-l3", name: "Radar network attacks", span: "third", hidden: true },
+  { id: "radar-outages", name: "Radar internet outages", span: "third", hidden: true },
+  { id: "radar-bots", name: "Radar bot traffic", span: "third", hidden: true },
 ] as const satisfies readonly { id: string; name: string; span: PanelSpan; hidden: boolean }[];
 
 export type PanelId = (typeof PANELS)[number]["id"];

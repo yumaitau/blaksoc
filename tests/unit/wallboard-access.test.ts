@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
 import { canManageWallboardLinks, createWallboardLink, wallboardSnapshot } from "@/lib/services/wallboard";
+
+vi.mock("server-only", () => ({}));
 
 const ctx = (permissions: Permission[], tenantId: string | null = null): AccessContext => ({
   principal: { userId: "test", name: "Test", email: "test@example.invalid", isBreakGlass: false },
