@@ -7,7 +7,7 @@ vi.mock("@/db/scope", () => ({ withScope: mocks.scope }));
 vi.mock("@/lib/events", () => ({ publish: mocks.publish }));
 vi.mock("@/lib/graph/store", () => ({ recordAlertGraph: mocks.graph }));
 vi.mock("@/lib/services/tuning", () => ({ dispositionStats: async () => null, liveNoiseRules: async () => [], recordNoiseHits: mocks.hits }));
-vi.mock("@/lib/tuning/noise", () => ({ firstMatch: mocks.noise, passiveReasonFor: () => "Known noise" }));
+vi.mock("@/lib/tuning/noise", () => ({ firstMatch: mocks.noise, passiveReasonFor: () => "Known noise", isVulnerabilityInventory: () => false, VULNERABILITY_INVENTORY_REASON: "" }));
 vi.mock("@/lib/intel/enrich", () => ({ filterByEntitlement: async (_tx: unknown, _tenant: unknown, matches: unknown) => matches }));
 import { ingestAlert, IngestIntegrationConflict, IngestIntegrationUnavailable } from "@/lib/pipeline/ingest";
 
