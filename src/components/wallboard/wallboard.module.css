@@ -120,6 +120,17 @@
 .techniques li > div { grid-column: 1 / -1; height: 0.3em; background: var(--color-surface-2); border-radius: 0.15em; }
 .techniques li > div > div { height: 100%; background: var(--color-accent); border-radius: inherit; }
 
+.shares, .outages { list-style: none; padding: 0; }
+.shares li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.2em 0.6em; align-items: baseline; padding-block: 0.35em; font-size: var(--wb-sm); }
+.shares li > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shares strong { font-weight: 600; font-variant-numeric: tabular-nums; }
+.shares li > div { grid-column: 1 / -1; height: 0.3em; background: var(--color-surface-2); border-radius: 0.15em; }
+.shares li > div > div { height: 100%; background: var(--color-accent); border-radius: inherit; }
+.outages li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.75em; padding-block: 0.45em; border-top: 1px solid var(--color-border); }
+.outages li > p { font-size: var(--wb-sm); overflow-wrap: anywhere; }
+.outages li > p small { display: block; color: var(--color-muted); font-size: 0.85em; }
+.outages li > span { font-size: var(--wb-xs); font-weight: 500; text-align: right; }
+
 .empty { padding-block: 1.5em; color: var(--color-muted); font-size: var(--wb-sm); }
 .waiting { display: flex; min-height: 50vh; flex: 1; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 1em; }
 .embedded .waiting { min-height: 0; }

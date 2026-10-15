@@ -1,3 +1,4 @@
+import type { RadarSnapshot } from "@/lib/radar/snapshot";
 import type { WallboardPanel } from "./layout";
 
 export type WallboardCounts = {
@@ -57,6 +58,8 @@ export type WallboardSnapshot = {
   techniques: { id: string; name: string | null; count: number }[];
   customers: WallboardCustomer[];
   incidentSummary: WallboardIncident[];
+  /** Cloudflare Radar's view of Australian internet traffic. Not customer data. */
+  radar: RadarSnapshot;
   linkExpiresAt: string | null;
   /** The published panel arrangement, or the draft when a manager is previewing. */
   layout: WallboardPanel[];
