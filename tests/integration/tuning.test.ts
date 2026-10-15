@@ -18,6 +18,7 @@ import { redis } from "@/lib/redis";
 import { runGrouping } from "@/lib/services/correlation";
 import { fatigueMetrics } from "@/lib/services/dashboard";
 import { listNoiseRules, markAsNoise, moveAlertsToActive } from "@/lib/services/tuning";
+import { VULNERABILITY_INVENTORY_REASON } from "@/lib/tuning/noise";
 
 const run = randomUUID().slice(0, 8);
 const now = new Date();
@@ -91,6 +92,14 @@ describe("noise rules at ingest", () => {
     expect(g.opened).toBeGreaterThanOrEqual(1);
     expect((await alertRow(res.alertId)).incidentId).toBeNull();
     expect((await alertRow(active.alertId)).incidentId).not.toBeNull();
+  });
+
+  it("keeps Wazuh package vulnerabilities out of the queue and out of automatic incidents", async () => {
+    const res = await ingest(tenantA, "23505", { category: "vulnerability-detector", title: "CVE-2026-0001 affects linux-aws" });
+    expect(res.lane).toBe("passive");
+    expect(await alertRow(res.alertId)).toMatchObject({ lane: "passive", noiseRuleId: null, status: "NEW", passiveReason: VULNERABILITY_INVENTORY_REASON });
+    await runGrouping(tenantA, now);
+    expect((await alertRow(res.alertId)).incidentId).toBeNull();
   });
 
   it("ignores proposed, rejected and expired rules", async () => {

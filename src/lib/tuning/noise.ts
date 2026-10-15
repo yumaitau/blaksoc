@@ -112,3 +112,12 @@ export function describeScope(scope: NoiseScope, hostLabel?: string | null): str
 
 /** Plain-language reason stored on a passive alert. */
 export const passiveReasonFor = (reason: string) => `Known noise: ${reason}`;
+
+export const VULNERABILITY_INVENTORY_REASON = "Package vulnerability: tracked under Vulnerabilities, not triaged as an alert.";
+
+/**
+ * Wazuh's vulnerability detector raises one alert per package CVE per host. The Vulnerabilities sync already
+ * holds those findings per asset, so as alerts they only flood the queue and open an incident each.
+ */
+export const isVulnerabilityInventory = (alert: { source: string; category: string | null; intelVerdict?: string | null }) =>
+  alert.source === "wazuh" && alert.category === "vulnerability-detector" && !overridesNoise(alert);
