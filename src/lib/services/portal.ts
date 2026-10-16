@@ -3,6 +3,7 @@ import { advisories, alerts, approvals, assets, cveIntel, incidents, incidentTim
 import { withScope } from "@/db/scope";
 import { can, dbScope, type AccessContext } from "@/lib/auth/access";
 import { actionPhrase, incidentSentences } from "@/lib/portal/summary";
+import { isNonCompliant } from "./assets";
 import { AccessDenied } from "./common";
 
 /** Customers read their own portal; SOC staff may view any customer's portal they can reach. */
@@ -51,6 +52,7 @@ export async function portalOverview(ctx: AccessContext, tenantId: string) {
         online: sql<number>`count(*) filter (where ${assets.agentStatus} = 'active')::int`,
         offline: sql<number>`count(*) filter (where ${assets.agentStatus} is not null and ${assets.agentStatus} <> 'active')::int`,
         unmanaged: sql<number>`count(*) filter (where ${assets.agentStatus} is null)::int`,
+        noncompliant: sql<number>`count(*) filter (where ${isNonCompliant})::int`,
       })
       .from(assets)
       .where(and(eq(assets.tenantId, tenantId), inArray(assets.kind, ["endpoint", "server"])));
@@ -142,7 +144,7 @@ export type Recommendation = { priority: "urgent" | "high" | "routine"; text: st
 /** Deterministic next steps derived from the overview. No model output. */
 export function portalRecommendations(d: {
   topVulns: { cve: string; kev: boolean; kevDueDate: string | null; affectedAssets: number; internetFacing: number; priority: number }[];
-  endpoints: { offline: number; unmanaged: number };
+  endpoints: { offline: number; unmanaged: number; noncompliant: number };
   activeIncidents: { id: string; ref: number; status: string }[];
   pendingApprovals: number;
 }): Recommendation[] {
@@ -156,6 +158,7 @@ export function portalRecommendations(d: {
   const nonKevHigh = d.topVulns.filter((v) => !v.kev && v.priority >= 60);
   if (nonKevHigh.length) out.push({ priority: "high", text: `Schedule patching for ${nonKevHigh.map((v) => v.cve).join(", ")}.`, href: "/vulnerabilities" });
   if (d.endpoints.offline) out.push({ priority: "high", text: `Reconnect ${d.endpoints.offline} offline security agent${d.endpoints.offline === 1 ? "" : "s"}. The SOC cannot see or protect those systems.`, href: "/assets?kind=endpoint" });
+  if (d.endpoints.noncompliant) out.push({ priority: "high", text: `Bring ${d.endpoints.noncompliant} device${d.endpoints.noncompliant === 1 ? "" : "s"} back into line with your Intune compliance policy.`, href: "/assets?agent=noncompliant" });
   if (d.endpoints.unmanaged) out.push({ priority: "routine", text: `Install the security agent on ${d.endpoints.unmanaged} unmanaged system${d.endpoints.unmanaged === 1 ? "" : "s"}.`, href: "/assets" });
   const open = d.activeIncidents.filter((i) => i.status === "OPEN" || i.status === "INVESTIGATING");
   if (open.length) out.push({ priority: "high", text: `Review ${open.length} open incident${open.length === 1 ? "" : "s"} with the SOC and confirm any business impact.`, href: `/portal/incidents/${open[0]!.id}` });

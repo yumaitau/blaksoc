@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { adminDb } from "@/db/client";
-import { alerts, assets, attackTechniques, auditLog, incidents, platformSettings, roleAssignments, roles, tenants, user, wallboardLinks } from "@/db/schema";
+import { alerts, assets, assetSources, attackTechniques, integrations, auditLog, incidents, platformSettings, roleAssignments, roles, tenants, user, wallboardLinks } from "@/db/schema";
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { AccessDenied, resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { env } from "@/lib/env";
@@ -42,6 +42,9 @@ beforeAll(async () => {
     { tenantId: b, source: "test", externalId: `${stamp}-other`, title: "PRIVATE OTHER TITLE", severity: "critical", occurredAt: new Date() },
   ]);
   await adminDb().insert(incidents).values(Array.from({ length: 10 }, (_, i) => ({ tenantId: a, title: `PRIVATE INCIDENT ${i}`, severity: "high" as const, riskScore: i, slaDueAt: new Date(Date.now() - 3600_000) })));
+  const [intune] = await adminDb().insert(integrations).values({ tenantId: a, category: "identity", provider: "m365", name: "M365" }).returning();
+  const [failing] = await adminDb().insert(assets).values({ tenantId: a, name: "Private non-compliant endpoint", kind: "endpoint", agentStatus: "active" }).returning();
+  await adminDb().insert(assetSources).values({ tenantId: a, assetId: failing!.id, integrationId: intune!.id, externalId: "intune-1", raw: { complianceState: "noncompliant", deviceName: "PRIVATE DEVICE" } });
   await adminDb().insert(assets).values([
     { tenantId: a, name: "Private active endpoint", kind: "endpoint", agentStatus: "active" },
     { tenantId: a, name: "Private offline endpoint", kind: "endpoint", agentStatus: "disconnected" },
@@ -66,7 +69,7 @@ describe("office wallboard", () => {
     expect(data?.incidentSummary).toHaveLength(6);
     expect(data?.activity).toHaveLength(24);
     expect(data?.activity.reduce((n, bucket) => n + bucket.count, 0)).toBe(2);
-    expect(data?.customers[0]).toMatchObject({ endpoints: 3, offlineEndpoints: 2 });
+    expect(data?.customers[0]).toMatchObject({ endpoints: 4, offlineEndpoints: 2, noncompliantEndpoints: 1 });
     expect(JSON.stringify(data)).not.toMatch(/PRIVATE|Private analyst|example\.invalid|raw|title|ownerName/);
     expect(data?.linkExpiresAt).toBe(created.expiresAt);
   });

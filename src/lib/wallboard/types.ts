@@ -30,6 +30,7 @@ export type WallboardCustomer = {
   awaitingTriage: number;
   activeIncidents: number;
   offlineEndpoints: number;
+  noncompliantEndpoints: number;
   endpoints: number;
   healthAlerts: number;
   risk: number;

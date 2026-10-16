@@ -5,6 +5,7 @@ import { alerts, assets, assetSources, integrations, roleAssignments, roles, ten
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { assetSummary, listAssets, type AgentFilter } from "@/lib/services/assets";
+import { portalOverview } from "@/lib/services/portal";
 
 vi.mock("server-only", () => ({}));
 
@@ -16,7 +17,7 @@ let ctx: AccessContext;
 
 beforeAll(async () => {
   await adminDb().insert(user).values({ id: userId, name: "Asset reader", email: `${userId}@example.invalid`, emailVerified: true });
-  await adminDb().insert(roles).values({ key: roleKey, name: "Asset reader test", scope: "platform", permissions: ["asset:read"] });
+  await adminDb().insert(roles).values({ key: roleKey, name: "Asset reader test", scope: "platform", permissions: ["asset:read", "portal:read"] });
   await adminDb().insert(roleAssignments).values({ userId, roleKey });
   const rows = await adminDb().insert(tenants).values([
     { name: "Asset customer A", slug: `${stamp}-a`, kind: "customer", settings: DEFAULT_TENANT_SETTINGS },
@@ -68,5 +69,11 @@ describe("asset inventory agent coverage", () => {
     expect(await names("noncompliant")).toEqual(["intune-failing"]);
     expect(await names("attention")).toEqual(["alerting-online", "alerting-user", "gone-dark", "intune-failing", "no-agent"]);
     expect((await listAssets(ctx, { tenantIds: [a] })).filter((r) => r.nonCompliant).map((r) => r.name)).toEqual(["intune-failing"]);
+  });
+
+  it("tells the customer portal about non-compliant devices", async () => {
+    const o = await portalOverview(ctx, a);
+    expect(o.endpoints).toEqual({ total: 6, online: 4, offline: 1, unmanaged: 1, noncompliant: 1 });
+    expect(o.recommendations).toContainEqual(expect.objectContaining({ priority: "high", href: "/assets?agent=noncompliant" }));
   });
 });

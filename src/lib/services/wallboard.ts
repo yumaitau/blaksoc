@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import { AccessDenied, can, dbScope, resolveAccess, type AccessContext } from "@/lib/auth/access";
 import { env } from "@/lib/env";
 import { loadRadar } from "@/lib/radar/load";
+import { isNonCompliant } from "@/lib/services/assets";
 import { unconfiguredRadar } from "@/lib/radar/snapshot";
 import { defaultWallboardLayout, normalizeWallboardLayout, wallboardLayoutForSave, type WallboardPanel } from "@/lib/wallboard/layout";
 import { signWallboardToken, verifyWallboardToken } from "@/lib/wallboard/token";
@@ -143,6 +144,7 @@ export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly
     const endpointCounts = await tx.select({
       tenantId: assets.tenantId, endpoints: sql<number>`count(*)::int`,
       offlineEndpoints: sql<number>`count(*) filter (where ${assets.agentStatus} is distinct from 'active')::int`,
+      noncompliantEndpoints: sql<number>`count(*) filter (where ${isNonCompliant})::int`,
     }).from(assets).where(and(inArray(assets.tenantId, ids), inArray(assets.kind, ["endpoint", "server"]))).groupBy(assets.tenantId);
     const [pending] = await tx.select({ n: sql<number>`count(*)::int` }).from(approvals)
       .where(and(inArray(approvals.tenantId, ids), eq(approvals.status, "PENDING")));
@@ -157,7 +159,7 @@ export async function wallboardSnapshot(ctx: AccessContext, tenantIds?: readonly
     const customers = customerRows.map((t) => ({
       id: t.id, name: t.name, openAlerts: byAlerts.get(t.id)?.openAlerts ?? 0,
       criticalAlerts: byAlerts.get(t.id)?.criticalAlerts ?? 0, awaitingTriage: byAlerts.get(t.id)?.awaitingTriage ?? 0, activeIncidents: byIncidents.get(t.id)?.activeIncidents ?? 0,
-      endpoints: byEndpoints.get(t.id)?.endpoints ?? 0, offlineEndpoints: byEndpoints.get(t.id)?.offlineEndpoints ?? 0,
+      endpoints: byEndpoints.get(t.id)?.endpoints ?? 0, offlineEndpoints: byEndpoints.get(t.id)?.offlineEndpoints ?? 0, noncompliantEndpoints: byEndpoints.get(t.id)?.noncompliantEndpoints ?? 0,
       healthAlerts: byAlerts.get(t.id)?.healthAlerts ?? 0, risk: byAlerts.get(t.id)?.risk ?? 0,
     })).sort((a, b) => b.risk - a.risk || b.openAlerts - a.openAlerts || a.name.localeCompare(b.name));
     const hourlyCounts = new Map(hourly.map((r) => [r.hour, r.count]));
