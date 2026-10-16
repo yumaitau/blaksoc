@@ -147,10 +147,11 @@ describe("tawny normalisation", () => {
 
   it("maps an agent to an endpoint asset with raw.os.platform for the executor", () => {
     const a = normaliseTawnyAgent(agent);
-    expect(a).toMatchObject({ externalId: AGENT, kind: "endpoint", name: "ws-01", hostname: "ws-01", os: "macOS 15.1", agentStatus: "online", ips: [], routingKeys: [`agent:${AGENT}`] });
+    expect(a).toMatchObject({ externalId: AGENT, kind: "endpoint", name: "ws-01", hostname: "ws-01", os: "macOS 15.1", agentStatus: "active", ips: [], routingKeys: [`agent:${AGENT}`] });
     expect(a.lastSeen?.toISOString()).toBe("2026-09-01T01:00:00.000Z");
     expect((a.raw as { os: { platform: string } }).os.platform).toBe("macos");
     expect(normaliseTawnyAgent({ ...agent, last_heartbeat_at: null }).lastSeen).toBeNull();
+    expect(normaliseTawnyAgent({ ...agent, status: "stale" }).agentStatus).toBe("stale");
   });
 
   it("takes the public IP and turns tags into group routing keys", () => {
