@@ -7,6 +7,7 @@ import { GraphError, graphList, graphRequest, type GraphResult, type GraphTransp
 import { coverageGaps } from "@/lib/providers/m365/licence";
 import { actionResult, createM365Provider, ENTRA_REMOTE_PERMISSIONS } from "@/lib/providers/m365/provider";
 import { demoGraphTransport } from "@/lib/providers/m365/fixtures";
+import { normaliseDevice } from "@/lib/providers/m365/normalise";
 
 function scripted(handler: GraphTransport["request"]): GraphTransport {
   return { request: handler };
@@ -118,6 +119,14 @@ describe("recorded Graph fixtures", () => {
     expect(basic.map((a) => a.kind).sort()).toEqual(["identity", "identity"]);
     const premium = await createM365Provider({ ...config, subscribedSkus: ["SPE_E5"] }, {}, demoGraphTransport()).getAssets();
     expect(premium.some((a) => a.kind === "endpoint" && a.hostname === "WATTLE-LAPTOP")).toBe(true);
+  });
+
+  it("treats an Intune device as reporting while it checks in, whatever its compliance", () => {
+    const device = (lastSyncDateTime: string | undefined, complianceState = "noncompliant") => normaliseDevice({ id: "d1", deviceName: "PC-1", lastSyncDateTime, complianceState })?.agentStatus;
+    expect(device(new Date(Date.now() - 3600_000).toISOString())).toBe("active");
+    expect(device(new Date(Date.now() - 29 * 24 * 3600_000).toISOString())).toBe("active");
+    expect(device(new Date(Date.now() - 31 * 24 * 3600_000).toISOString(), "compliant")).toBe("stale");
+    expect(device(undefined)).toBe("unknown");
   });
 
   it("shows licence gaps, and a 403 on a licensed signal", async () => {

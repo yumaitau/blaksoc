@@ -254,11 +254,15 @@ export function normaliseUser(raw: Record<string, unknown>): NormalisedAsset | n
   };
 }
 
+/** Intune's default "mark device not compliant if it has not checked in" window. */
+const INTUNE_STALE_MS = 30 * 24 * 3600_000;
+
 export function normaliseDevice(raw: Record<string, unknown>): NormalisedAsset | null {
   const id = str(raw.id);
   const name = str(raw.deviceName);
   if (!id || !name) return null;
   const mac = str(raw.wiFiMacAddress || raw.ethernetMacAddress);
+  const synced = raw.lastSyncDateTime ? new Date(str(raw.lastSyncDateTime)) : null;
   return {
     externalId: id,
     kind: "endpoint",
@@ -267,8 +271,9 @@ export function normaliseDevice(raw: Record<string, unknown>): NormalisedAsset |
     ips: [],
     os: str(raw.operatingSystem) || null,
     macs: mac ? [mac] : [],
-    agentStatus: str(raw.complianceState) || "unknown",
-    lastSeen: raw.lastSyncDateTime ? new Date(str(raw.lastSyncDateTime)) : null,
+    // Intune has no heartbeat: a device is reporting while it keeps checking in (every ~8h). Compliance is read from raw.
+    agentStatus: !synced ? "unknown" : Date.now() - synced.getTime() <= INTUNE_STALE_MS ? "active" : "stale",
+    lastSeen: synced,
     routingKeys: [`device:${name.toLowerCase()}`],
     raw,
   };

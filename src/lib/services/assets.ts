@@ -4,7 +4,23 @@ import { audit } from "@/lib/audit";
 import type { AccessContext } from "@/lib/auth/access";
 import { actor, AccessDenied, scoped } from "./common";
 
-export async function listAssets(ctx: AccessContext, f: { tenantIds?: string[]; kind?: string; q?: string; minCriticality?: number; limit?: number } = {}) {
+export const AGENT_FILTERS = ["attention", "online", "offline", "none", "noncompliant"] as const;
+export type AgentFilter = (typeof AGENT_FILTERS)[number];
+
+// Same definitions as the portal and wallboard: only endpoints and servers carry an agent, and only "active" is reporting.
+const isEndpoint = inArray(assets.kind, ["endpoint", "server"]);
+const hasOpenAlert = sql`exists (select 1 from ${alerts} a where a.asset_id = ${assets.id} and a.status not in ('RESOLVED','FALSE_POSITIVE'))`;
+// Intune's own verdict, kept on the M365 source record (Graph managedDevice.complianceState). Grace period is not yet a failure.
+const isNonCompliant = sql<boolean>`exists (select 1 from ${assetSources} s where s.asset_id = ${assets.id} and s.raw->>'complianceState' in ('noncompliant','conflict','error'))`;
+const agentWhere: Record<AgentFilter, SQL> = {
+  online: and(isEndpoint, eq(assets.agentStatus, "active"))!,
+  offline: and(isEndpoint, sql`${assets.agentStatus} is not null and ${assets.agentStatus} <> 'active'`)!,
+  none: and(isEndpoint, sql`${assets.agentStatus} is null`)!,
+  noncompliant: isNonCompliant,
+  attention: or(and(isEndpoint, sql`${assets.agentStatus} is distinct from 'active'`), isNonCompliant, hasOpenAlert)!,
+};
+
+export async function listAssets(ctx: AccessContext, f: { tenantIds?: string[]; kind?: string; q?: string; minCriticality?: number; agent?: AgentFilter; limit?: number } = {}) {
   return scoped(
     ctx,
     "asset:read",
@@ -13,6 +29,7 @@ export async function listAssets(ctx: AccessContext, f: { tenantIds?: string[]; 
       if (f.kind) where.push(eq(assets.kind, f.kind as never));
       if (f.q) where.push(or(ilike(assets.name, `%${f.q}%`), ilike(assets.hostname, `%${f.q}%`), sql`${f.q} = any(${assets.ips})`)!);
       if (f.minCriticality) where.push(sql`${assets.criticality} >= ${f.minCriticality}`);
+      if (f.agent) where.push(agentWhere[f.agent]);
       return tx
         .select({
           id: assets.id, tenantId: assets.tenantId, tenantName: tenants.name, kind: assets.kind, name: assets.name, hostname: assets.hostname, ips: assets.ips, os: assets.os,
@@ -20,6 +37,7 @@ export async function listAssets(ctx: AccessContext, f: { tenantIds?: string[]; 
           openAlerts: sql<number>`(select count(*)::int from ${alerts} a where a.asset_id = ${assets.id} and a.status not in ('RESOLVED','FALSE_POSITIVE'))`,
           openVulns: sql<number>`(select count(*)::int from ${vulnerabilities} v where v.asset_id = ${assets.id} and v.status = 'open')`,
           sources: sql<number>`(select count(*)::int from ${assetSources} s where s.asset_id = ${assets.id})`,
+          nonCompliant: isNonCompliant,
         })
         .from(assets)
         .innerJoin(tenants, eq(tenants.id, assets.tenantId))
@@ -28,6 +46,29 @@ export async function listAssets(ctx: AccessContext, f: { tenantIds?: string[]; 
         .limit(f.limit ?? 500);
     },
     f.tenantIds,
+  );
+}
+
+/** Endpoint agent coverage plus every asset that needs a look, for the inventory's summary tiles. */
+export async function assetSummary(ctx: AccessContext, tenantIds?: string[]) {
+  return scoped(
+    ctx,
+    "asset:read",
+    async (tx, ids) => {
+      const [row] = await tx
+        .select({
+          endpoints: sql<number>`count(*) filter (where ${isEndpoint})::int`,
+          online: sql<number>`count(*) filter (where ${agentWhere.online})::int`,
+          offline: sql<number>`count(*) filter (where ${agentWhere.offline})::int`,
+          none: sql<number>`count(*) filter (where ${agentWhere.none})::int`,
+          noncompliant: sql<number>`count(*) filter (where ${agentWhere.noncompliant})::int`,
+          attention: sql<number>`count(*) filter (where ${agentWhere.attention})::int`,
+        })
+        .from(assets)
+        .where(inArray(assets.tenantId, ids));
+      return row ?? { endpoints: 0, online: 0, offline: 0, none: 0, noncompliant: 0, attention: 0 };
+    },
+    tenantIds,
   );
 }
 

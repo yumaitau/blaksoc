@@ -149,7 +149,8 @@ export function normaliseTawnyAgent(a: TawnyAgent): NormalisedAsset {
     ips: str(a.public_ip) ? [a.public_ip!.trim()] : [],
     os,
     macs: [],
-    agentStatus: a.status ?? null,
+    // Every rollup (assets, portal, wallboard, reports) treats only "active" as reporting, as Wazuh does.
+    agentStatus: a.status === "online" ? "active" : (a.status ?? null),
     lastSeen: a.last_heartbeat_at ? new Date(a.last_heartbeat_at) : null,
     routingKeys: [`agent:${a.id}`, ...(a.tags ?? []).filter((t) => str(t)).map((t) => `group:${t}`)],
     raw: {
