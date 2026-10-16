@@ -4,6 +4,7 @@ import {
 import { Suspense } from "react";
 import { can, type AccessContext } from "@/lib/auth/access";
 import { Wordmark } from "./brand";
+import { CommandPalette } from "./command-palette";
 import { HermesNavCount } from "./hermes-nav-count";
 import { LiveUpdates } from "./live-updates";
 import { NAV } from "./nav";
@@ -66,7 +67,10 @@ export function AppShell({ ctx, workspace, brand, children }: { ctx: AccessConte
             {customers.length > 1 || ctx.isPlatform ? <WorkspaceSwitcher tenants={customers} current={workspace} /> : <div className="truncate text-sm font-medium">{customers[0]?.name}</div>}
             {brand ? <p className="truncate text-xs text-muted">{brand}</p> : null}
           </div>
-          <LiveUpdates />
+          <div className="flex shrink-0 items-center gap-2 md:gap-3">
+            <CommandPalette pages={groups.flatMap((g) => g.items.map((i) => ({ href: i.href, label: i.label, group: g.label })))} />
+            <LiveUpdates />
+          </div>
         </header>
         <main className="min-w-0 flex-1 px-4 py-6 md:px-6">{children}</main>
       </div>
