@@ -1,9 +1,10 @@
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { adminDb } from "@/db/client";
-import { alerts, assets, roleAssignments, roles, tenants, user, vulnerabilities } from "@/db/schema";
+import { advisories, alerts, assets, roleAssignments, roles, tenants, user, vulnerabilities } from "@/db/schema";
 import { DEFAULT_TENANT_SETTINGS } from "@/db/schema/platform";
 import { resolveAccess, type AccessContext } from "@/lib/auth/access";
+import { socDashboard } from "@/lib/services/dashboard";
 import { estateProfile, withRelevance } from "@/lib/services/intel";
 
 vi.mock("server-only", () => ({}));
@@ -16,7 +17,7 @@ let ctx: AccessContext;
 
 beforeAll(async () => {
   await adminDb().insert(user).values({ id: userId, name: "Intel reader", email: `${userId}@example.invalid`, emailVerified: true });
-  await adminDb().insert(roles).values({ key: roleKey, name: "Relevance test", scope: "platform", permissions: ["asset:read", "alert:read"] });
+  await adminDb().insert(roles).values({ key: roleKey, name: "Relevance test", scope: "platform", permissions: ["asset:read", "alert:read", "dashboard:read", "vuln:read"] });
   await adminDb().insert(roleAssignments).values({ userId, roleKey });
   const rows = await adminDb().insert(tenants).values([
     { name: "Relevance A", slug: `${stamp}-a`, kind: "customer", settings: DEFAULT_TENANT_SETTINGS },
@@ -46,6 +47,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await adminDb().delete(advisories).where(sql`${advisories.externalId} like ${`${stamp}%`}`);
   if (a) await adminDb().delete(tenants).where(inArray(tenants.id, [a, b]));
   await adminDb().delete(user).where(eq(user.id, userId));
   await adminDb().delete(roles).where(eq(roles.key, roleKey));
@@ -86,5 +88,23 @@ describe("estate profile", () => {
       await adminDb().delete(user).where(eq(user.id, id));
       await adminDb().delete(roles).where(eq(roles.key, `${roleKey}-assets`));
     }
+  });
+
+  it("puts an older advisory that touches the estate on the dashboard ahead of newer ones that do not", async () => {
+    const day = 86_400_000;
+    await adminDb().insert(advisories).values([
+      // Newer than everything else in the window, and matching nothing.
+      ...Array.from({ length: 80 }, (_, i) => ({ source: "TEST", externalId: `${stamp}-noise-${i}`, title: `${stamp} unrelated appliance ${i}`, url: "https://example.invalid", publishedAt: new Date(Date.now() - i * 60_000) })),
+      { source: "TEST", externalId: `${stamp}-ssh`, title: `${stamp} OpenSSH flaw`, url: "https://example.invalid", publishedAt: new Date(Date.now() - 40 * day), cves: ["CVE-2024-6387"] },
+      { source: "TEST", externalId: `${stamp}-ancient`, title: `${stamp} OpenSSH ancient flaw`, url: "https://example.invalid", publishedAt: new Date(Date.now() - 400 * day), cves: ["CVE-2024-6387"] },
+    ]);
+    const d = await socDashboard(ctx, [a]);
+    const ids = d.australian.map((x) => x.externalId);
+    expect(d.australian).toHaveLength(6);
+    expect(ids).toContain(`${stamp}-ssh`);
+    // Outside the emerging window, however relevant.
+    expect(ids).not.toContain(`${stamp}-ancient`);
+    // Nothing irrelevant ranks above it.
+    expect(d.australian.slice(0, ids.indexOf(`${stamp}-ssh`)).every((x) => x.relevance.score > 0)).toBe(true);
   });
 });

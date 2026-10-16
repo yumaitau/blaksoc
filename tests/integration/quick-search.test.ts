@@ -57,6 +57,27 @@ describe("command palette search", () => {
     expect((await quickSearch(ctx, "cve-2024-3400", [a])).find((h) => h.kind === "cve")).toMatchObject({ title: "CVE-2024-3400", detail: "Open on 1 asset", href: "/vulnerabilities?cve=CVE-2024-3400" });
   });
 
+  it("needs the permission in the selected workspace, not just in another tenant", async () => {
+    const id = `${stamp}-split`;
+    await adminDb().insert(user).values({ id, name: "Split", email: `${id}@example.invalid`, emailVerified: true });
+    await adminDb().insert(roles).values([
+      { key: `${roleKey}-assets`, name: "Split assets", scope: "tenant", permissions: ["asset:read"] },
+      { key: `${roleKey}-vulns`, name: "Split vulns", scope: "tenant", permissions: ["vuln:read"] },
+    ]);
+    await adminDb().insert(roleAssignments).values([
+      { userId: id, roleKey: `${roleKey}-assets`, tenantId: a },
+      { userId: id, roleKey: `${roleKey}-vulns`, tenantId: b },
+    ]);
+    try {
+      const split = await resolveAccess({ userId: id, name: "Split", email: `${id}@example.invalid`, isBreakGlass: false });
+      expect((await quickSearch(split, "CVE-2024-3400", [a])).some((h) => h.kind === "cve")).toBe(false);
+      expect((await quickSearch(split, "CVE-2024-3400", [b])).find((h) => h.kind === "cve")?.detail).toBe("Not open in this workspace");
+    } finally {
+      await adminDb().delete(user).where(eq(user.id, id));
+      await adminDb().delete(roles).where(inArray(roles.key, [`${roleKey}-assets`, `${roleKey}-vulns`]));
+    }
+  });
+
   it("treats LIKE wildcards in the query as text", async () => {
     expect(await quickSearch(ctx, "%%", [a])).toEqual([]);
   });

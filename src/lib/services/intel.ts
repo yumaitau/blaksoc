@@ -41,9 +41,10 @@ export async function listTagged(ctx: AccessContext, tag?: SectorTag) {
   return db().select().from(intelTags).where(tag ? sql`${tag} = any(${intelTags.tags})` : undefined).orderBy(desc(intelTags.updatedAt)).limit(200);
 }
 
-export async function listAdvisories(ctx: AccessContext, opts: { source?: string; limit?: number } = {}) {
+export async function listAdvisories(ctx: AccessContext, opts: { source?: string; since?: Date; limit?: number } = {}) {
   if (!ctx.tenantIds.length) throw new AccessDenied();
-  return db().select().from(advisories).where(opts.source ? eq(advisories.source, opts.source) : undefined).orderBy(desc(advisories.publishedAt)).limit(opts.limit ?? 50);
+  const where = and(opts.source ? eq(advisories.source, opts.source) : undefined, opts.since ? sql`${advisories.publishedAt} >= ${opts.since.toISOString()}::timestamptz` : undefined);
+  return db().select().from(advisories).where(where).orderBy(desc(advisories.publishedAt)).limit(opts.limit ?? 50);
 }
 
 /** Techniques named by enabled Sigma rules the caller can see. */
@@ -56,6 +57,9 @@ export async function coveredAttackTechniques(ctx: AccessContext): Promise<strin
   );
   return [...new Set(rows.flatMap((row) => row.techniques))];
 }
+
+/** Advisories scored for relevance, newest first: about two years of ACSC and CISA output. */
+export const RELEVANCE_SCAN = 1000;
 
 /** Days of alerts whose techniques count as seen in an estate. */
 export const TECHNIQUE_WINDOW_DAYS = 30;

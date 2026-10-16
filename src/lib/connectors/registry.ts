@@ -86,7 +86,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
     data: WAZUH_DATA_CAPABILITIES,
     remotePermissions: [
       "Wazuh API user with agents:read, active-response:command, cluster:read",
-      "Indexer user with read on wazuh-alerts-* and wazuh-states-vulnerabilities-* (and wazuh-archives-* when archive search is configured)",
+      "Indexer user with read on wazuh-alerts-*, wazuh-states-vulnerabilities-* and wazuh-states-inventory-packages-* (and wazuh-archives-* when archive search is configured)",
     ],
     config: z.object({
       apiUrl: z.string().url(),

@@ -109,7 +109,8 @@ const VULN_SORT = [{ "agent.id": "asc" }, { "vulnerability.id": "asc" }, { "pack
 
 /** Unique per document (agent, package, version) for search_after paging. */
 const PACKAGE_SORT = [{ "agent.id": "asc" }, { "package.name": "asc" }, { "package.version": "asc" }];
-const PACKAGE_MAX = 1_000_000;
+/** Upper bound per call. The caller asks for a few agents at a time, so this is only hit by a runaway index. */
+const PACKAGE_MAX = 200_000;
 
 /** Wazuh 4.14 rejects a bare `os` in `select`; only named sub-fields are accepted. */
 export const AGENT_SELECT = "id,name,ip,status,group,lastKeepAlive,os.name,os.version,os.platform";
@@ -265,15 +266,15 @@ export class WazuhProvider implements SecurityEventProvider {
     return out;
   }
 
-  /** Syscollector package inventory, from the indexer's state index (Wazuh 4.13+). */
-  async getSoftware(): Promise<NormalisedSoftware[]> {
+  /** Syscollector package inventory for some agents, from the indexer's state index (Wazuh 4.13+). */
+  async getSoftware(assetExternalIds: string[]): Promise<{ software: NormalisedSoftware[]; complete: boolean }> {
     type Hit = { _source: { agent?: { id?: string }; package?: { name?: string; version?: string } }; sort?: unknown[] };
     const out: NormalisedSoftware[] = [];
     let after: unknown[] | undefined;
     for (;;) {
       const res = await this.search<{ hits: { hits: Hit[] } }>(this.cfg.packagesIndex ?? "wazuh-states-inventory-packages-*", {
         size: VULN_PAGE,
-        query: { match_all: {} },
+        query: { terms: { "agent.id": assetExternalIds } },
         sort: PACKAGE_SORT,
         ...(after ? { search_after: after } : {}),
         _source: ["agent.id", "package.name", "package.version"],
@@ -283,11 +284,11 @@ export class WazuhProvider implements SecurityEventProvider {
         if (!s.agent?.id || !s.package?.name) continue;
         out.push({ assetExternalId: s.agent.id, name: s.package.name, version: s.package.version ?? "" });
       }
-      if (hits.length < VULN_PAGE || out.length >= PACKAGE_MAX) break;
+      if (hits.length < VULN_PAGE) return { software: out, complete: true };
+      if (out.length >= PACKAGE_MAX) return { software: out, complete: false };
       after = hits.at(-1)?.sort;
-      if (!after) break;
+      if (!after) return { software: out, complete: true };
     }
-    return out;
   }
 
   supportedActions(): ResponseActionRequest["action"][] {

@@ -127,25 +127,44 @@ export async function syncAllVulnerabilities(log: Log) {
   }
 }
 
-/** Installed software from providers that report it. Replaces each reported asset's list. */
+/** Agents per provider request: bounds worker memory, and one huge agent cannot crowd out the rest. */
+export const SOFTWARE_AGENTS_PER_CALL = 50;
+
+/**
+ * Installed software from providers that report it. Replaces the list of every asset the provider serves; an asset
+ * it reports no packages for is cleared, so relevance never counts software that has gone. A failed sync is
+ * recorded on the integration (the inventory index needs its own indexer permission) without marking it down.
+ */
 export async function syncAllSoftware(log: Log) {
   const tierOf = await tierOfTenant();
   for (const row of await eventIntegrations()) {
-    const provider = eventProvider(row);
-    if (!provider.getSoftware) continue;
     try {
-      const sources = await systemDb().select().from(assetSources).where(eq(assetSources.integrationId, row.id));
-      const byExt = new Map(sources.map((s) => [s.externalId, s]));
-      const tenantOf = new Map(sources.map((s) => [s.assetId, s.tenantId]));
-      const grouped = softwareByAsset(await provider.getSoftware(), (ext) => byExt.get(ext)?.assetId);
-      for (const [assetId, software] of grouped) {
-        const tenantId = tenantOf.get(assetId)!;
-        if (!collectionAllowed(tierOf(tenantId), row.provider)) continue;
-        await withScope(systemScope(tenantId), (tx) => tx.update(assets).set({ software }).where(eq(assets.id, assetId)));
+      const provider = eventProvider(row);
+      if (!provider.getSoftware) continue;
+      const sources = (await systemDb().select().from(assetSources).where(eq(assetSources.integrationId, row.id))).filter((s) => collectionAllowed(tierOf(s.tenantId), row.provider));
+      let updated = 0;
+      for (let i = 0; i < sources.length; i += SOFTWARE_AGENTS_PER_CALL) {
+        const batch = sources.slice(i, i + SOFTWARE_AGENTS_PER_CALL);
+        const byExt = new Map(batch.map((s) => [s.externalId, s.assetId]));
+        const { software, complete } = await provider.getSoftware(batch.map((s) => s.externalId));
+        if (!complete) logger.warn("software inventory truncated", { integrationId: row.id, provider: row.provider, agents: batch.length, packages: software.length });
+        const grouped = softwareByAsset(software, (ext) => byExt.get(ext));
+        for (const s of batch) {
+          const list = grouped.get(s.assetId);
+          // A truncated answer says nothing about the agents it did not reach: leave their lists alone.
+          if (!list && !complete) continue;
+          await withScope(systemScope(s.tenantId), (tx) => tx.update(assets).set({ software: list ?? [] }).where(eq(assets.id, s.assetId)));
+          updated++;
+        }
       }
-      log(`software ${row.name}: ${grouped.size} assets`);
+      log(`software ${row.name}: ${updated} assets`);
     } catch (e) {
       logger.warn("software sync failed", { integrationId: row.id, provider: row.provider, err: e });
+      await systemDb()
+        .update(integrations)
+        .set({ lastError: `Software inventory: ${(e as Error).message}`.slice(0, 500), lastErrorAt: new Date() })
+        .where(eq(integrations.id, row.id))
+        .catch(() => undefined);
     }
   }
 }

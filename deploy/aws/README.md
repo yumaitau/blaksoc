@@ -309,8 +309,8 @@ The scripts run as root through SSM Run Command and can be re-run:
 - `opencti-host.sh`: a blakSOC-owned OpenCTI. Not used in production, which shares ThreatSieve's OpenCTI.
 
 blakSOC's Wazuh API user (`blaksoc`) holds `agents_readonly`, `cluster_readonly` and a policy for
-`active-response:command`; its indexer user (`blaksoc`) can only read `wazuh-alerts-*`, `wazuh-archives-*` and
-`wazuh-states-vulnerabilities-*` plus node info for the region check. The integrations are `Wazuh (AWS)`,
+`active-response:command`; its indexer user (`blaksoc`) can only read `wazuh-alerts-*`, `wazuh-archives-*`,
+`wazuh-states-vulnerabilities-*` and `wazuh-states-inventory-packages-*` plus node info for the region check. The integrations are `Wazuh (AWS)`,
 linked to the `Yuma IT Internal` tenant by agent group `yumait-aws` and connecting to
 `wazuh-internal.soc.yumait.au` with TLS verified against the stack's root CA (`caPem`), and `OpenCTI (ThreatSieve)` at platform
 level.

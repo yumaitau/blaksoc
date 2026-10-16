@@ -18,7 +18,7 @@ The worker refuses to boot unless `WAZUH_INDEXER_REGION` is `ap-southeast-2` or
 | Where | Account | Minimum rights |
 |---|---|---|
 | Wazuh server API (`:55000`) | `blaksoc` | `agents:read`, `active-response:command`, `cluster:read`, `manager:read` |
-| Wazuh indexer (`:9200`) | `blaksoc_reader` | `read` on `wazuh-alerts-*`, `wazuh-states-vulnerabilities-*` |
+| Wazuh indexer (`:9200`) | `blaksoc_reader` | `read` on `wazuh-alerts-*`, `wazuh-states-vulnerabilities-*`, `wazuh-states-inventory-packages-*` |
 
 Credentials are entered once in blakSOC, encrypted with AES-256-GCM and never shown again.
 

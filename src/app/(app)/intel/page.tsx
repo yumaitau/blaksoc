@@ -13,7 +13,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { splitTechniqueCoverage } from "@/lib/detections/advisory-coverage";
 import { intelMatchesFor } from "@/lib/services/alerts";
-import { coveredAttackTechniques, listAdvisories, listFeeds, searchIntel, sightingQueue, TECHNIQUE_WINDOW_DAYS, withRelevance } from "@/lib/services/intel";
+import { coveredAttackTechniques, listAdvisories, listFeeds, RELEVANCE_SCAN, searchIntel, sightingQueue, TECHNIQUE_WINDOW_DAYS, withRelevance } from "@/lib/services/intel";
 import { cn, fmtDateTime } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 import { logger } from "@/lib/obs/log";
@@ -106,10 +106,12 @@ async function Australian({ ctx, tag, relevantOnly, coveredIds }: { ctx: AccessC
   const active = SECTOR_TAGS.includes(tag as SectorTag) ? (tag as SectorTag) : null;
   const ws = await currentWorkspace(ctx);
   const scope = ws.tenant?.name ?? "all customers";
-  const all = await withRelevance(ctx, await listAdvisories(ctx, { limit: 200 }), ws.tenantIds);
+  // Score well past the 200 shown, so an older advisory that touches the estate still counts and still lists.
+  const all = await withRelevance(ctx, await listAdvisories(ctx, { limit: RELEVANCE_SCAN }), ws.tenantIds);
   const tagged = active ? all.filter((a) => a.tags.includes(active)) : all;
-  const relevantCount = tagged.filter((a) => a.relevance.score > 0).length;
-  const rows = relevantOnly ? tagged.filter((a) => a.relevance.score > 0).sort((x, y) => y.relevance.score - x.relevance.score) : tagged;
+  const relevant = tagged.filter((a) => a.relevance.score > 0);
+  const rows = relevantOnly ? relevant.sort((x, y) => y.relevance.score - x.relevance.score).slice(0, 200) : tagged.slice(0, 200);
+  const relevantCount = relevant.length;
   const chip = (on: boolean) => cn("rounded-full border px-2.5 py-0.5 text-xs", on ? "border-accent bg-accent-soft text-accent" : "border-border text-muted hover:text-fg");
   const href = (t: string | null, rel: boolean) => `/intel?tab=australia${t ? `&tag=${t}` : ""}${rel ? "&rel=1" : ""}`;
   return (

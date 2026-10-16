@@ -1,7 +1,7 @@
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { advisories, alerts, assets, incidents, tenants, vulnerabilities } from "@/db/schema";
-import { can, type AccessContext } from "@/lib/auth/access";
+import { tenantsWith, type AccessContext } from "@/lib/auth/access";
 import type { Permission } from "@/lib/auth/permissions";
 import { AccessDenied, scoped } from "./common";
 
@@ -13,9 +13,12 @@ const likeEscape = (v: string) => v.replace(/[\\%_]/g, (c) => `\\${c}`);
 const CVE = /^cve-\d{4}-\d{4,}$/i;
 const INCIDENT_REF = /^(?:inc-?)?#?(\d{1,9})$/i;
 
+/** Whether the caller holds `permission` on any tenant of the workspace, not merely somewhere. */
+const canIn = (ctx: AccessContext, permission: Permission, tenantIds: readonly string[] | undefined) => tenantsWith(ctx, permission, tenantIds).length > 0;
+
 /** A kind the caller cannot read is empty, never an error: one denied permission must not blank the palette. */
 async function maybe<T>(ctx: AccessContext, permission: Permission, tenantIds: readonly string[] | undefined, fn: Parameters<typeof scoped<T[]>>[2]): Promise<T[]> {
-  if (!can(ctx, permission)) return [];
+  if (!canIn(ctx, permission, tenantIds)) return [];
   return scoped(ctx, permission, fn, tenantIds).catch((e) => {
     if (e instanceof AccessDenied) return [];
     throw e;
@@ -82,7 +85,7 @@ export async function quickSearch(ctx: AccessContext, query: string, tenantIds?:
   return [
     ...incidentHits.map((i): QuickHit => ({ kind: "incident", title: `INC-${i.ref} ${i.title}`, detail: `${i.status.toLowerCase()} · ${i.tenant}`, href: `/soc/incidents/${i.id}` })),
     ...assetHits.map((a): QuickHit => ({ kind: "asset", title: a.name, detail: [a.kind.replaceAll("_", " "), a.os, a.tenant].filter(Boolean).join(" · "), href: `/assets/${a.id}` })),
-    ...(CVE.test(q) && can(ctx, "vuln:read") ? [{ kind: "cve" as const, title: cveTitle, detail: cveHits[0] ? `Open on ${cveHits[0].n} asset${cveHits[0].n === 1 ? "" : "s"}` : "Not open in this workspace", href: `/vulnerabilities?cve=${cveTitle}` }] : []),
+    ...(CVE.test(q) && canIn(ctx, "vuln:read", tenantIds) ? [{ kind: "cve" as const, title: cveTitle, detail: cveHits[0] ? `Open on ${cveHits[0].n} asset${cveHits[0].n === 1 ? "" : "s"}` : "Not open in this workspace", href: `/vulnerabilities?cve=${cveTitle}` }] : []),
     ...alertHits.map((a): QuickHit => ({ kind: "alert", title: a.title, detail: `${a.severity} · ${a.status.toLowerCase().replaceAll("_", " ")} · ${a.tenant}`, href: `/soc/alerts/${a.id}` })),
     ...advisoryHits.map((a): QuickHit => ({ kind: "advisory", title: a.title, detail: a.source, href: a.url, external: true })),
   ];
