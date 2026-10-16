@@ -4,10 +4,13 @@ import { db } from "@/db/client";
 import type { AccessContext } from "@/lib/auth/access";
 import { emptyProfile, relevanceMatcher } from "@/lib/intel/relevance";
 import { scoped } from "./common";
-import { estateProfile } from "./intel";
+import { estateProfile, RELEVANCE_SCAN } from "./intel";
 import { vulnSummary } from "./vulnerabilities";
 
 const OPEN_ALERT = ["RESOLVED", "FALSE_POSITIVE"] as const;
+
+/** Days an advisory counts as emerging on the dashboard. */
+const EMERGING_DAYS = 90;
 
 /** Everything on the SOC dashboard answers: what's happening, what matters, who's affected, what next, what was done. */
 export async function socDashboard(ctx: AccessContext, tenantIds?: string[]) {
@@ -119,11 +122,14 @@ export async function socDashboard(ctx: AccessContext, tenantIds?: string[]) {
   );
   const vulns = await vulnSummary(ctx, tenantIds).catch(() => null);
   // Advisories are global public intel, not tenant data.
-  // Newest advisories that touch the estate first, then the rest. A caller without asset access sees them unscored.
-  const recent = await db().select().from(advisories).orderBy(desc(advisories.publishedAt)).limit(60);
+  // Advisories from the emerging window that touch the estate first, then the newest. A caller without asset access sees them unscored.
+  const since = new Date(Date.now() - EMERGING_DAYS * 86_400_000);
+  const recent = await db().select().from(advisories).where(gte(advisories.publishedAt, since)).orderBy(desc(advisories.publishedAt)).limit(RELEVANCE_SCAN);
+  const newest = recent.length >= 6 ? recent.slice(0, 6) : await db().select().from(advisories).orderBy(desc(advisories.publishedAt)).limit(6);
   const match = relevanceMatcher(await estateProfile(ctx, tenantIds).catch(() => emptyProfile()));
-  const scored = recent.map((a) => ({ ...a, relevance: match(a) }));
-  const australian = [...scored.filter((a) => a.relevance.score > 0), ...scored.filter((a) => !a.relevance.score)].slice(0, 6);
+  const relevant = recent.map((a) => ({ ...a, relevance: match(a) })).filter((a) => a.relevance.score > 0);
+  const seen = new Set(relevant.map((a) => a.id));
+  const australian = [...relevant, ...newest.filter((a) => !seen.has(a.id)).map((a) => ({ ...a, relevance: match(a) }))].slice(0, 6);
   return { ...data, vulns, australian };
 }
 
