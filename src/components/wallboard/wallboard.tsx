@@ -242,6 +242,7 @@ function Metrics({ data, now }: { data: WallboardSnapshot; now: number }) {
   const counts = data.counts;
   const endpoints = data.customers.reduce((sum, row) => sum + row.endpoints, 0);
   const offline = data.customers.reduce((sum, row) => sum + row.offlineEndpoints, 0);
+  const noncompliant = data.customers.reduce((sum, row) => sum + row.noncompliantEndpoints, 0);
   const waited = data.oldestUntriagedAt && now ? `Oldest waiting ${duration(now - Date.parse(data.oldestUntriagedAt))}` : `${number.format(counts.openAlerts)} open alerts`;
   return (
     <section className={styles.metrics} aria-label="Current operational totals">
@@ -250,7 +251,7 @@ function Metrics({ data, now }: { data: WallboardSnapshot; now: number }) {
       <Metric label="Active incidents" value={number.format(counts.activeIncidents)} detail={`${number.format(counts.overdueIncidents)} overdue SLA`} tone={counts.overdueIncidents ? "danger" : undefined} />
       <Metric label="Pending approvals" value={number.format(counts.pendingApprovals)} detail="Response decisions waiting" tone={counts.pendingApprovals ? "warning" : undefined} />
       <Metric label="Threat-intel matches" value={number.format(counts.intelMatched)} detail="Open alerts on known-bad indicators" tone={counts.intelMatched ? "warning" : undefined} />
-      <Metric label="Endpoints reporting" value={endpoints ? percent.format((endpoints - offline) / endpoints) : "—"} detail={`${number.format(offline)} not active · ${number.format(endpoints)} inventoried`} tone={offline ? "warning" : undefined} />
+      <Metric label="Endpoints reporting" value={endpoints ? percent.format((endpoints - offline) / endpoints) : "—"} detail={`${number.format(offline)} not active · ${number.format(noncompliant)} non-compliant · ${number.format(endpoints)} inventoried`} tone={offline || noncompliant ? "warning" : undefined} />
     </section>
   );
 }

@@ -11,7 +11,7 @@ export type AgentFilter = (typeof AGENT_FILTERS)[number];
 const isEndpoint = inArray(assets.kind, ["endpoint", "server"]);
 const hasOpenAlert = sql`exists (select 1 from ${alerts} a where a.asset_id = ${assets.id} and a.status not in ('RESOLVED','FALSE_POSITIVE'))`;
 // Intune's own verdict, kept on the M365 source record (Graph managedDevice.complianceState). Grace period is not yet a failure.
-const isNonCompliant = sql<boolean>`exists (select 1 from ${assetSources} s where s.asset_id = ${assets.id} and s.raw->>'complianceState' in ('noncompliant','conflict','error'))`;
+export const isNonCompliant = sql<boolean>`exists (select 1 from ${assetSources} s where s.asset_id = ${assets.id} and s.raw->>'complianceState' in ('noncompliant','conflict','error'))`;
 const agentWhere: Record<AgentFilter, SQL> = {
   online: and(isEndpoint, eq(assets.agentStatus, "active"))!,
   offline: and(isEndpoint, sql`${assets.agentStatus} is not null and ${assets.agentStatus} <> 'active'`)!,

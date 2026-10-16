@@ -92,7 +92,7 @@ export default async function PortalPage() {
       <section aria-labelledby="coverage" className="text-sm">
         <h2 id="coverage" className="text-base font-semibold">Coverage</h2>
         <ul className="mt-2 space-y-1">
-          <li>{o.endpoints.online} of {o.endpoints.total} protected devices are online. {o.endpoints.offline} offline. {o.endpoints.unmanaged} have no agent.</li>
+          <li>{o.endpoints.online} of {o.endpoints.total} protected devices are online. {o.endpoints.offline} offline. {o.endpoints.unmanaged} have no agent. {o.endpoints.noncompliant} fail Intune compliance.</li>
           <li>{o.kevCves} actively exploited weakness{o.kevCves === 1 ? "" : "es"}.</li>
           <li>{o.pendingApprovals} containment request{o.pendingApprovals === 1 ? "" : "s"} waiting for approval.</li>
           <li>In the last 30 days the SOC reviewed {o.alertStats.last30} detection{o.alertStats.last30 === 1 ? "" : "s"} and closed {o.alertStats.closed30}.</li>
