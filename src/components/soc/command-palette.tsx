@@ -52,7 +52,7 @@ export function CommandPalette({ pages }: { pages: PalettePage[] }) {
     if (term.length < 2) return;
     const t = setTimeout(() => {
       start(async () => {
-        const res = await paletteSearch(term);
+        const res = await paletteSearch(term).catch(() => ({ ok: false as const, error: "Search failed. Check your connection and try again." }));
         if (latest.current === term) setHits({ q: term, items: res.ok ? (res.data ?? []) : [], error: res.ok ? undefined : res.error });
       });
     }, 180);
@@ -82,9 +82,10 @@ export function CommandPalette({ pages }: { pages: PalettePage[] }) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.min(i + 1, items.length - 1)); }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((i) => Math.max(0, Math.min(i + 1, items.length - 1))); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((i) => Math.max(i - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); go(items[active]); }
+    // Enter that confirms an IME candidate belongs to the input, not the palette.
+    else if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); go(items[active]); }
   };
 
   const searching = q.trim().length >= 2 && (pending || hits.q !== q.trim());
