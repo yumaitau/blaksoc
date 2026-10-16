@@ -266,13 +266,14 @@ function Customers({ data, page }: { data: WallboardSnapshot; page: number }) {
   const rows = data.customers.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
   return (
     <Panel id="customers" heading="Customer posture" meta={pages > 1 ? `Page ${current + 1} / ${pages} · rotates every 15s` : "Highest risk first"}>
-      {rows.length ? <table className={styles.customers}><thead><tr><th scope="col">Customer</th><th scope="col">Risk</th><th scope="col" className={styles.optional}>Triage</th><th scope="col">Alerts</th><th scope="col">Cases</th><th scope="col" className={styles.optional}>Not active</th></tr></thead><tbody>{rows.map((customer) => <tr key={customer.id}>
+      {rows.length ? <table className={styles.customers}><thead><tr><th scope="col">Customer</th><th scope="col">Risk</th><th scope="col" className={styles.optional}>Triage</th><th scope="col">Alerts</th><th scope="col">Cases</th><th scope="col" className={styles.optional}>Not active</th><th scope="col" className={styles.optional}>Non-compliant</th></tr></thead><tbody>{rows.map((customer) => <tr key={customer.id}>
         <th scope="row"><span>{customer.name}</span><small>{customer.criticalAlerts ? `${customer.criticalAlerts} critical / high-risk` : customer.healthAlerts ? `${customer.healthAlerts} health alert${customer.healthAlerts === 1 ? "" : "s"}` : "No critical queue"}</small></th>
         <td className={customer.risk >= 80 ? styles.danger : customer.risk >= 60 ? styles.warning : undefined}>{customer.risk}<small>/100</small></td>
         <td className={styles.optional}>{number.format(customer.awaitingTriage)}</td>
         <td>{number.format(customer.openAlerts)}</td>
         <td>{number.format(customer.activeIncidents)}</td>
         <td className={`${styles.optional} ${customer.offlineEndpoints ? styles.warning : ""}`}>{number.format(customer.offlineEndpoints)}<small> / {number.format(customer.endpoints)}</small></td>
+        <td className={`${styles.optional} ${customer.noncompliantEndpoints ? styles.warning : ""}`}>{number.format(customer.noncompliantEndpoints)}</td>
       </tr>)}</tbody></table> : <p className={styles.empty}>No operational customers in this scope.</p>}
     </Panel>
   );
