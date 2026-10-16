@@ -127,6 +127,7 @@ describe("recorded Graph fixtures", () => {
     expect(device(new Date(Date.now() - 29 * 24 * 3600_000).toISOString())).toBe("active");
     expect(device(new Date(Date.now() - 31 * 24 * 3600_000).toISOString(), "compliant")).toBe("stale");
     expect(device(undefined)).toBe("unknown");
+    expect(normaliseDevice({ id: "d1", deviceName: "PC-1", lastSyncDateTime: "not a date" })).toMatchObject({ agentStatus: "unknown", lastSeen: null });
   });
 
   it("shows licence gaps, and a 403 on a licensed signal", async () => {

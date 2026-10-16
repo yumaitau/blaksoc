@@ -262,7 +262,8 @@ export function normaliseDevice(raw: Record<string, unknown>): NormalisedAsset |
   const name = str(raw.deviceName);
   if (!id || !name) return null;
   const mac = str(raw.wiFiMacAddress || raw.ethernetMacAddress);
-  const synced = raw.lastSyncDateTime ? new Date(str(raw.lastSyncDateTime)) : null;
+  const parsed = new Date(str(raw.lastSyncDateTime));
+  const synced = Number.isNaN(parsed.getTime()) ? null : parsed;
   return {
     externalId: id,
     kind: "endpoint",
