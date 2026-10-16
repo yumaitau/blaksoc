@@ -100,8 +100,11 @@ export interface SecurityEventProvider {
   getAssets(routingKeys?: string[]): Promise<NormalisedAsset[]>;
   getAsset(externalId: string): Promise<NormalisedAsset | null>;
   getVulnerabilities?(assetExternalIds?: string[]): Promise<NormalisedVulnerability[]>;
-  /** Installed packages per asset, for matching advisories to the software an estate runs. */
-  getSoftware?(): Promise<NormalisedSoftware[]>;
+  /**
+   * Installed packages for the given assets, for matching advisories to the software an estate runs.
+   * `complete` is false when the provider stopped early; assets it did not reach may be missing.
+   */
+  getSoftware?(assetExternalIds: string[]): Promise<{ software: NormalisedSoftware[]; complete: boolean }>;
   /** Actions this provider can execute; the SOAR layer refuses anything else. */
   supportedActions(): ResponseActionRequest["action"][];
   executeResponseAction(req: ResponseActionRequest): Promise<ResponseActionResult>;
