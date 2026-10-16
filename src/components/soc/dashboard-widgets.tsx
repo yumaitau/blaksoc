@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RelevanceLine } from "@/components/soc/advisory-relevance";
 import { HermesBadge } from "@/components/soc/hermes-badge";
 import { EmptyState, IntelVerdict, RiskScore, SeverityBadge, StatLink, StatusBadge } from "@/components/soc/indicators";
 import { Badge } from "@/components/ui/badge";
@@ -338,14 +339,18 @@ export function AdvisoriesCard({ d }: { d: Dash }) {
     <Card className="h-full">
       <CardHeader>
         <CardTitle>Emerging Australian threats</CardTitle>
-        <Link href="/intel" className="text-xs text-accent hover:underline">Threat intel →</Link>
+        <span className="flex gap-3 text-xs">
+          <Link href="/intel?tab=australia&rel=1" className="text-warn hover:underline">Relevant to us</Link>
+          <Link href="/intel" className="text-accent hover:underline">Threat intel →</Link>
+        </span>
       </CardHeader>
       <div className="divide-y divide-border">
         {d.australian.length === 0 ? (
           <div className="p-4 text-sm text-muted">No advisories ingested yet. The worker pulls ACSC and CISA feeds hourly.</div>
         ) : (
           d.australian.map((a) => (
-            <a key={a.id} href={a.url} target="_blank" rel="noreferrer" className="block px-4 py-2.5 hover:bg-surface-2/60">
+            <div key={a.id} className="px-4 py-2.5 hover:bg-surface-2/60">
+            <a href={a.url} target="_blank" rel="noreferrer" className="block">
               <div className="truncate text-sm font-medium">{a.title}</div>
               <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
                 <span>{a.source}</span>·<span>{fmtDateTime(a.publishedAt)}</span>
@@ -353,6 +358,8 @@ export function AdvisoriesCard({ d }: { d: Dash }) {
                 {a.cves.slice(0, 3).map((c) => <Badge key={c} variant="danger">{c}</Badge>)}
               </div>
             </a>
+            <RelevanceLine r={a.relevance} compact />
+            </div>
           ))
         )}
       </div>

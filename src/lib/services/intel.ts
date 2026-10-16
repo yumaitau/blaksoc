@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { systemDb, db } from "@/db/client";
-import { advisories, intelFeeds, intelMatches, intelTags, SECTOR_TAGS, sigmaRules, tenantFeedEntitlements, tenants, type SectorTag } from "@/db/schema";
+import { advisories, alerts, assets, intelFeeds, intelMatches, intelTags, SECTOR_TAGS, sigmaRules, tenantFeedEntitlements, tenants, vulnerabilities, type SectorTag } from "@/db/schema";
 import { withScope } from "@/db/scope";
 import { assertCan, can, type AccessContext } from "@/lib/auth/access";
 import { audit } from "@/lib/audit";
 import { intelProviderFor } from "@/lib/connectors/instances";
 import { checkGovernedSighting } from "@/lib/governance/policy";
+import { emptyProfile, relevanceMatcher, type AdvisoryText, type EstateProfile, type Relevance } from "@/lib/intel/relevance";
 import { actor, AccessDenied, scoped } from "./common";
 import { governanceProfile } from "./governance";
 
@@ -54,6 +55,63 @@ export async function coveredAttackTechniques(ctx: AccessContext): Promise<strin
       .where(and(eq(sigmaRules.enabled, true), or(isNull(sigmaRules.tenantId), scopeTenants.length ? inArray(sigmaRules.tenantId, scopeTenants) : sql`false`))),
   );
   return [...new Set(rows.flatMap((row) => row.techniques))];
+}
+
+/** Days of alerts whose techniques count as seen in an estate. */
+export const TECHNIQUE_WINDOW_DAYS = 30;
+
+/**
+ * What an estate runs and what attacks it actually sees: open CVEs, installed software and operating systems per
+ * asset, and techniques on active-lane alerts in the window. Passive (Hermes- or analyst-tuned noise) and
+ * false-positive alerts do not count. Techniques need alert:read; without it they are left out.
+ */
+export async function estateProfile(ctx: AccessContext, tenantIds?: readonly string[], now = new Date()): Promise<EstateProfile> {
+  const profile = emptyProfile();
+  await scoped(
+    ctx,
+    "asset:read",
+    async (tx, ids) => {
+      const [cves, software, os] = await Promise.all([
+        tx.select({ cve: vulnerabilities.cve, n: sql<number>`count(distinct ${vulnerabilities.assetId})::int` }).from(vulnerabilities).where(and(inArray(vulnerabilities.tenantId, ids), eq(vulnerabilities.status, "open"))).groupBy(vulnerabilities.cve),
+        tx
+          .select({ name: sql<string>`s.pkg->>'name'`, n: sql<number>`count(distinct ${assets.id})::int` })
+          .from(assets)
+          .innerJoin(sql`lateral jsonb_array_elements(${assets.software}) as s(pkg)`, sql`true`)
+          .where(inArray(assets.tenantId, ids))
+          .groupBy(sql`1`),
+        tx.select({ os: assets.os, n: sql<number>`count(*)::int` }).from(assets).where(and(inArray(assets.tenantId, ids), sql`${assets.os} is not null`)).groupBy(assets.os),
+      ]);
+      for (const r of cves) profile.cves.set(r.cve, r.n);
+      for (const r of software) if (r.name) profile.software.set(r.name, r.n);
+      for (const r of os) profile.os.set(r.os!, r.n);
+    },
+    tenantIds,
+  );
+  if (!can(ctx, "alert:read")) return profile;
+  const since = new Date(now.getTime() - TECHNIQUE_WINDOW_DAYS * 86_400_000);
+  await scoped(
+    ctx,
+    "alert:read",
+    async (tx, ids) => {
+      const rows = await tx
+        .select({ t: sql<string>`unnest(${alerts.attackTechniques})`.as("t"), n: sql<number>`count(*)::int` })
+        .from(alerts)
+        .where(and(inArray(alerts.tenantId, ids), eq(alerts.lane, "active"), sql`${alerts.status} <> 'FALSE_POSITIVE'`, sql`${alerts.occurredAt} >= ${since.toISOString()}::timestamptz`))
+        .groupBy(sql`1`);
+      for (const r of rows) profile.techniques.set(r.t, r.n);
+    },
+    tenantIds,
+  ).catch((e) => {
+    if (!(e instanceof AccessDenied)) throw e;
+  });
+  return profile;
+}
+
+/** Score advisories against the caller's estate, keeping input order. */
+export async function withRelevance<A extends AdvisoryText>(ctx: AccessContext, rows: A[], tenantIds?: readonly string[]): Promise<(A & { relevance: Relevance })[]> {
+  if (!rows.length) return [];
+  const match = relevanceMatcher(await estateProfile(ctx, tenantIds));
+  return rows.map((a) => ({ ...a, relevance: match(a) }));
 }
 
 /** Advisories relevant to a tenant: tag overlap with its sectors, or CVEs present in its estate. */

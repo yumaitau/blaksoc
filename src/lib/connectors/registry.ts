@@ -96,6 +96,7 @@ export const CONNECTORS: ConnectorDefinition[] = [
       alertsIndex: z.string().optional(),
       archivesIndex: z.string().optional(),
       vulnerabilitiesIndex: z.string().optional(),
+      packagesIndex: z.string().optional(),
       activeResponse: z.record(z.string(), z.union([z.string(), z.object({ windows: z.string().optional(), default: z.string() })])).optional(),
       region: z.enum(["ap-southeast-2", "ap-southeast-4"]),
       /** Lowest severity stored in blakSOC; lower alerts stay in Wazuh. Defaults to low. */

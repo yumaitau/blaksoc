@@ -6,7 +6,7 @@ import { runDueClockReminders, runDueObligationReminders } from "@/lib/services/
 import { advanceRun, resumeRun } from "@/lib/soar/engine";
 import { executeResponseAction, expireDueApprovals, pollPendingResponseActions } from "@/lib/soar/response";
 import { createSighting, ingestAdvisories, refreshCveIntel, rescoreVulnerabilities } from "./jobs/intel";
-import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
+import { pollAlerts, probeHealth, runDetections, syncAllAssets, syncAllSoftware, syncAllVulnerabilities, tenantsWithAssets } from "./jobs/ingest";
 import { runDueBoardSummaries } from "@/lib/services/board";
 import { releaseDueCollections } from "@/lib/services/dfir";
 import { archiveDueSyslog } from "@/lib/services/syslog";
@@ -45,6 +45,7 @@ const handlers: Record<QueueName, Handler> = {
   [QUEUES.sync]: async (job) => {
     if (job.name === "assets") return syncAllAssets(log("sync"));
     if (job.name === "vulns") return syncAllVulnerabilities(log("sync"));
+    if (job.name === "software") return syncAllSoftware(log("sync"));
     if (job.name === "health") {
       await probeHealth();
       return runDueHealth();

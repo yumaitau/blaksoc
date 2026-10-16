@@ -10,6 +10,7 @@ import { plansByTenant } from "@/lib/services/billing";
 import { DemoProvider } from "@/lib/providers/demo";
 import { ingestAlert, newIngestBatch } from "@/lib/pipeline/ingest";
 import { syncAssets } from "@/lib/pipeline/assets";
+import { softwareByAsset } from "@/lib/pipeline/software";
 import { queue, QUEUES } from "@/lib/queue";
 import { redis } from "@/lib/redis";
 import { evaluateTriggers } from "@/lib/soar/engine";
@@ -122,6 +123,29 @@ export async function syncAllVulnerabilities(log: Log) {
       log(`vulns ${row.name}: ${vulns.length}`);
     } catch (e) {
       logger.warn("vulnerability sync failed", { integrationId: row.id, provider: row.provider, err: e });
+    }
+  }
+}
+
+/** Installed software from providers that report it. Replaces each reported asset's list. */
+export async function syncAllSoftware(log: Log) {
+  const tierOf = await tierOfTenant();
+  for (const row of await eventIntegrations()) {
+    const provider = eventProvider(row);
+    if (!provider.getSoftware) continue;
+    try {
+      const sources = await systemDb().select().from(assetSources).where(eq(assetSources.integrationId, row.id));
+      const byExt = new Map(sources.map((s) => [s.externalId, s]));
+      const tenantOf = new Map(sources.map((s) => [s.assetId, s.tenantId]));
+      const grouped = softwareByAsset(await provider.getSoftware(), (ext) => byExt.get(ext)?.assetId);
+      for (const [assetId, software] of grouped) {
+        const tenantId = tenantOf.get(assetId)!;
+        if (!collectionAllowed(tierOf(tenantId), row.provider)) continue;
+        await withScope(systemScope(tenantId), (tx) => tx.update(assets).set({ software }).where(eq(assets.id, assetId)));
+      }
+      log(`software ${row.name}: ${grouped.size} assets`);
+    } catch (e) {
+      logger.warn("software sync failed", { integrationId: row.id, provider: row.provider, err: e });
     }
   }
 }

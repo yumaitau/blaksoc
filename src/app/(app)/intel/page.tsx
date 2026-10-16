@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { RelevanceLine } from "@/components/soc/advisory-relevance";
 import { EmptyState, IntelVerdict, PageHeader } from "@/components/soc/indicators";
 import { IntelHtml } from "@/components/soc/intel-html";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +13,7 @@ import { can, type AccessContext } from "@/lib/auth/access";
 import { requireAccess } from "@/lib/auth/session";
 import { splitTechniqueCoverage } from "@/lib/detections/advisory-coverage";
 import { intelMatchesFor } from "@/lib/services/alerts";
-import { coveredAttackTechniques, listAdvisories, listFeeds, searchIntel, sightingQueue } from "@/lib/services/intel";
+import { coveredAttackTechniques, listAdvisories, listFeeds, searchIntel, sightingQueue, TECHNIQUE_WINDOW_DAYS, withRelevance } from "@/lib/services/intel";
 import { cn, fmtDateTime } from "@/lib/utils";
 import { currentWorkspace } from "@/lib/workspace";
 import { logger } from "@/lib/obs/log";
@@ -31,7 +32,7 @@ type TabKey = (typeof TABS)[number]["key"];
 
 const tagLabel = (t: string) => t.replaceAll("_", " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
 
-export default async function IntelPage({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; tag?: string }> }) {
+export default async function IntelPage({ searchParams }: { searchParams: Promise<{ tab?: string; q?: string; tag?: string; rel?: string }> }) {
   const ctx = await requireAccess();
   if (!ctx.isPlatform) redirect("/portal");
   const sp = await searchParams;
@@ -57,7 +58,7 @@ export default async function IntelPage({ searchParams }: { searchParams: Promis
           </Link>
         ))}
       </nav>
-      {tab === "australia" ? <Australian ctx={ctx} tag={sp.tag} coveredIds={coveredIds} /> : null}
+      {tab === "australia" ? <Australian ctx={ctx} tag={sp.tag} relevantOnly={sp.rel === "1"} coveredIds={coveredIds} /> : null}
       {tab === "search" ? <Search ctx={ctx} q={sp.q?.trim() ?? ""} /> : null}
       {tab === "matches" ? <Matches ctx={ctx} /> : null}
       {tab === "sightings" ? <Sightings ctx={ctx} /> : null}
@@ -101,10 +102,16 @@ function AdvisoryCoverage({ rows, coveredIds }: { rows: { id: string; title: str
   );
 }
 
-async function Australian({ ctx, tag, coveredIds }: { ctx: AccessContext; tag?: string; coveredIds: string[] | null }) {
+async function Australian({ ctx, tag, relevantOnly, coveredIds }: { ctx: AccessContext; tag?: string; relevantOnly: boolean; coveredIds: string[] | null }) {
   const active = SECTOR_TAGS.includes(tag as SectorTag) ? (tag as SectorTag) : null;
-  const all = await listAdvisories(ctx, { limit: 200 });
-  const rows = active ? all.filter((a) => a.tags.includes(active)) : all;
+  const ws = await currentWorkspace(ctx);
+  const scope = ws.tenant?.name ?? "all customers";
+  const all = await withRelevance(ctx, await listAdvisories(ctx, { limit: 200 }), ws.tenantIds);
+  const tagged = active ? all.filter((a) => a.tags.includes(active)) : all;
+  const relevantCount = tagged.filter((a) => a.relevance.score > 0).length;
+  const rows = relevantOnly ? tagged.filter((a) => a.relevance.score > 0).sort((x, y) => y.relevance.score - x.relevance.score) : tagged;
+  const chip = (on: boolean) => cn("rounded-full border px-2.5 py-0.5 text-xs", on ? "border-accent bg-accent-soft text-accent" : "border-border text-muted hover:text-fg");
+  const href = (t: string | null, rel: boolean) => `/intel?tab=australia${t ? `&tag=${t}` : ""}${rel ? "&rel=1" : ""}`;
   return (
     <div className="space-y-5">
       {coveredIds ? <AdvisoryCoverage rows={rows} coveredIds={coveredIds} /> : null}
@@ -114,20 +121,30 @@ async function Australian({ ctx, tag, coveredIds }: { ctx: AccessContext; tag?: 
         <span className="text-xs text-muted">ACSC and CISA, newest first</span>
       </CardHeader>
       <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5" role="group" aria-label="Filter by sector tag">
-        <Link href="/intel?tab=australia" className={cn("rounded-full border px-2.5 py-0.5 text-xs", !active ? "border-accent bg-accent-soft text-accent" : "border-border text-muted hover:text-fg")} aria-current={!active ? "true" : undefined}>
+        <Link href={href(active, !relevantOnly)} className={chip(relevantOnly)} aria-current={relevantOnly ? "true" : undefined} title={`Names a CVE open in ${scope}, software or an OS installed there, or a technique seen in its alerts in the last ${TECHNIQUE_WINDOW_DAYS} days`}>
+          Relevant to {scope} · {relevantCount}
+        </Link>
+        <span className="mx-1 h-4 w-px bg-border" aria-hidden />
+        <Link href={href(null, relevantOnly)} className={chip(!active)} aria-current={!active ? "true" : undefined}>
           All
         </Link>
         {SECTOR_TAGS.map((t) => (
-          <Link key={t} href={`/intel?tab=australia&tag=${t}`} aria-current={active === t ? "true" : undefined} className={cn("rounded-full border px-2.5 py-0.5 text-xs", active === t ? "border-accent bg-accent-soft text-accent" : "border-border text-muted hover:text-fg")}>
+          <Link key={t} href={href(t, relevantOnly)} aria-current={active === t ? "true" : undefined} className={chip(active === t)}>
             {tagLabel(t)}
           </Link>
         ))}
       </div>
       {rows.length === 0 ? (
         <div className="p-4">
-          <EmptyState title={active ? `No advisories tagged ${tagLabel(active)}` : "No advisories ingested yet"}>
-            The worker ingests ACSC and CISA advisories hourly and normalises them into OpenCTI reports. Check back after the next run.
-          </EmptyState>
+          {relevantOnly ? (
+            <EmptyState title={`Nothing here touches ${scope}`}>
+              No advisory names a CVE open there, software or an operating system installed there, or a technique seen in its alerts. Software inventory syncs from Wazuh every six hours.
+            </EmptyState>
+          ) : (
+            <EmptyState title={active ? `No advisories tagged ${tagLabel(active)}` : "No advisories ingested yet"}>
+              The worker ingests ACSC and CISA advisories hourly and normalises them into OpenCTI reports. Check back after the next run.
+            </EmptyState>
+          )}
         </div>
       ) : (
         <div className="divide-y divide-border">
@@ -157,6 +174,7 @@ async function Australian({ ctx, tag, coveredIds }: { ctx: AccessContext; tag?: 
                 )}
               </div>
               {coveredIds ? <TechniqueLine named={a.attackTechniques} coveredIds={coveredIds} /> : null}
+              <RelevanceLine r={a.relevance} />
             </div>
           ))}
         </div>
