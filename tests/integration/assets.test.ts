@@ -73,7 +73,7 @@ describe("asset inventory agent coverage", () => {
 
   it("tells the customer portal about non-compliant devices", async () => {
     const o = await portalOverview(ctx, a);
-    expect(o.endpoints).toEqual({ total: 6, online: 4, offline: 1, unmanaged: 1, noncompliant: 1 });
-    expect(o.recommendations).toContainEqual(expect.objectContaining({ priority: "high", href: "/assets?agent=noncompliant" }));
+    expect(o?.endpoints).toEqual({ total: 6, online: 4, offline: 1, unmanaged: 1, noncompliant: 1 });
+    expect(o?.recommendations).toContainEqual(expect.objectContaining({ priority: "high", href: "/assets?agent=noncompliant" }));
   });
 });
