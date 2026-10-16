@@ -5,7 +5,7 @@ import {
 } from "./data";
 import { httpJson, type HttpOptions } from "./http";
 import type {
-  AlertQuery, NormalisedAlert, NormalisedAsset, NormalisedVulnerability, ProviderHealth, ResponseActionRequest,
+  AlertQuery, NormalisedAlert, NormalisedAsset, NormalisedSoftware, NormalisedVulnerability, ProviderHealth, ResponseActionRequest,
   ResponseActionResult, SecurityEventProvider, Severity,
 } from "./types";
 
@@ -18,6 +18,7 @@ export type WazuhConfig = {
   /** Optional: also search the full event archive (logall_json), e.g. wazuh-archives-4.x-*. */
   archivesIndex?: string;
   vulnerabilitiesIndex?: string; // default wazuh-states-vulnerabilities-*
+  packagesIndex?: string; // default wazuh-states-inventory-packages-*
   tlsVerify?: boolean;
   caPem?: string;
   /**
@@ -105,6 +106,10 @@ const VULN_PAGE = 5000;
 const VULN_MAX = 500_000;
 /** Unique enough per document (agent, CVE, package) for search_after paging. */
 const VULN_SORT = [{ "agent.id": "asc" }, { "vulnerability.id": "asc" }, { "package.name": "asc" }, { "package.version": "asc" }];
+
+/** Unique per document (agent, package, version) for search_after paging. */
+const PACKAGE_SORT = [{ "agent.id": "asc" }, { "package.name": "asc" }, { "package.version": "asc" }];
+const PACKAGE_MAX = 1_000_000;
 
 /** Wazuh 4.14 rejects a bare `os` in `select`; only named sub-fields are accepted. */
 export const AGENT_SELECT = "id,name,ip,status,group,lastKeepAlive,os.name,os.version,os.platform";
@@ -254,6 +259,31 @@ export class WazuhProvider implements SecurityEventProvider {
         });
       }
       if (hits.length < VULN_PAGE || out.length >= VULN_MAX) break;
+      after = hits.at(-1)?.sort;
+      if (!after) break;
+    }
+    return out;
+  }
+
+  /** Syscollector package inventory, from the indexer's state index (Wazuh 4.13+). */
+  async getSoftware(): Promise<NormalisedSoftware[]> {
+    type Hit = { _source: { agent?: { id?: string }; package?: { name?: string; version?: string } }; sort?: unknown[] };
+    const out: NormalisedSoftware[] = [];
+    let after: unknown[] | undefined;
+    for (;;) {
+      const res = await this.search<{ hits: { hits: Hit[] } }>(this.cfg.packagesIndex ?? "wazuh-states-inventory-packages-*", {
+        size: VULN_PAGE,
+        query: { match_all: {} },
+        sort: PACKAGE_SORT,
+        ...(after ? { search_after: after } : {}),
+        _source: ["agent.id", "package.name", "package.version"],
+      });
+      const hits = res.hits.hits;
+      for (const { _source: s } of hits) {
+        if (!s.agent?.id || !s.package?.name) continue;
+        out.push({ assetExternalId: s.agent.id, name: s.package.name, version: s.package.version ?? "" });
+      }
+      if (hits.length < VULN_PAGE || out.length >= PACKAGE_MAX) break;
       after = hits.at(-1)?.sort;
       if (!after) break;
     }

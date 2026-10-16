@@ -8,6 +8,7 @@ export const SCHEDULES: { queue: QueueName; name: string; every: number }[] = [
   { queue: QUEUES.response, name: "expire-approvals", every: 5 * 60_000 },
   { queue: QUEUES.sync, name: "assets", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "vulns", every: 60 * 60_000 },
+  { queue: QUEUES.sync, name: "software", every: 6 * 60 * 60_000 },
   { queue: QUEUES.sync, name: "health", every: 5 * 60_000 },
   { queue: QUEUES.sync, name: "dfir-release", every: 15 * 60_000 },
   { queue: QUEUES.sync, name: "kelpie", every: 60_000 },

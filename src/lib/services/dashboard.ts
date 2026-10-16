@@ -2,7 +2,9 @@ import { and, desc, eq, gte, inArray, ne, notInArray, sql } from "drizzle-orm";
 import { advisories, alerts, approvals, assets, auditLog, incidents, intelMatches, noiseRules, responseActions, tenants, user, vulnerabilities } from "@/db/schema";
 import { db } from "@/db/client";
 import type { AccessContext } from "@/lib/auth/access";
+import { emptyProfile, relevanceMatcher } from "@/lib/intel/relevance";
 import { scoped } from "./common";
+import { estateProfile } from "./intel";
 import { vulnSummary } from "./vulnerabilities";
 
 const OPEN_ALERT = ["RESOLVED", "FALSE_POSITIVE"] as const;
@@ -117,7 +119,11 @@ export async function socDashboard(ctx: AccessContext, tenantIds?: string[]) {
   );
   const vulns = await vulnSummary(ctx, tenantIds).catch(() => null);
   // Advisories are global public intel, not tenant data.
-  const australian = await db().select().from(advisories).orderBy(desc(advisories.publishedAt)).limit(6);
+  // Newest advisories that touch the estate first, then the rest. A caller without asset access sees them unscored.
+  const recent = await db().select().from(advisories).orderBy(desc(advisories.publishedAt)).limit(60);
+  const match = relevanceMatcher(await estateProfile(ctx, tenantIds).catch(() => emptyProfile()));
+  const scored = recent.map((a) => ({ ...a, relevance: match(a) }));
+  const australian = [...scored.filter((a) => a.relevance.score > 0), ...scored.filter((a) => !a.relevance.score)].slice(0, 6);
   return { ...data, vulns, australian };
 }
 

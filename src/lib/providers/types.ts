@@ -54,6 +54,12 @@ export type NormalisedVulnerability = {
   cvss: number | null;
 };
 
+export type NormalisedSoftware = {
+  assetExternalId: string;
+  name: string;
+  version: string;
+};
+
 export type AlertQuery = {
   since?: Date;
   until?: Date;
@@ -94,6 +100,8 @@ export interface SecurityEventProvider {
   getAssets(routingKeys?: string[]): Promise<NormalisedAsset[]>;
   getAsset(externalId: string): Promise<NormalisedAsset | null>;
   getVulnerabilities?(assetExternalIds?: string[]): Promise<NormalisedVulnerability[]>;
+  /** Installed packages per asset, for matching advisories to the software an estate runs. */
+  getSoftware?(): Promise<NormalisedSoftware[]>;
   /** Actions this provider can execute; the SOAR layer refuses anything else. */
   supportedActions(): ResponseActionRequest["action"][];
   executeResponseAction(req: ResponseActionRequest): Promise<ResponseActionResult>;
