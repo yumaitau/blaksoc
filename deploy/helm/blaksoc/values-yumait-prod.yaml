@@ -101,6 +101,9 @@ ingress:
     alb.ingress.kubernetes.io/healthcheck-path: /api/health
     # Live updates use SSE.
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=3600
+    # Cloudflare-only: the ALB security group allows 80/443 only from prefix list cloudflare-ipv4
+    # (refresh: yumait-eks scripts/refresh-cloudflare-prefix-list.sh). soc.yumait.au is proxied.
+    alb.ingress.kubernetes.io/security-group-prefix-lists: pl-078c295025f99d70e
   hosts: [soc.yumait.au]
   tls: []
 

@@ -372,7 +372,7 @@ aws ssm start-session --target <instance-id> --document-name AWS-StartPortForwar
 
 | Name | Type | Target | Proxy |
 | --- | --- | --- | --- |
-| `soc.yumait.au` | CNAME | ALB hostname from `kubectl -n blaksoc get ingress` | DNS only |
+| `soc.yumait.au` | CNAME | ALB hostname from `kubectl -n blaksoc get ingress` | Proxied. Config Rules: SSL Full (strict); Browser Integrity Check off for `/api/ingest*` and `/api/billing*`. The ALB SG allows only the `cloudflare-ipv4` prefix list |
 | `agents.soc.yumait.au` | CNAME | NLB hostname | DNS only (raw TCP) |
 | `wazuh-internal.soc.yumait.au` | A | the manager's fixed private address | DNS only |
 | `wazuh.yumait.au` | CNAME | Cloudflare Tunnel `blaksoc-wazuh` | Proxied (one level, so Universal SSL covers it) |
