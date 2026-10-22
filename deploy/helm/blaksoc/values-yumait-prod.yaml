@@ -21,6 +21,10 @@ externalSecret:
 
 config:
   AI_DATA_RESIDENCY: AU
+  # soc.yumait.au is proxied by Cloudflare (Full strict) and the ALB only accepts Cloudflare ranges.
+  # XFF arrives as "client, cloudflare-edge"; trust the Cloudflare v4 ranges and the VPC so the walk
+  # from the right returns the real client. Keep in step with https://api.cloudflare.com/client/v4/ips.
+  TRUSTED_PROXY_CIDRS: "173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,172.31.0.0/16"
   OPENSEARCH_REGION: ap-southeast-2
   WAZUH_INDEXER_REGION: ap-southeast-2
   OPENCTI_REGION: ap-southeast-2
