@@ -3,7 +3,7 @@
  * Kelpie's status comes back, and blakSOC refuses its own case edits. Kelpie is an in-memory fake here.
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { adminDb } from "@/db/client";
 import { alerts, auditLog, incidentAlerts, incidentLinks, incidents, incidentTasks, incidentTimeline, integrations, kelpieCases, tenants, user } from "@/db/schema";
@@ -172,5 +172,22 @@ describe("Kelpie case management", () => {
 
     const actions = (await adminDb().select().from(auditLog).where(and(eq(auditLog.tenantId, tenantId), gte(auditLog.at, started)))).map((a) => a.action);
     expect(actions).toEqual(expect.arrayContaining(["kelpie.case_push", "kelpie.case_sync"]));
+  });
+
+  it("works through every linked case when more are open than one pass handles", async () => {
+    const opened = await adminDb()
+      .insert(incidents)
+      .values([1, 2].map((n) => ({ tenantId, title: `Rotation ${n}`, severity: "medium" as const })))
+      .returning({ id: incidents.id });
+    const t0 = new Date(Date.now() + 4 * 3600_000);
+    await syncKelpie({ connect, now: t0, limit: 10 });
+    const links = await adminDb().select().from(kelpieCases).where(inArray(kelpieCases.incidentId, opened.map((o) => o.id)));
+    expect(links).toHaveLength(2);
+    for (const l of links) fake.move(l.caseId!, { status: "contained" });
+
+    await syncKelpie({ connect, now: new Date(t0.getTime() + 60_000), limit: 1 });
+    await syncKelpie({ connect, now: new Date(t0.getTime() + 120_000), limit: 1 });
+    const rows = await adminDb().select({ status: incidents.status }).from(incidents).where(inArray(incidents.id, opened.map((o) => o.id)));
+    expect(rows.map((r) => r.status)).toEqual(["CONTAINED", "CONTAINED"]);
   });
 });
