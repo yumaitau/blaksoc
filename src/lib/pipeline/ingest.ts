@@ -19,7 +19,7 @@ import type { NormalisedAlert } from "@/lib/providers/types";
 import { scoreAlert } from "@/lib/risk/engine";
 import { dispositionStats, liveNoiseRules, recordNoiseHits } from "@/lib/services/tuning";
 import type { DispositionStats } from "@/lib/tuning/disposition";
-import { firstMatch, passiveReasonFor } from "@/lib/tuning/noise";
+import { firstMatch, isVulnerabilityInventory, passiveReasonFor, VULNERABILITY_INVENTORY_REASON } from "@/lib/tuning/noise";
 
 export class IngestIntegrationUnavailable extends Error {}
 export class IngestIntegrationConflict extends Error {}
@@ -116,6 +116,8 @@ export async function ingestAlert(opts: {
           now,
         )
       : null;
+    const inventory = !noise && isVulnerabilityInventory({ source: opts.source, category: alert.category, intelVerdict: intel?.verdict });
+    const lane = noise || inventory ? ("passive" as const) : ("active" as const);
 
     const { score, factors } = scoreAlert({
       severity: alert.severity,
@@ -160,8 +162,8 @@ export async function ingestAlert(opts: {
       normalizationVersion: ocsf ? NORMALIZATION_VERSION : null,
       occurredAt: alert.occurredAt,
       ingestedAt,
-      lane: noise ? ("passive" as const) : ("active" as const),
-      passiveReason: noise ? passiveReasonFor(noise.reason) : null,
+      lane,
+      passiveReason: noise ? passiveReasonFor(noise.reason) : inventory ? VULNERABILITY_INVENTORY_REASON : null,
       noiseRuleId: noise?.id ?? null,
     };
     const [row] = dupe
@@ -201,7 +203,7 @@ export async function ingestAlert(opts: {
       intel: intelRows,
     });
 
-    return { alertId, created: !dupe, riskScore: score, intelVerdict: intel?.verdict ?? "unchecked", lane: noise ? ("passive" as const) : ("active" as const) };
+    return { alertId, created: !dupe, riskScore: score, intelVerdict: intel?.verdict ?? "unchecked", lane };
   });
 
   // A passive alert is not news: no live-queue event for it.

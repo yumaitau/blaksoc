@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, isNull, lte, min, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, lte, min, ne, sql } from "drizzle-orm";
 import { systemDb, type DbOrTx } from "@/db/client";
 import { withScope } from "@/db/scope";
 import { alerts, dataGovernance, incidentAlerts, incidentLinks, incidents, incidentTasks, incidentTimeline, integrations, kelpieCases, MOST_PROTECTIVE, tenants } from "@/db/schema";
@@ -221,6 +221,8 @@ export async function syncKelpie(opts: { now?: Date; connect?: KelpieConnect; li
         .from(kelpieCases)
         .innerJoin(incidents, eq(incidents.id, kelpieCases.incidentId))
         .where(and(eq(kelpieCases.tenantId, tenantId), ne(incidents.status, "CLOSED"), lte(kelpieCases.nextAttemptAt, now)))
+        // Least recently synced first: with more open cases than `limit`, an unordered pick re-polled the same rows forever.
+        .orderBy(sql`${kelpieCases.syncedAt} asc nulls first`)
         .limit(limit));
     for (const { link } of linked) {
       if (!link.caseId) continue;
