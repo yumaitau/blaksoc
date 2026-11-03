@@ -300,6 +300,15 @@ cat > /tmp/blaksoc_eks_rules.xml <<'XML'
     <group>kubernetes_forbidden,</group>
   </rule>
 
+  <!-- Helm reads its release secrets on every blakSOC deploy. Other namespaces, and every other identity, still alert. -->
+  <rule id="100209" level="3">
+    <if_sid>100203</if_sid>
+    <field name="user.username">^arn:aws:sts::959038055523:assumed-role/blaksoc-github-deploy/</field>
+    <field name="objectRef.namespace">^blaksoc$</field>
+    <description>EKS: blakSOC deploy role read Helm release secrets in namespace blaksoc (expected).</description>
+    <group>kubernetes_secrets,</group>
+  </rule>
+
   <rule id="100208" level="10" frequency="10" timeframe="120">
     <if_matched_sid>100207</if_matched_sid>
     <same_field>user.username</same_field>
@@ -329,7 +338,101 @@ if ! curl -sk -H "Authorization: Bearer $T" "$API_URL/rules/files/blaksoc_eks_ru
   RESTART_MANAGER=yes
 fi
 rm -f /tmp/blaksoc_eks_rules.xml
+cat > /tmp/blaksoc_tuning_rules.xml <<'XML'
+<!-- blakSOC: noise tuning for routine change on Yuma IT hosts (reviewed 2026-10-15 against a week of alerts).
+     blakSOC's Wazuh alert floor is medium (level 7), so level 3-6 events stay searchable in Wazuh for 90 days but
+     do not reach the blakSOC queue. Signals with a security reading keep or raise their level. -->
+
+<!-- Patching: unattended upgrades and the weekly SSM patch run install, remove and half-configure packages. -->
+<group name="syslog,dpkg,">
+  <rule id="2902" level="3" overwrite="yes">
+    <if_sid>2900</if_sid>
+    <field name="dpkg_status">^status installed$</field>
+    <description>New dpkg (Debian Package) installed.</description>
+    <group>config_changed,pci_dss_10.6.1,pci_dss_10.2.7,gpg13_4.10,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_AU.6,nist_800_53_AU.14,tsc_CC7.2,tsc_CC7.3,tsc_CC6.8,tsc_CC8.1,</group>
+  </rule>
+
+  <rule id="2903" level="3" overwrite="yes">
+    <if_sid>2900</if_sid>
+    <field name="dpkg_status">^remove$|^purge$</field>
+    <description>Dpkg (Debian Package) removed.</description>
+    <group>config_changed,pci_dss_10.6.1,pci_dss_10.2.7,gpg13_4.10,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_AU.6,nist_800_53_AU.14,tsc_CC7.2,tsc_CC7.3,tsc_CC6.8,tsc_CC8.1,</group>
+  </rule>
+
+  <rule id="2904" level="3" overwrite="yes">
+    <if_sid>2900</if_sid>
+    <field name="dpkg_status">^status half-configured$</field>
+    <description>Dpkg (Debian Package) half configured.</description>
+    <group>config_changed,pci_dss_10.6.1,pci_dss_10.2.7,gpg13_4.10,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_AU.6,nist_800_53_AU.14,tsc_CC7.2,tsc_CC7.3,tsc_CC6.8,tsc_CC8.1,</group>
+  </rule>
+
+  <!-- Attack and tunnelling tools are not part of any Yuma IT server build. -->
+  <rule id="100300" level="10">
+    <if_sid>2902</if_sid>
+    <field name="package" type="pcre2">^(nmap|ncat|masscan|zmap|hydra|john|hashcat|medusa|ncrack|sqlmap|nikto|ettercap-\S+|dsniff|proxychains4?|chisel|responder|python3-impacket|impacket-scripts|metasploit-framework|mimikatz)$</field>
+    <description>Attack or tunnelling tool installed: $(package) $(version).</description>
+    <mitre><id>T1588.002</id></mitre>
+    <group>config_changed,attack_tool,</group>
+  </rule>
+</group>
+
+<!-- File integrity: package upgrades replace binaries, libraries and kernels. Login, privilege and process-listing
+     tools (classic rootkit targets) and PAM modules keep the stock level. /etc and everything else is unchanged. -->
+<group name="ossec,syscheck,">
+  <rule id="100310" level="5">
+    <if_sid>550,553</if_sid>
+    <field name="file" type="pcre2">^/(usr/)?(s?bin|lib|lib32|lib64|libx32|libexec)/|^/boot/</field>
+    <description>Package-managed file changed or deleted (routine patching).</description>
+    <group>syscheck_file,</group>
+  </rule>
+
+  <rule id="100311" level="7">
+    <if_sid>100310</if_sid>
+    <field name="file" type="pcre2">/(sshd|ssh|sudo|su|passwd|chpasswd|login|pkexec|crontab|useradd|usermod|newgrp|gpasswd|chsh|chfn|ps|ls|netstat|ss|top|lsof|find|w|who|last|ip|ifconfig)$|/security/pam_[^/]+\.so$|/libpam\.so[.0-9]*$</field>
+    <description>Login, privilege or process-listing binary or PAM module changed.</description>
+    <mitre><id>T1554</id><id>T1556.003</id></mitre>
+    <group>syscheck_file,</group>
+  </rule>
+</group>
+
+<!-- netstat output includes PIDs, so every service or container restart reads as a port change. -->
+<group name="ossec,">
+  <rule id="533" level="5" overwrite="yes">
+    <if_sid>530</if_sid>
+    <match>ossec: output: 'netstat listening ports</match>
+    <check_diff />
+    <description>Listened ports status (netstat) changed (new port opened or closed).</description>
+    <group>pci_dss_10.2.7,pci_dss_10.6.1,gpg13_10.1,gdpr_IV_35.7.d,hipaa_164.312.b,nist_800_53_AU.14,nist_800_53_AU.6,tsc_CC6.8,tsc_CC7.2,tsc_CC7.3,</group>
+  </rule>
+</group>
+
+<!-- SCA: benchmark scores and failed checks are posture, reviewed in Wazuh's SCA view. A check that changes from
+     passed to failed (19011, level 9) still alerts. -->
+<group name="sca,gdpr_IV_35.7.d,pci_dss_2.2,nist_800_53_CM.1,tsc_CC7.1,tsc_CC7.2,">
+  <rule id="19004" level="3" overwrite="yes">
+    <if_sid>19001</if_sid>
+    <field name="sca.score">^4\d|^3\d</field>
+    <options>no_full_log</options>
+    <description>SCA summary: $(sca.policy): Score less than 50% ($(sca.score))</description>
+  </rule>
+
+  <rule id="19007" level="3" overwrite="yes">
+    <if_sid>19006</if_sid>
+    <field name="sca.check.result">^failed</field>
+    <options>no_full_log</options>
+    <description>$(sca.policy): $(sca.check.title)</description>
+  </rule>
+</group>
+XML
+if ! curl -sk -H "Authorization: Bearer $T" "$API_URL/rules/files/blaksoc_tuning_rules.xml?raw=true" | cmp -s - /tmp/blaksoc_tuning_rules.xml; then
+  curl -sk -H "Authorization: Bearer $T" -H "Content-Type: application/octet-stream" -X PUT "$API_URL/rules/files/blaksoc_tuning_rules.xml?overwrite=true" --data-binary @/tmp/blaksoc_tuning_rules.xml | jq -c '{tuning_rules: .message}'
+  RESTART_MANAGER=yes
+fi
+rm -f /tmp/blaksoc_tuning_rules.xml
 if [ -n "$RESTART_MANAGER" ]; then
+  # A rule file the analysis engine rejects would stop the manager on restart; check first.
+  valid=$(curl -sk -H "Authorization: Bearer $T" "$API_URL/manager/configuration/validation" | jq -r '.data.affected_items[0].status // "unknown"')
+  [ "$valid" = "OK" ] || { echo "Wazuh configuration validation returned '$valid'; manager not restarted" >&2; exit 1; }
   curl -sk -H "Authorization: Bearer $T" -X PUT "$API_URL/manager/restart" | jq -c '{restart: .message}'
 fi
 
