@@ -117,7 +117,7 @@ describe("hosting profile", () => {
       services: { "wazuh.indexer": { environment: Record<string, string> } };
     };
     expect(compose.services["opencti-search"].environment["node.attr.region"]).toBe("${OPENSEARCH_REGION:-ap-southeast-2}");
-    expect(compose.services["opencti-minio"].image).toBe("chainguard/minio:latest");
+    expect(compose.services["opencti-minio"].image).toBe("chainguard/minio@sha256:cee9a8e35885e93f14b3cb32960e5017aff74e2adfb52ba87c65003b0163886b");
     expect(compose.services.opencti.environment.BLAKSOC_REGION).toBe("${OPENCTI_REGION:-ap-southeast-2}");
     expect(wazuh.services["wazuh.indexer"].environment["node.attr.region"]).toBe("ap-southeast-2");
     const entry = parse(await readFile(path.join(root, "deploy/wazuh/indexer-region.yml"), "utf8")) as {
