@@ -15,7 +15,7 @@ export type AlertRiskInput = {
   identity: { name: string; privileged: boolean } | null;
   intel: IntelContext | null;
   attackTechniques: string[];
-  /** Similar alerts for the same asset/rule in the last 24h, excluding this one. */
+  /** Similar alerts for the same asset/rule in the last 24h, excluding this one, counted up to REPEAT_COUNT_CAP. */
   repeatCount: number;
   cves: { cve: string; kev: boolean; epss: number | null }[];
   /** Tenant currently has an open incident touching the same asset. */
@@ -24,7 +24,10 @@ export type AlertRiskInput = {
   disposition?: DispositionStats | null;
 };
 
-const SEVERITY_POINTS = { informational: 2, low: 8, medium: 16, high: 24, critical: 30 } as const;
+/** Ingest stops counting repeats here; the factor's points max out long before. */
+export const REPEAT_COUNT_CAP = 100;
+
+const SEVERITY_POINTS ={ informational: 2, low: 8, medium: 16, high: 24, critical: 30 } as const;
 
 /** Techniques that usually mean hands-on-keyboard or impact, not noise. */
 export const HIGH_IMPACT_TECHNIQUES: Record<string, string> = {
@@ -107,7 +110,7 @@ export function scoreAlert(input: AlertRiskInput): { score: number; factors: Ris
   }
 
   if (input.repeatCount > 0) {
-    push({ key: "repeated", label: "Repeated activity", points: Math.min(8, 2 + input.repeatCount), evidence: `${input.repeatCount} similar alert(s) in the last 24h` });
+    push({ key: "repeated", label: "Repeated activity", points: Math.min(8, 2 + input.repeatCount), evidence: `${input.repeatCount >= REPEAT_COUNT_CAP ? `${REPEAT_COUNT_CAP}+` : input.repeatCount} similar alert(s) in the last 24h` });
   }
   if (input.openIncidentOnAsset) {
     push({ key: "active_incident", label: "Asset in active incident", points: 5, evidence: "Affected asset is part of an open incident" });

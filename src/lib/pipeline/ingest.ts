@@ -16,7 +16,7 @@ import { logger } from "@/lib/obs/log";
 import { validateOcsf } from "@/lib/ocsf/validate";
 import type { IntelProvider } from "@/lib/intel/types";
 import type { NormalisedAlert } from "@/lib/providers/types";
-import { scoreAlert } from "@/lib/risk/engine";
+import { REPEAT_COUNT_CAP, scoreAlert } from "@/lib/risk/engine";
 import { dispositionStats, liveNoiseRules, recordNoiseHits } from "@/lib/services/tuning";
 import type { DispositionStats } from "@/lib/tuning/disposition";
 import { firstMatch, isVulnerabilityInventory, passiveReasonFor, VULNERABILITY_INVENTORY_REASON } from "@/lib/tuning/noise";
@@ -83,12 +83,16 @@ export async function ingestAlert(opts: {
     const cves = cveList.length ? await tx.select().from(cveIntel).where(inArray(cveIntel.cve, cveList)) : [];
 
     const since = new Date(alert.occurredAt.getTime() - 24 * 3600_000);
-    const [{ n: repeatCount } = { n: 0 }] = asset && alert.ruleId
-      ? await tx
-          .select({ n: sql<number>`count(*)::int` })
+    // Bounded: scoring caps the repeat factor, so a flood (one host, one rule) must not count every row on each ingest.
+    const repeats = asset && alert.ruleId
+      ? tx
+          .select({ id: alerts.id })
           .from(alerts)
           .where(and(eq(alerts.tenantId, tenantId), eq(alerts.assetId, asset.id), eq(alerts.ruleId, alert.ruleId), gte(alerts.occurredAt, since), dupe ? ne(alerts.id, dupe.id) : undefined))
-      : [];
+          .limit(REPEAT_COUNT_CAP)
+          .as("repeats")
+      : null;
+    const [{ n: repeatCount } = { n: 0 }] = repeats ? await tx.select({ n: sql<number>`count(*)::int` }).from(repeats) : [];
 
     const openIncidentOnAsset = asset
       ? (await tx
