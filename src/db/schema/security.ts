@@ -377,6 +377,8 @@ export const alerts = pgTable(
     index("alerts_tenant_occurred").on(t.tenantId, t.occurredAt),
     // Disposition memory at ingest (src/lib/services/tuning.ts): past outcomes of one tenant's rule.
     index("alerts_disposition").on(t.tenantId, t.source, t.ruleId, t.occurredAt),
+    // Repeat count at ingest (src/lib/pipeline/ingest.ts): same tenant, asset and rule in the last 24h.
+    index("alerts_repeat").on(t.tenantId, t.assetId, t.ruleId, t.occurredAt),
     index("alerts_passive").on(t.tenantId, t.occurredAt).where(sql`${t.lane} = 'passive'`),
     index("alerts_tuning_action").on(t.tuningActionId).where(sql`${t.tuningActionId} is not null`),
   ],

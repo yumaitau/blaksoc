@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scoreAlert, scoreVulnerability } from "@/lib/risk/engine";
+import { REPEAT_COUNT_CAP, scoreAlert, scoreVulnerability } from "@/lib/risk/engine";
 import type { IntelMatch } from "@/db/schema";
 
 const base = {
@@ -23,6 +23,13 @@ describe("scoreAlert", () => {
   it("clamps to 0-100", () => {
     const r = scoreAlert({ ...base, severity: "critical", asset: { id: "a", name: "x", criticality: 5, exposure: "internet" }, identity: { name: "a", privileged: true }, intel: { verdict: "malicious", matches: [match({ confidence: 100 })], checkedAt: "" }, attackTechniques: ["T1486"], repeatCount: 50, cves: [{ cve: "c", kev: true, epss: 0.9 }], openIncidentOnAsset: true });
     expect(r.score).toBe(100);
+  });
+
+  it("repeat count at the ingest cap scores the same as a smaller flood and says so", () => {
+    const at = (repeatCount: number) => scoreAlert({ ...base, repeatCount }).factors.find((f) => f.key === "repeated")!;
+    expect(at(REPEAT_COUNT_CAP).points).toBe(at(6).points);
+    expect(at(REPEAT_COUNT_CAP).evidence).toBe(`${REPEAT_COUNT_CAP}+ similar alert(s) in the last 24h`);
+    expect(at(3).evidence).toBe("3 similar alert(s) in the last 24h");
   });
 
   it("intel and asset context raise score above raw SIEM severity", () => {
