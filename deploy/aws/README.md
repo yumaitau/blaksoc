@@ -336,6 +336,21 @@ Noise controls:
   sudo, login success) stay in Wazuh for 90 days (ISM policy `blaksoc-alerts-90d`).
 - The `yumait-aws` agent group's shared configuration (`deploy/wazuh/agent-yumait-aws.conf`, applied by
   `wazuh-host.sh`) skips inode checks on `/boot/efi`: it is FAT, and Linux renumbers its inodes.
+- `blaksoc_tuning_rules.xml` (installed by `wazuh-host.sh`) lowers routine change below the medium floor, so it stays
+  searchable in Wazuh but does not reach blakSOC:
+
+  | Rule | Was | Now | Why |
+  | --- | --- | --- | --- |
+  | 2902, 2903, 2904 (dpkg install, remove, half-configured) | 7 | 3 | Patching |
+  | 100300 (attack or tunnelling tool installed, e.g. `nmap`, `chisel`, `impacket`) | new | 10 | Never part of a server build |
+  | 550, 553 under `/bin`, `/sbin`, `/lib*`, `/libexec`, `/boot` (100310) | 7 | 5 | Package upgrades replace these |
+  | ...the same for login, privilege and process-listing binaries and PAM modules (100311) | 7 | 7 | Rootkit targets |
+  | 533 (netstat listening ports changed) | 7 | 5 | Output includes PIDs, so every restart differs |
+  | 19004, 19007 (SCA score, failed check) | 7 | 3 | Posture; see the SCA view. 19011 (passed → failed) still alerts |
+  | 100209 (deploy role reads secrets in `blaksoc`) | 7 | 3 | Helm release secrets on every deploy |
+
+  File changes under `/etc`, other paths, and every other identity reading secrets keep their levels. The script checks
+  `GET /manager/configuration/validation` before it restarts the manager.
 
 Intel: OpenCTI on `threatsieve-opencti-production` runs public feed connectors next to ThreatSieve's (MITRE ATT&CK,
 CISA KEV, abuse.ch ThreatFox, URLhaus and SSL blacklist, OpenCTI datasets). They are defined in ThreatSieve's
