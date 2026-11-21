@@ -129,3 +129,7 @@ Implemented in V1: everything above plus the UI routes listed in docs/ARCHITECTU
 yet implemented connectors (Sentinel, Elastic, Splunk, Defender, CrowdStrike, SentinelOne, Entra ID
 identity response, firewalls, cloud, Jira, ServiceNow) appear in the integration catalogue as
 "planned"; each needs one connector definition in `src/lib/connectors/registry.ts`.
+
+## Licence
+
+blakSOC is released under the MIT licence. See [LICENSE](LICENSE) for the full text.
