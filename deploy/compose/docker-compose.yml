@@ -137,7 +137,7 @@ services:
   opencti-minio:
     profiles: [opencti]
     # minio/minio is not publicly pullable. This image still runs `minio server`.
-    image: chainguard/minio:latest
+    image: chainguard/minio@sha256:cee9a8e35885e93f14b3cb32960e5017aff74e2adfb52ba87c65003b0163886b
     restart: unless-stopped
     command: server /data
     environment: { MINIO_ROOT_USER: opencti, MINIO_ROOT_PASSWORD: "${OPENCTI_MINIO_PASSWORD:?}" }
